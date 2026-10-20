@@ -12,7 +12,7 @@ describe("forking a thread", () => {
 		cleanup.push(() => agent.close());
 		const post = (path: string, body: unknown) =>
 			fetch(`${agent.baseUrl}${path}`, { method: "POST", headers: { authorization: `Bearer ${agent.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-		agent.model.reply("first answer", "second answer", "edited answer", "branch answer", "fork of fork answer");
+		agent.model.reply("first answer", "second answer", "edited answer", "branch answer", "fresh answer");
 		await agent.send("t1", "first question");
 		await agent.settled("t1");
 		await agent.send("t1", "second question");
@@ -40,6 +40,11 @@ describe("forking a thread", () => {
 		// Editing the first message starts empty; the source is untouched throughout.
 		expect((await post("/threads/t1/fork", { threadId: "t1-fresh", beforeMessageId: q1!.id })).status).toBe(201);
 		expect((await agent.view("t1-fresh"))!.messages).toEqual([]);
+		await agent.send("t1-fresh", "a new opening question");
+		await agent.settled("t1-fresh");
+		const listed = await (await fetch(`${agent.baseUrl}/threads`, { headers: { authorization: `Bearer ${agent.token}` } })).json() as { data: { threadId: string; title: string }[] };
+		expect(listed.data.find((t) => t.threadId === "t1-fresh")?.title).toBe("a new opening question");
+		expect(listed.data.find((t) => t.threadId === "t1-edit")?.title).toBe("first question");
 		expect((await agent.view("t1"))!.messages.map((m) => m.text)).toEqual(source.messages.map((m) => m.text));
 
 		// Refusals.

@@ -1,6 +1,8 @@
-import { Link } from '@tanstack/react-router';
-import { ArrowDown, ArrowUp, CornerUpLeft, LoaderCircle } from 'lucide-react';
+import { Link, useNavigate } from '@tanstack/react-router';
+import { ArrowDown, ArrowUp, Clock, CornerUpLeft, LoaderCircle } from 'lucide-react';
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { errorMessage } from '~/api/client';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import { publishAgentLive } from '~/components/agent/avatar/agent-live';
 import {
@@ -18,21 +20,49 @@ import { NoReplyNote } from '~/components/chat/reply-outcome-note';
 import { Button } from '~/components/ui/button';
 import { FullPageSpinner } from '~/components/ui/spinner';
 import { UnavailableState } from '~/components/ui/unavailable-state';
-import { type Connection, peekHandover, useAgentThread } from '~/hooks/use-agent-thread';
-import { useAgent, useAgents, useThreadInfo } from '~/hooks/use-agents';
+import {
+  type Connection,
+  peekHandover,
+  useAgentThread,
+  writeHandover,
+} from '~/hooks/use-agent-thread';
+import { useAgent, useAgents, useForkThread, useThreadInfo } from '~/hooks/use-agents';
 import { useAttachments } from '~/hooks/use-attachments';
-import { useChatScroll } from '~/hooks/use-chat-scroll';
+import { type ChatScrollTarget, useChatScroll } from '~/hooks/use-chat-scroll';
 import { isPendingMessage } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
+import {
+  branchPointOf,
+  clearComposerFocus,
+  peekComposerFocus,
+  requestComposerFocus,
+  transcriptIdOf,
+} from '~/lib/fork';
+import { isScheduledThreadId } from '~/lib/schedules';
+import { findSnippetMessage } from '~/lib/search-find';
 import { rememberAgent } from '~/routes/chat/home';
 
 /** How long an idle agent leaves the person's message unanswered before the page says so. */
 const DROPPED_NOTICE_MS = 4_000;
 
-export function ChatThreadPage({ agentId, threadId }: { agentId: string; threadId: string }) {
+export function ChatThreadPage({
+  agentId,
+  threadId,
+  find,
+}: {
+  agentId: string;
+  threadId: string;
+  /** A message-search result's snippet: open at the message it came from. */
+  find?: string;
+}) {
   // Everything here belongs to one conversation: a new one starts afresh.
   return (
-    <ThreadConversation key={`${agentId}/${threadId}`} agentId={agentId} threadId={threadId} />
+    <ThreadConversation
+      key={`${agentId}/${threadId}`}
+      agentId={agentId}
+      threadId={threadId}
+      find={find}
+    />
   );
 }
 
@@ -42,9 +72,20 @@ const CONNECTION_NOTE: Partial<Record<Connection, string>> = {
   paused: 'Paused while this tab was in the background.',
 };
 
-function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: string }) {
+function ThreadConversation({
+  agentId,
+  threadId,
+  find,
+}: {
+  agentId: string;
+  threadId: string;
+  find?: string;
+}) {
   // Read once: a reload after the first message was accepted opens it as an existing conversation.
   const [handover] = useState(() => peekHandover(agentId, threadId));
+  // A branch just made: the cursor goes to its message box.
+  const [focusComposer] = useState(() => peekComposerFocus(threadId));
+  useEffect(() => clearComposerFocus(threadId), [threadId]);
   const agentsQuery = useAgents();
   const agent = useAgent(agentId);
   const session = useAgentThread({ agentId, threadId, handover });
@@ -88,8 +129,18 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
     return null;
   }, [busy, messages]);
 
+  // A search result opens at the message its snippet came from, when it is loaded.
+  const target = useMemo<ChatScrollTarget | undefined>(() => {
+    if (!find || !shown) return undefined;
+    const messageId = findSnippetMessage(
+      messages.map((message) => ({ id: message.id, text: textOf(message) })),
+      find,
+    );
+    return messageId ? { messageId, key: find } : undefined;
+  }, [find, shown, messages]);
+
   // Earlier pages put before the transcript are not the conversation moving on.
-  const scroll = useChatScroll(session.liveMessages, working, undefined, true, shown);
+  const scroll = useChatScroll(session.liveMessages, working, target, true, shown);
   const { loadEarlier } = session;
   const { keepPlaceForPrepend } = scroll;
   const showEarlier = useCallback(
@@ -116,6 +167,83 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
   const retry = useCallback(() => {
     if (lastQuestion) setDraft(textOf(lastQuestion));
   }, [lastQuestion, setDraft]);
+
+  // Editing a message, and branching from a reply: both in a new conversation
+  // (POST …/fork); this one stays as it is. Read through a ref so the rows keep
+  // their callbacks (they are memoized).
+  const navigate = useNavigate();
+  const fork = useForkThread();
+  const forkState = useRef({ session, fork, navigate });
+  forkState.current = { session, fork, navigate };
+  const backToOriginal = useCallback(
+    () => ({
+      label: 'Open original',
+      onClick: () =>
+        void forkState.current.navigate({
+          to: '/agents/$agentId/threads/$threadId',
+          params: { agentId, threadId },
+        }),
+    }),
+    [agentId, threadId],
+  );
+  const editMessage = useCallback(
+    async (messageId: string, text: string): Promise<string | null> => {
+      const { session, fork, navigate } = forkState.current;
+      const beforeMessageId = transcriptIdOf(messageId, session.pending);
+      if (!beforeMessageId) return 'This message is still being sent. Try again in a moment.';
+      try {
+        const created = await fork.mutateAsync({ agentId, threadId, beforeMessageId });
+        // The new conversation sends the edited text as soon as it opens (with a request ID).
+        writeHandover({
+          agentId,
+          threadId: created.threadId,
+          text,
+          requestId: crypto.randomUUID(),
+          focus: false,
+          existing: true,
+        });
+        await navigate({
+          to: '/agents/$agentId/threads/$threadId',
+          params: { agentId, threadId: created.threadId },
+        });
+        toast('Edited in a new conversation. The original is kept.', {
+          action: backToOriginal(),
+        });
+        return null;
+      } catch (error) {
+        return errorMessage(error, "The new conversation couldn't be made. Try again.");
+      }
+    },
+    [agentId, threadId, backToOriginal],
+  );
+  const branchFrom = useCallback(
+    async (replyId: string) => {
+      const { session, fork, navigate } = forkState.current;
+      const afterMessageId = branchPointOf(
+        session.shownView?.messages ?? [],
+        replyId,
+        session.pending,
+      );
+      if (!afterMessageId) {
+        toast.error("This reply can't be branched from yet.");
+        return;
+      }
+      try {
+        const created = await fork.mutateAsync({ agentId, threadId, afterMessageId });
+        requestComposerFocus(created.threadId);
+        await navigate({
+          to: '/agents/$agentId/threads/$threadId',
+          params: { agentId, threadId: created.threadId },
+        });
+        toast('Branched into a new conversation. The original is kept.', {
+          action: backToOriginal(),
+        });
+      } catch (error) {
+        toast.error(errorMessage(error, "The new conversation couldn't be made. Try again."));
+      }
+    },
+    [agentId, threadId, backToOriginal],
+  );
 
   // The agent is idle and the person spoke last: the turn was dropped. Said
   // after a moment, so a turn just starting never flashes it.
@@ -177,6 +305,12 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
     );
   }
 
+  // Started by a schedule: its first message came from a trigger.
+  const firstUser = session.shownView?.messages.find((message) => message.role === 'user');
+  const scheduled =
+    (!session.hasEarlier && firstUser?.role === 'user' && firstUser.author?.kind === 'trigger') ||
+    isScheduledThreadId(threadId);
+
   const note = CONNECTION_NOTE[session.connection];
   const waitingLabel =
     waitingForAgent && !busy
@@ -223,6 +357,28 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
                     </p>
                   </div>
                 )}
+                {scheduled && !calledBy && (
+                  <div className="mx-auto max-w-[42rem] px-4 pt-4">
+                    <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--text-muted)]">
+                      <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+                      <span>
+                        Started by a schedule
+                        {firstUser?.role === 'user' && firstUser.author?.name
+                          ? `: ${firstUser.author.name}`
+                          : ''}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <Link
+                        to="/settings/agents/$agentId"
+                        params={{ agentId }}
+                        search={{ tab: 'schedules' }}
+                        className="underline decoration-[var(--border-strong)] underline-offset-4 hover:text-[var(--text-primary)] hover:decoration-current"
+                      >
+                        Schedules
+                      </Link>
+                    </p>
+                  </div>
+                )}
                 {session.hasEarlier && (
                   <EarlierMessages
                     onLoad={showEarlier}
@@ -239,6 +395,8 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
                   waitingLabel={waitingLabel}
                   agent={agent}
                   onRetry={retry}
+                  onEdit={editMessage}
+                  onBranch={branchFrom}
                   scrollRef={scroll.scrollRef}
                 />
                 {(session.sendError || note || dropped) && (
@@ -286,7 +444,7 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
           </div>
 
           <Composer
-            autoFocus={handover?.focus ?? false}
+            autoFocus={(handover?.focus ?? false) || focusComposer}
             value={session.draft}
             onChange={session.setDraft}
             onSubmit={() => sendWithFiles()}

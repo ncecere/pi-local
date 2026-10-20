@@ -10,6 +10,7 @@ import { KindSettingsTab } from '~/components/agent-manager/kind-settings-tab';
 import { LogsTab } from '~/components/agent-manager/logs-tab';
 import { McpTab } from '~/components/agent-manager/mcp-tab';
 import { OverviewTab } from '~/components/agent-manager/overview-tab';
+import { SchedulesTab } from '~/components/agent-manager/schedules-tab';
 import { ToolsTab } from '~/components/agent-manager/tools-tab';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
@@ -19,7 +20,7 @@ import { usePageTitle } from '~/lib/document-title';
 import { hasKindSettings } from '~/lib/kind-settings';
 import { cn } from '~/lib/utils';
 
-type TabId = 'overview' | 'tools' | 'mcp' | 'kind' | 'can-ask' | 'config' | 'logs';
+type TabId = 'overview' | 'tools' | 'mcp' | 'kind' | 'can-ask' | 'schedules' | 'config' | 'logs';
 
 const TAB_IDS: readonly string[] = [
   'overview',
@@ -27,6 +28,7 @@ const TAB_IDS: readonly string[] = [
   'mcp',
   'kind',
   'can-ask',
+  'schedules',
   'config',
   'logs',
 ];
@@ -75,6 +77,7 @@ export function SettingsAgentDetailPage({
       ? [{ id: 'kind' as const, label: `${agentKindLabel(agent)} settings` }]
       : []),
     { id: 'can-ask', label: 'Can ask' },
+    { id: 'schedules', label: 'Schedules' },
     { id: 'config', label: 'agent.yaml' },
     { id: 'logs', label: 'Logs' },
   ];
@@ -171,6 +174,7 @@ export function SettingsAgentDetailPage({
         )}
         {current === 'kind' && <KindSettingsTab agent={agent} />}
         {current === 'can-ask' && <CanAskTab agent={agent} agents={agents.data} />}
+        {current === 'schedules' && <SchedulesTab agent={agent} />}
         {current === 'config' && <ConfigTab agent={agent} />}
         {current === 'logs' && <LogsTab agent={agent} />}
       </div>

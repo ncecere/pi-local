@@ -4,10 +4,44 @@ import { toast } from 'sonner';
 import { errorMessage } from '~/api/client';
 import { SettingsRow, SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
+import { Switch } from '~/components/ui/switch';
 import { useAbout, useReveal } from '~/hooks/use-agent-manager';
 import { useAgents } from '~/hooks/use-agents';
+import { useDesktopSettings, useSetLaunchAtLogin } from '~/hooks/use-desktop';
 import { useCurrentUser } from '~/hooks/use-session';
 import { usePageTitle } from '~/lib/document-title';
+
+/**
+ * The desktop app's own settings: only in the app (`available`), never in a
+ * browser on the headless server.
+ */
+function DesktopSection() {
+  const desktop = useDesktopSettings();
+  const setLaunch = useSetLaunchAtLogin();
+  if (!desktop.data?.available) return null;
+  return (
+    <SettingsSection title="Desktop">
+      <SettingsRow
+        id="launch-at-login"
+        label="Open Pi Local when you log in"
+        description="It starts in the menu bar with its window closed, so your schedules run and agents can reach you without you opening it. Click its menu bar icon to open the window."
+      >
+        <Switch
+          checked={desktop.data.launchAtLogin}
+          disabled={setLaunch.isPending}
+          aria-labelledby="launch-at-login-label"
+          aria-describedby="launch-at-login-description"
+          onCheckedChange={(on) =>
+            setLaunch.mutate(on, {
+              onError: (error) =>
+                toast.error(errorMessage(error, 'The setting could not be changed.')),
+            })
+          }
+        />
+      </SettingsRow>
+    </SettingsSection>
+  );
+}
 
 function Value({ children, mono = false }: { children: ReactNode; mono?: boolean }) {
   return (
@@ -86,6 +120,8 @@ export function SettingsAccountPage() {
           </div>
         </SettingsRow>
       </SettingsSection>
+
+      <DesktopSection />
 
       <SettingsSection title="Runtime">
         <SettingsRow

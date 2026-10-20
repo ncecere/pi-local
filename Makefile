@@ -34,7 +34,7 @@ dev-web: ## The UI with hot reload on :5191, proxying /api to run-server
 test: test-go test-runtime test-frontend ## All tests
 
 test-go: ## Go tests (run the real runtime from source; needs `make deps`)
-	go test -count=1 ./internal/...
+	go test -count=1 ./internal/... ./cmd/...
 
 test-runtime: ## Runtime typecheck and tests
 	cd runtime && pnpm exec tsc --noEmit && pnpm test

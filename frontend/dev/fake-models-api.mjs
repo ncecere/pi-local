@@ -5,6 +5,7 @@
 //   PI_LOCAL_API=http://127.0.0.1:5198 PORT=5197 pnpm dev
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createAlways } from './fake-always.mjs';
 import { cursorMessage, DeltaStream, pageView } from './fake-delta.mjs';
 
 const port = Number(process.env.FAKE_API_PORT ?? 5198);
@@ -183,6 +184,7 @@ const agent = (id, name, modelRef, extra = {}) => ({
   workspace: { tools: [] },
   approvals: { tools: [], timeoutSeconds: 86400 },
   mcp: [],
+  schedules: { agentMade: false },
   ...extra,
 });
 const agents = [
@@ -1010,6 +1012,19 @@ const usersOf = (modelIds) =>
     .filter((a) => a.model && modelIds.includes(a.model.id))
     .map(({ id, name }) => ({ id, name }));
 
+// Phase 7: schedules, search, forks, the desktop settings (fake-always.mjs).
+const always = createAlways({
+  agents,
+  threads,
+  chatViews,
+  thread,
+  broadcast,
+  startReply,
+  syncThreadView,
+  ok,
+  fail,
+});
+
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const path = url.pathname;
@@ -1028,7 +1043,7 @@ createServer(async (req, res) => {
     return ok(res, {
       user: { id: 'local', name: 'Test Person', email: '', role: 'admin' },
       csrfToken: '',
-      features: {},
+      features: { messageSearch: true },
       platform: { mode: 'local', account: null },
     });
   if (path === '/api/auth/config')
@@ -1062,6 +1077,7 @@ createServer(async (req, res) => {
       },
       agents: agents.length,
     });
+  if (always(res, { path, parts, m, body, url })) return;
   if (path === '/api/reveal' && m === 'POST') {
     console.log('reveal', body);
     return ok(res, { ok: true });
@@ -1452,6 +1468,8 @@ createServer(async (req, res) => {
       a.mcp = body.mcp.map((c) => ({ server: c.server, tools: c.tools ?? null }));
       for (const x of mcpServers) noteMcp(x);
     }
+    if (body.schedules !== undefined)
+      a.schedules = { agentMade: Boolean(body.schedules?.agentMade) };
     if (body.description !== undefined) a.description = body.description;
     if (body.instructions !== undefined) a.instructions = body.instructions;
     a.revision++;

@@ -60,6 +60,11 @@ export interface Agent {
    * or the ones picked. Phase 5; absent from an older backend (read as none).
    */
   mcp?: AgentMcpServer[];
+  /**
+   * Whether it may set its own schedules (its `schedule`, `list_schedules`, `cancel_schedule` tools).
+   * Phase 7; absent from an older backend (read as off).
+   */
+  schedules?: { agentMade: boolean };
 }
 
 /** One MCP server an agent uses: `tools` null is all its model-visible tools. */
@@ -445,6 +450,100 @@ export interface UsageReport {
   models: (UsageTotals & { modelId: string; name: string })[];
   /** Every day of the range, zeros included. */
   byDay: (UsageTotals & { day: string })[];
+}
+
+// ── Always on: schedules, search, the desktop (docs/api.md, Phase 7) ────────────────────────
+
+export type ScheduleRunStatus = 'running' | 'done' | 'failed';
+
+/** One time a schedule fired: the conversation it ran in and how it went. */
+export interface ScheduleRun {
+  id: string;
+  scheduleId: string;
+  threadId: string;
+  /** Unix ms. */
+  firedAt: number;
+  status: ScheduleRunStatus;
+  error: string | null;
+  /** Unix ms. */
+  finishedAt: number | null;
+}
+
+/** A message sent to an agent at set times: once (`at`) or recurring (`cron` in `timezone`). */
+export interface Schedule {
+  id: string;
+  agentId: string;
+  agentName: string;
+  name: string;
+  once: boolean;
+  /** Unix ms (once). */
+  at: number | null;
+  /** Five fields, or @daily/@weekly… (recurring). */
+  cron: string | null;
+  /** IANA. */
+  timezone: string;
+  message: string;
+  /** `new`: a conversation of its own each run; `this`: always `threadId`. */
+  threadMode: 'new' | 'this';
+  threadId: string | null;
+  /** Where an agent made it. */
+  originThreadId: string | null;
+  madeBy: 'user' | 'agent';
+  /** A fire missed while the app was quit: run once at the next start, or skipped. */
+  missedPolicy: 'skip' | 'run_once';
+  paused: boolean;
+  /** Why it paused itself (5 failed runs in a row); null when paused by hand or running. */
+  pausedReason: string | null;
+  /** Unix ms; null: a reminder that fired. */
+  nextFireAt: number | null;
+  lastFireAt: number | null;
+  lastRun: ScheduleRun | null;
+  createdAt: number;
+}
+
+/** `POST /api/agents/{a}/schedules` and `PATCH /api/schedules/{id}`. */
+export interface ScheduleInput {
+  name?: string;
+  /** ISO 8601; without an offset it is in `timezone`. */
+  at?: string;
+  cron?: string;
+  timezone?: string;
+  message?: string;
+  threadMode?: 'new' | 'this';
+  threadId?: string;
+  missedPolicy?: 'skip' | 'run_once';
+  paused?: boolean;
+}
+
+/** `GET /api/events` `schedule` event. */
+export interface ScheduleEvent {
+  scheduleId: string;
+  deleted: boolean;
+  schedule?: Schedule | null;
+}
+
+/** `GET /api/events` `schedule_run` event: a run ended. */
+export interface ScheduleRunEvent {
+  scheduleId: string;
+  agentId: string;
+  name: string;
+  run: ScheduleRun;
+}
+
+/** One conversation whose messages match (`GET /api/search?q=`). */
+export interface SearchResult {
+  agentId: string;
+  threadId: string;
+  /** A line around the match; the matched words sit between U+0001 and U+0002. */
+  snippet: string;
+  indexedAt: string;
+}
+
+/** `GET /api/settings/desktop`. */
+export interface DesktopSettings {
+  /** False in a browser (the headless server): there is nothing to set. */
+  available: boolean;
+  launchAtLogin: boolean;
 }
 
 // ── The runtime's chat view (runtime/src/lib/view.ts) ─────────────────────────────────────────

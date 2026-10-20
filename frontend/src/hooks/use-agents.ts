@@ -154,6 +154,36 @@ export function markThreadBusy(
   );
 }
 
+/**
+ * Makes a new conversation from one: `beforeMessageId` keeps everything before
+ * that user message (edit it: send the new text next), `afterMessageId` keeps
+ * everything up to and with that message (branch). The source is untouched.
+ * The new one is listed at once.
+ */
+export function useForkThread() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      agentId,
+      threadId,
+      ...body
+    }: { agentId: string; threadId: string } & (
+      | { beforeMessageId: string }
+      | { afterMessageId: string }
+    )) => api.post<AgentThread>(threadPath(agentId, threadId, '/fork'), body),
+    onSuccess: (thread, { agentId }) => {
+      const key = threadsKey(agentId);
+      if (queryClient.getQueryData(key) === undefined)
+        void queryClient.invalidateQueries({ queryKey: key });
+      else
+        queryClient.setQueryData<AgentThread[]>(key, (threads) => [
+          thread,
+          ...(threads ?? []).filter((candidate) => candidate.threadId !== thread.threadId),
+        ]);
+    },
+  });
+}
+
 /** A new conversation ID, in the form the API accepts (1-64 of [A-Za-z0-9_-]). */
 export function newThreadId(): string {
   return crypto.randomUUID();
@@ -219,6 +249,7 @@ export function useUpdateAgent() {
       workspace?: AgentWorkspace;
       approvals?: AgentApprovals;
       mcp?: AgentMcpServer[];
+      schedules?: { agentMade: boolean };
     }) => api.patch<Agent>(agentPath(id), body),
     onSuccess: (agent) =>
       queryClient.setQueryData<Agent[]>(AGENTS_KEY, (list) =>

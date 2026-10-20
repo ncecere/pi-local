@@ -30,6 +30,7 @@ type notifier struct {
 }
 
 func (n *notifier) send(id, title, body string) {
+	slog.Info("notification", "id", id, "title", title)
 	if n.native != nil {
 		if err := n.native.SendNotification(notifications.NotificationOptions{ID: id, Title: title, Body: body}); err == nil {
 			return

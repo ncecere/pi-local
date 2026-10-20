@@ -20,6 +20,10 @@ interface MessageListProps {
   agent?: Pick<Agent, 'id' | 'enabled' | 'running'>;
   /** Sends the latest question again; offered on the latest reply. */
   onRetry?: () => void;
+  /** Edits a message of the person's in a new conversation (MessageRow). */
+  onEdit?: (messageId: string, text: string) => Promise<string | null>;
+  /** Branches a new conversation from a finished reply (MessageRow). */
+  onBranch?: (messageId: string) => Promise<void>;
   /**
    * The conversation's scroller. With it, a very long transcript renders only
    * the rows near the view; without it every row is rendered.
@@ -56,6 +60,8 @@ export const MessageList = memo(function MessageList({
   waitingLabel,
   agent,
   onRetry,
+  onEdit,
+  onBranch,
   scrollRef,
 }: MessageListProps) {
   const live = liveReplyId ? messages.find((message) => message.id === liveReplyId) : undefined;
@@ -144,6 +150,10 @@ export const MessageList = memo(function MessageList({
                 position={positions[entry.index]}
                 agent={agent}
                 latest={message.id === lastReplyId}
+                onEdit={message.role === 'user' ? onEdit : undefined}
+                onBranch={
+                  message.role === 'assistant' && message.id !== liveReplyId ? onBranch : undefined
+                }
               />
             </div>
           );

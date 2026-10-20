@@ -80,9 +80,13 @@ const agentRoute = createRoute({
 const threadRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/agents/$agentId/threads/$threadId',
+  // `?find=<snippet>`: a message-search result, opened at its match.
+  validateSearch: (search: Record<string, unknown>): { find?: string } =>
+    typeof search.find === 'string' && search.find ? { find: search.find.slice(0, 1000) } : {},
   component: function ThreadRoute() {
     const { agentId, threadId } = threadRoute.useParams();
-    return <ChatThreadPage agentId={agentId} threadId={threadId} />;
+    const { find } = threadRoute.useSearch();
+    return <ChatThreadPage agentId={agentId} threadId={threadId} find={find} />;
   },
 });
 
@@ -126,6 +130,10 @@ const settingsChildren = [
   settingsPage(
     '/settings/mcp',
     lazyRouteComponent(() => import('~/routes/settings/mcp'), 'SettingsMcpPage'),
+  ),
+  settingsPage(
+    '/settings/schedules',
+    lazyRouteComponent(() => import('~/routes/settings/schedules'), 'SettingsSchedulesPage'),
   ),
   settingsPage(
     '/settings/usage',

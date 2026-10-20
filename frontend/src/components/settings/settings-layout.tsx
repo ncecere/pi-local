@@ -27,6 +27,7 @@ interface Tab {
     | '/settings/teams'
     | '/settings/models'
     | '/settings/mcp'
+    | '/settings/schedules'
     | '/settings/conversations'
     | '/settings/usage';
   label: string;
@@ -42,6 +43,7 @@ const ALL_TABS: Tab[] = [
   { to: '/settings/teams', label: 'Teams', exact: false },
   { to: '/settings/models', label: 'Models', exact: false },
   { to: '/settings/mcp', label: 'MCP', exact: false },
+  { to: '/settings/schedules', label: 'Schedules', exact: false },
   { to: '/settings/conversations', label: 'Conversations', exact: false },
   { to: '/settings/usage', label: 'Usage', exact: false },
 ];

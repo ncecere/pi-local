@@ -31,7 +31,14 @@ export class ThreadStore {
 	/** Get or create; the process owns the storage, so an in-process guard is enough against double creation. */
 	async ensure(threadId: string, firstMessage: string): Promise<Conversation> {
 		const existing = await this.get(threadId);
-		if (existing !== undefined) return existing;
+		if (existing !== undefined) {
+			// An untitled thread (a fork that started empty) takes its title from its first message.
+			await this.harness.commit(async (tx) => {
+				const record = (await tx.doc(ThreadsDoc)).threads[threadId];
+				if (record !== undefined && record.title === "") record.title = titleFrom(firstMessage);
+			}, ctx);
+			return existing;
+		}
 		const pending = this.creating.get(threadId);
 		if (pending !== undefined) return pending;
 		const created = this.harness
@@ -72,7 +79,9 @@ export class ThreadStore {
 			agent: this.agent(),
 			init: async (tx: Parameters<NonNullable<Parameters<Harness["createConversation"]>[0]["init"]>>[0], conversationId: number) => {
 				const now = Date.now();
-				(await tx.doc(ThreadsDoc)).threads[threadId] = { conversationId, title: source.title, createdAt: now, updatedAt: now };
+				// A fork that starts empty (editing the first message) is titled by its own first message.
+				const title = at === undefined ? "" : source.title;
+				(await tx.doc(ThreadsDoc)).threads[threadId] = { conversationId, title, createdAt: now, updatedAt: now };
 			},
 		};
 		let created: Promise<Conversation>;

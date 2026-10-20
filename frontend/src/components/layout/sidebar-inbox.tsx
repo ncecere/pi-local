@@ -63,8 +63,10 @@ import {
 } from '~/lib/inbox';
 import { matchInboxShortcut } from '~/lib/inbox-shortcuts';
 import { nextPage, PAGE_SIZE, visibleOf } from '~/lib/paging';
+import { isScheduledThreadId } from '~/lib/schedules';
 import { splitSnippet } from '~/lib/snippet';
 import { cn } from '~/lib/utils';
+import { plainTextOfMarkdown } from '~/shared';
 
 /** Which shelves are open, remembered in this browser. They start closed. */
 const SHELVES_KEY = 'pai.inbox.shelves';
@@ -328,11 +330,23 @@ export function SidebarInbox({ filter }: { filter: string }) {
                   <Link
                     to="/agents/$agentId/threads/$threadId"
                     params={{ agentId: entry.agentId, threadId: entry.threadId }}
+                    // Opened at the message the snippet came from (thread.tsx).
+                    search={{ find: hit.snippet }}
                     aria-current={openKey === entry.key ? 'page' : undefined}
                     className="flex flex-col gap-0.5 rounded-md px-2.5 py-1.5 outline-none hover:bg-[var(--sidebar-row-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-bright)]"
                   >
-                    <span dir="auto" className="truncate text-sm text-[var(--text-primary)]">
-                      {entry.title}
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span
+                        dir="auto"
+                        className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]"
+                      >
+                        {entry.title}
+                      </span>
+                      {multi && agents.get(entry.agentId) && (
+                        <span className="shrink-0 truncate text-[0.6875rem] text-[var(--text-muted)]">
+                          {agents.get(entry.agentId)?.name}
+                        </span>
+                      )}
                     </span>
                     <Snippet text={hit.snippet} />
                   </Link>
@@ -341,11 +355,17 @@ export function SidebarInbox({ filter }: { filter: string }) {
             </ul>
           ) : (
             <p role="status" className="px-2.5 py-1.5 text-xs text-[var(--text-muted)]">
-              {messages.pending ? 'Searching…' : 'No messages match.'}
+              {messages.pending
+                ? 'Searching…'
+                : messages.failed
+                  ? 'Messages could not be searched.'
+                  : inMessages.length > 0
+                    ? 'Only conversations already listed match.'
+                    : 'No messages match.'}
             </p>
           )}
           <p className="px-2.5 pt-1 text-[0.6875rem] text-[var(--text-muted)]">
-            Only conversations opened in this app are searched.
+            A conversation is searchable once a reply in it ends, or once it is opened.
           </p>
         </section>
       )}
@@ -483,7 +503,7 @@ function PagedList({
 function Snippet({ text }: { text: string }) {
   return (
     <span dir="auto" className="line-clamp-2 text-xs text-[var(--text-muted)]">
-      {splitSnippet(text).map((part) =>
+      {splitSnippet(plainTextOfMarkdown(text)).map((part) =>
         part.match ? (
           <mark
             key={part.at}
@@ -953,6 +973,12 @@ function InboxRow({
             </span>
             {/* Line 3: when, and who asked when another agent did. */}
             <span className="truncate text-xs text-[var(--text-muted)] tabular-nums">
+              {isScheduledThreadId(entry.threadId) && (
+                <Clock
+                  className="mr-1 inline size-3 align-[-0.125em]"
+                  aria-label="Started by a schedule"
+                />
+              )}
               {compactAgo(activityAt(meta, entry), now)}
               {asked && (
                 <>

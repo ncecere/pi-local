@@ -15,6 +15,7 @@ import {
   stoppedOf,
   textOf,
 } from '~/components/chat/message-content';
+import { MessageEditor } from '~/components/chat/message-editor';
 import { ReplyFailureNote } from '~/components/chat/reply-outcome-note';
 import { WorkBlock } from '~/components/chat/reply-work';
 import type { ToolPart } from '~/components/chat/tool-steps';
@@ -36,6 +37,13 @@ interface MessageRowProps {
   agent?: Pick<Agent, 'id' | 'enabled' | 'running'>;
   /** The newest reply: its avatar shows what the agent is doing; earlier ones rest, still. */
   latest?: boolean;
+  /**
+   * A message of the person's: sends an edited version in a new conversation.
+   * Answers an error to show, or null once on its way.
+   */
+  onEdit?: (messageId: string, text: string) => Promise<string | null>;
+  /** A finished reply: a new conversation with everything up to it. */
+  onBranch?: (messageId: string) => Promise<void>;
 }
 
 /**
@@ -68,14 +76,33 @@ export const MessageRow = memo(function MessageRow({
   position,
   agent,
   latest = false,
+  onEdit,
+  onBranch,
 }: MessageRowProps) {
   const text = textOf(message);
   const excerpt = messageExcerptOf(message) ?? undefined;
   const place = (excerpt && position) || undefined;
+  const [editing, setEditing] = useState(false);
+  const [branching, setBranching] = useState(false);
 
   if (message.role === 'user') {
     const pending = (message.metadata as ReplyMetadata | undefined)?.pending;
     const steer = (message.metadata as ReplyMetadata | undefined)?.steer === true;
+    if (editing && onEdit)
+      return (
+        <article
+          className="flex flex-col items-end"
+          aria-label="Your message, being edited"
+          data-message-id={message.id}
+          data-message-role="user"
+        >
+          <MessageEditor
+            text={text}
+            onCancel={() => setEditing(false)}
+            onSubmit={(edited) => onEdit(message.id, edited)}
+          />
+        </article>
+      );
     return (
       <article
         className="group flex flex-col items-end"
@@ -109,12 +136,20 @@ export const MessageRow = memo(function MessageRow({
           <MessageActions
             text={text}
             position={place}
+            onEdit={onEdit ? () => setEditing(true) : undefined}
             info={replyInfo(message.metadata as ReplyMetadata | undefined)}
           />
         )}
       </article>
     );
   }
+
+  const branch = onBranch
+    ? () => {
+        setBranching(true);
+        void onBranch(message.id).finally(() => setBranching(false));
+      }
+    : undefined;
 
   const interruption = interruptionOf(message);
   const failure = streaming ? null : failureOf(message);
@@ -187,6 +222,8 @@ export const MessageRow = memo(function MessageRow({
               text={text}
               position={place}
               onRetry={onRetry}
+              onBranch={branch}
+              branching={branching}
               info={replyInfo(message.metadata as ReplyMetadata | undefined)}
             />
           </>

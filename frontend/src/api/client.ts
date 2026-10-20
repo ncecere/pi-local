@@ -34,6 +34,7 @@ export type {
   ChatToolMessage,
   ChatUserMessage,
   ChatView,
+  DesktopSettings,
   DiscoveredModel,
   McpEvent,
   McpImportList,
@@ -51,6 +52,13 @@ export type {
   ProviderPreset,
   ProvidersResponse,
   RevealTarget,
+  Schedule,
+  ScheduleEvent,
+  ScheduleInput,
+  ScheduleRun,
+  ScheduleRunEvent,
+  ScheduleRunStatus,
+  SearchResult,
   Team,
   TeamEvent,
   ThreadDocument,
@@ -61,7 +69,7 @@ export type {
 
 export type Role = 'admin' | 'user';
 
-/** Optional features and whether each is on. None are on locally yet. */
+/** Optional features and whether each is on. Locally: `messageSearch` (Phase 7). */
 export type FeatureId = 'usage' | 'connectedUsage' | 'messageSearch' | 'myUsage';
 
 /** `GET /api/me`: the one local user. */

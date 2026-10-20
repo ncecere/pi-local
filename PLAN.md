@@ -452,7 +452,35 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
 > Approvals are needed by Phase 4 (workspace tools), so the approval card and the gateway's approval handlers move
 > forward into Phase 4. The rest of Phase 6 can run in parallel with Phase 5.
 
-### Phase 7: Always-on and search
+### Phase 7: Always on, search, editing ✅ done 2026-10-20: v1 is feature-complete
+- **Schedules** (`internal/schedules`):
+  - once or cron with a timezone; a new conversation per run, or one conversation
+  - a fire missed while the app was quit runs once (or is skipped); 5 failures in a row pause the schedule
+  - runs finish from the reply's end
+  - agents may set their own (`schedules.agentMade`: the runtime's schedule tools through the gateway, limited to 20
+    per agent, every 5 minutes at most, 300 runs a day)
+  - the UI: a Schedules page and tab, a plain-words cron describer, run now, history
+- **Search:** FTS5 in `app.db` (accents ignored, prefix matches, only user and assistant text), indexed when a reply
+  ends while the agent is awake and whenever a conversation is opened; the sidebar search, jump to the match.
+- **Edit and branch:** the runtime's `POST /threads/{t}/fork` (pi-durable `fork`, before or after a message), the
+  app's route, "Edit" and "Branch from here" in the UI. The original is kept; an edited first message titles the new
+  conversation.
+- **Desktop:**
+  - closing the window keeps the app in the menu bar, with status lines (agents working, requests needing you)
+  - notifications (approval asked, scheduled run ended, agent failed) while the window isn't in front: native from a
+    bundled app, `osascript` in development
+  - launch at login (a LaunchAgent, started `-hidden`)
+- **Tested:**
+  - Go end to end: reminder fire and run end, a missed fire on restart, agent-made schedules with limits, search,
+    fork
+  - runtime: fork (edit, branch, a fork of a fork)
+  - the desktop app: started hidden, a schedule fired, the agent answered, the notification was sent
+  - by hand in the UI: search, edit, the schedule dialog
+- **Fixed:**
+  - the inherited approvals stream test's 5 s limit (it takes 0.3 s alone, but its own waits allow 10 s each)
+  - forks that start empty take their title from their first message
+
+### (Original Phase 7 notes)
 - **Tray app:** closing the window keeps the Go process, the scheduler and awake agents running. The tray shows busy
   agents and pending approvals, and has Open and Quit. Quit stops agents gracefully: SIGTERM, and work stays pending in
   storage.

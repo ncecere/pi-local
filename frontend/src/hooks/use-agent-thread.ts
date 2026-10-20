@@ -62,7 +62,10 @@ const RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 15_000];
 /** How long a hidden tab keeps an idle agent's stream open. */
 const HIDDEN_GRACE_MS = 60_000;
 
-/** A first message handed over by the home page, sent once the conversation opens. */
+/**
+ * A first message handed over by the home page (or an edit), sent once the
+ * conversation opens.
+ */
 export interface Handover {
   agentId: string;
   threadId: string;
@@ -70,6 +73,11 @@ export interface Handover {
   requestId: string;
   /** The person was typing: keep the cursor in the composer. */
   focus: boolean;
+  /**
+   * The conversation exists already (an edited message's fork): its
+   * transcript is followed at once, and the message is sent into it.
+   */
+  existing?: boolean;
 }
 
 const HANDOVER_KEY = 'pai.handover';
@@ -196,11 +204,12 @@ export function useAgentThread({
   const [draft, setDraft] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
-  const [connection, setConnection] = useState<Connection>(handover ? 'idle' : 'connecting');
+  const fresh = handover !== null && handover.existing !== true;
+  const [connection, setConnection] = useState<Connection>(fresh ? 'idle' : 'connecting');
   const [connectError, setConnectError] = useState<string | null>(null);
   // The conversation exists on the platform: an existing one, or a new one
   // whose first message was accepted. The stream 404s before that.
-  const [exists, setExists] = useState(!handover);
+  const [exists, setExists] = useState(!fresh);
   const [hidden, setHidden] = useState(() => document.visibilityState === 'hidden');
   const [reconnectKey, setReconnectKey] = useState(0);
 
@@ -575,6 +584,8 @@ export function useAgentThread({
 
   return {
     view,
+    /** The whole transcript loaded: earlier pages, then the live window. */
+    shownView,
     messages,
     /** `messages` without the earlier pages (see liveMessages). */
     liveMessages,
@@ -588,8 +599,11 @@ export function useAgentThread({
     connection,
     connectError,
     reconnect,
-    /** Shown: the first view arrived, or a first message is on its way (never a spinner for that). */
-    ready: view !== null || handover !== null,
+    /**
+     * Shown: the first view arrived, or a new conversation's first message is on
+     * its way (never a spinner for that). An existing one waits for its transcript.
+     */
+    ready: view !== null || fresh,
     /** Earlier messages can be loaded. */
     hasEarlier: earlierCursor !== undefined,
     loadEarlier,
