@@ -43,19 +43,21 @@ function activityPhrases(steps: readonly WorkStep[]): string[] {
         ? 'search_failed'
         : step.state === 'error'
           ? 'failed'
-          : step.state === 'denied'
-            ? 'denied'
-            : step.state === 'stopped'
-              ? 'stopped'
-              : step.toolId === 'web_search' ||
-                  step.toolId === 'create_artifact' ||
-                  step.toolId === 'update_artifact' ||
-                  step.toolId === 'remember' ||
-                  step.toolId === 'forget' ||
-                  step.toolId === 'ask_agent' ||
-                  step.toolId === 'list_agents'
-                ? step.toolId
-                : `tool:${step.label}`;
+          : step.state === 'awaiting-approval'
+            ? 'awaiting'
+            : step.state === 'denied'
+              ? 'denied'
+              : step.state === 'stopped'
+                ? 'stopped'
+                : step.toolId === 'web_search' ||
+                    step.toolId === 'create_artifact' ||
+                    step.toolId === 'update_artifact' ||
+                    step.toolId === 'remember' ||
+                    step.toolId === 'forget' ||
+                    step.toolId === 'ask_agent' ||
+                    step.toolId === 'list_agents'
+                  ? step.toolId
+                  : `tool:${step.label}`;
     kinds.set(kind, [...(kinds.get(kind) ?? []), step]);
   }
   return [...kinds].map(([kind, group]) => {
@@ -65,6 +67,10 @@ function activityPhrases(steps: readonly WorkStep[]): string[] {
         return `web search failed${times(count)}`;
       case 'failed':
         return count === 1 ? 'a step failed' : `${count} steps failed`;
+      case 'awaiting':
+        return count === 1
+          ? 'waiting for your approval'
+          : `${count} steps waiting for your approval`;
       case 'denied':
         return count === 1 ? 'a step was not run' : `${count} steps were not run`;
       case 'stopped':

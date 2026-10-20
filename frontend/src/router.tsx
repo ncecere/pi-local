@@ -145,9 +145,13 @@ const AgentDetailPage = lazyRouteComponent(
 const agentDetailRoute = createRoute({
   getParentRoute: () => settingsRoute,
   path: '/settings/agents/$agentId',
+  // `?tab=tools`: open on a tab (the composer's "turn on the read tool" link).
+  validateSearch: (search: Record<string, unknown>): { tab?: string } =>
+    typeof search.tab === 'string' && search.tab ? { tab: search.tab } : {},
   component: function AgentDetailRoute() {
     const { agentId } = agentDetailRoute.useParams();
-    return <AgentDetailPage key={agentId} agentId={agentId} />;
+    const { tab } = agentDetailRoute.useSearch();
+    return <AgentDetailPage key={agentId} agentId={agentId} initialTab={tab} />;
   },
 });
 

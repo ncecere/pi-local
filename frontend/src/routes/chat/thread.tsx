@@ -3,6 +3,12 @@ import { ArrowDown, CornerUpLeft } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import { publishAgentLive } from '~/components/agent/avatar/agent-live';
+import {
+  AttachButton,
+  AttachmentTray,
+  DropOverlay,
+  useFileDrop,
+} from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
 import { preloadMarkdownRenderer, useMarkdownRendererReady } from '~/components/chat/markdown';
 import { textOf } from '~/components/chat/message-content';
@@ -13,6 +19,7 @@ import { FullPageSpinner } from '~/components/ui/spinner';
 import { UnavailableState } from '~/components/ui/unavailable-state';
 import { type Connection, peekHandover, useAgentThread } from '~/hooks/use-agent-thread';
 import { useAgent, useAgents, useThreadInfo } from '~/hooks/use-agents';
+import { useAttachments } from '~/hooks/use-attachments';
 import { useChatScroll } from '~/hooks/use-chat-scroll';
 import { isPendingMessage } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
@@ -81,6 +88,16 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
   }, [busy, messages]);
 
   const scroll = useChatScroll(messages, working, undefined, true, shown);
+
+  // Files attached to the next message: chosen, dropped on the conversation, or pasted.
+  const attachments = useAttachments(agent);
+  const drop = useFileDrop(attachments.add, attachments.enabled && Boolean(agent?.enabled));
+  const sendWithFiles = () => {
+    if (attachments.busy) return;
+    void session.send(attachments.compose).then((sent) => {
+      if (sent) attachments.clear();
+    });
+  };
 
   // "Send again": the question the latest reply answered.
   const { setDraft } = session;
@@ -163,7 +180,8 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
   return (
     <>
       <h1 className="sr-only">{title ?? 'Conversation'}</h1>
-      <div className="flex h-full flex-col">
+      <div className="relative flex h-full flex-col" {...drop.handlers}>
+        <DropOverlay show={drop.dragging} agentName={agent?.name} />
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             ref={scroll.scrollRef}
@@ -253,8 +271,13 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
           autoFocus={handover?.focus ?? false}
           value={session.draft}
           onChange={session.setDraft}
-          onSubmit={() => void session.send()}
+          onSubmit={sendWithFiles}
           onStop={() => void session.stop()}
+          tray={<AttachmentTray attachments={attachments} agent={agent} />}
+          attach={<AttachButton onFiles={attachments.add} disabled={!agent?.enabled} />}
+          onPasteFiles={agent?.enabled ? attachments.add : undefined}
+          hasExtra={attachments.ready.length > 0}
+          holdSend={attachments.busy ? 'Sending waits until the files are uploaded.' : null}
           working={busy}
           stopping={session.stopping}
           disabled={agent ? !agent.enabled : false}

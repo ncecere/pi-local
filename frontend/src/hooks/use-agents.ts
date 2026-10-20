@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   type Agent,
+  type AgentApprovals,
   type AgentThread,
+  type AgentWorkspace,
   agentPath,
   api,
   type CatalogModel,
@@ -213,6 +215,8 @@ export function useUpdateAgent() {
       instructions?: string;
       kindSettings?: Record<string, unknown>;
       canCall?: string[];
+      workspace?: AgentWorkspace;
+      approvals?: AgentApprovals;
     }) => api.patch<Agent>(agentPath(id), body),
     onSuccess: (agent) =>
       queryClient.setQueryData<Agent[]>(AGENTS_KEY, (list) =>

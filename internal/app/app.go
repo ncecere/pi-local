@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/api"
 	"github.com/ncecere/pi-local/internal/appdb"
+	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
@@ -50,16 +53,19 @@ type Config struct {
 
 // App is a running Pi Local.
 type App struct {
-	cfg     Config
-	Agents  *agents.Store
-	Threads *threads.Index
-	Hub     *events.Hub
-	Sup     *supervisor.Supervisor
-	API     *api.API
-	Catalog *models.Catalog
-	Usage   *usage.Store
-	Teams   *teams.Store
-	Asks    *asks.Broker
+	cfg       Config
+	Agents    *agents.Store
+	Threads   *threads.Index
+	Hub       *events.Hub
+	Sup       *supervisor.Supervisor
+	API       *api.API
+	Catalog   *models.Catalog
+	Usage     *usage.Store
+	Teams     *teams.Store
+	Asks      *asks.Broker
+	Approvals *approvals.Store
+	// DB is app.db (diagnostics and tests).
+	DB *sql.DB
 
 	runtimeVersion  string
 	contractVersion int
@@ -139,6 +145,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return nil, err
 	}
 	a.closeDB = db.Close
+	a.DB = db
 	if a.Agents, err = agents.Open(ctx, db, filepath.Join(cfg.DataDir, "agents")); err != nil {
 		return nil, err
 	}
@@ -184,17 +191,24 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		StopGrace:    cfg.StopGrace,
 	})
 	a.Asks = asks.New(db, a.Sup, a.Agents, permissions{a}, a.Threads)
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}}, ReadHeaderTimeout: 10 * time.Second}
+	a.Approvals = approvals.New(db, a.Sup, approvalAgents{a})
+	a.Approvals.Person = localPersonName()
+	a.Approvals.OnChange = func(ap *approvals.Approval) {
+		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
+		a.publishAgent(ap.AgentID) // its pendingApprovals count
+	}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
+			a.Approvals.ForgetAgent(context.Background(), c.AgentID)
 			if err := a.Teams.RemoveAgent(context.Background(), c.AgentID); err != nil {
 				slog.Warn("removing a deleted agent from its teams", "agent", c.AgentID, "err", err)
 			}
@@ -262,6 +276,14 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	if ag.Config.Kind != "" && ag.Config.Kind != "assistant" {
 		env["AGENT_KIND"] = ag.Config.Kind
 	}
+	// Workspace tools, and the tools that ask first (the runtime waits durably; the app decides when they expire).
+	if len(ag.Config.Workspace.Tools) > 0 {
+		env["WORKSPACE_TOOLS"] = strings.Join(ag.Config.Workspace.Tools, ",")
+	}
+	if len(ag.Config.Approvals.Tools) > 0 {
+		raw, _ := json.Marshal(map[string]any{"tools": ag.Config.Approvals.Tools, "timeoutSeconds": ag.Config.Approvals.Timeout()})
+		env["TOOL_APPROVALS"] = string(raw)
+	}
 	// Asking other agents: the tools are there when it may ask someone (who exactly is decided at each ask).
 	if callees, err := a.Teams.Callable(ctx, id); err == nil && len(callees) > 0 {
 		env["AGENT_CALLS"] = "true"
@@ -312,6 +334,30 @@ func (a *App) teamChanged(teamID string, team *teams.Team) {
 		}()
 		a.publishAgent(id)
 	}
+}
+
+// approvalAgents tells the approvals store about agents.
+type approvalAgents struct{ a *App }
+
+func (x approvalAgents) ApprovalTimeout(id string) time.Duration {
+	if ag, err := x.a.Agents.Get(id); err == nil {
+		return time.Duration(ag.Config.Approvals.Timeout()) * time.Second
+	}
+	return time.Duration(agents.DefaultApprovalTimeout) * time.Second
+}
+
+func (x approvalAgents) NameOf(id string) string { return x.a.Agents.NameOf(id) }
+func (x approvalAgents) Exists(id string) bool   { return x.a.Agents.Exists(id) }
+
+// localPersonName is the person deciding approvals, as the model is told ("denied by Ann").
+func localPersonName() string {
+	if u, err := user.Current(); err == nil {
+		if u.Name != "" {
+			return u.Name
+		}
+		return u.Username
+	}
+	return "you"
 }
 
 // permissions answers the asks broker from the teams and the agents' own canCall.
@@ -453,6 +499,9 @@ func baseEnv(dataDir string) map[string]string {
 func (a *App) Close() {
 	if a.Asks != nil {
 		a.Asks.Close()
+	}
+	if a.Approvals != nil {
+		a.Approvals.Close()
 	}
 	if a.Sup != nil {
 		a.Sup.Close()

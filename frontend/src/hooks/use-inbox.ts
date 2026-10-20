@@ -11,6 +11,7 @@ import {
   threadPath,
 } from '~/api/client';
 import { chattable, threadsKey, useAgents } from '~/hooks/use-agents';
+import { useApprovalsByThread, usePendingApprovals } from '~/hooks/use-approvals';
 import { useCurrentUser } from '~/hooks/use-session';
 import { isEventsLive } from '~/lib/events-live';
 import {
@@ -209,6 +210,8 @@ export function useInbox(): Inbox {
 
   const wakeAt = useMemo(() => nextWake(Object.values(metas), Date.now()), [metas]);
   const now = useNow(wakeAt);
+  // Conversations with tool calls waiting for the person: "Needs you", not "Working".
+  const approvals = useApprovalsByThread();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `signature` stands for the lists' data
   const entries = useMemo(() => {
@@ -220,6 +223,7 @@ export function useInbox(): Inbox {
         const key = threadKey(agent.id, thread.threadId);
         // What this browser knows, with what the platform says (busy, finished, failed).
         const meta = withPlatform(metas[key] ?? {}, thread, since);
+        const waiting = approvals.get(key)?.length ?? 0;
         out.push({
           key,
           agentId: agent.id,
@@ -227,14 +231,15 @@ export function useInbox(): Inbox {
           title: thread.title,
           updatedAt: thread.updatedAt,
           calledBy: thread.calledBy ?? null,
+          pendingApprovals: waiting,
           meta,
-          bucket: bucketOf(meta, thread, now),
-          status: statusOf(meta, now),
+          bucket: bucketOf(meta, thread, now, waiting),
+          status: statusOf(meta, now, waiting),
         });
       }
     });
     return out;
-  }, [agents, metas, now, signature]);
+  }, [agents, metas, now, signature, approvals]);
 
   const sections = useMemo(() => sectionsOf(entries, now), [entries, now]);
   return {
@@ -249,17 +254,35 @@ export function useInbox(): Inbox {
   };
 }
 
-/** How many conversations need the person: a reply finished or failed that they have not seen. */
+/**
+ * How many things need the person: conversations with a reply finished or
+ * failed that they have not seen, and conversations (or requests without one)
+ * waiting for their approval. A conversation is counted once.
+ */
 export function useAttentionCount(): number {
   const metas = useInboxMetas();
+  const pending = usePendingApprovals().data;
   const now = Date.now();
-  let count = 0;
-  for (const meta of Object.values(metas)) {
+  const keys = new Set<string>();
+  for (const [key, meta] of Object.entries(metas)) {
     if (meta.archivedAt !== undefined || isSnoozed(meta, now)) continue;
     if (meta.settledAt !== undefined && (meta.completedAt ?? 0) <= meta.settledAt) continue;
-    if (needsAttention(meta, now)) count++;
+    if (needsAttention(meta, now)) keys.add(key);
   }
-  return count;
+  for (const approval of pending ?? [])
+    if (approval.status === 'pending')
+      keys.add(
+        approval.threadId
+          ? threadKey(approval.agentId, approval.threadId)
+          : `${approval.agentId}#${approval.id}`,
+      );
+  return keys.size;
+}
+
+/** How many tool calls wait for the person's approval, across agents. */
+export function usePendingApprovalCount(): number {
+  const pending = usePendingApprovals().data;
+  return pending?.filter((approval) => approval.status === 'pending').length ?? 0;
 }
 
 // ── Following replies that are still being written ──────────────────────────────────────────

@@ -349,7 +349,29 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
 - A config save restarts the agent if it is awake, and realigns its threads.
 - Agent status (asleep, awake, busy, error), log viewer, "wake / hibernate now".
 
-### Phase 4: Workspace tools and files (v1)
+### Phase 4: Workspace tools, approvals and attachments ✅ done 2026-10-20
+- **Workspace tools:**
+  - `agent.yaml` `workspace.tools` (read, write, edit, bash), confined to `<agent>/workspace` (Phase 0's guard)
+  - bash gets a minimal environment
+- **Approvals:**
+  - `agent.yaml` `approvals {tools, timeoutSeconds}` becomes the runtime's `TOOL_APPROVALS`
+  - `internal/approvals` records requests from the runtime, sets their expiry, caps pending at 100 per agent, and
+    delivers decisions (waking the agent) with retries; expired requests time out to a denial
+  - the UI: a Tools tab with presets (Ask first is the default), an inline approval card showing the command or path,
+    a "Needs you" section, and a count in the title
+  - a request survives the agent sleeping and the app quitting (tested)
+- **Attachments:**
+  - files land in `workspace/attachments/<day>/` (safe names, `(2)` suffixes, 100 MiB, ArrayBuffer uploads)
+  - the message lists their paths, and the agent opens them with `read` (images reach vision models through `read`)
+- **Tested:** end to end with a scripted model calling bash, write and read: approve, deny with a reason, a timeout,
+  sleep and restart while waiting, attachments. Checked by hand in the real UI.
+- **Carried forward:**
+  - an optional macOS `sandbox-exec` profile for bash
+  - a file browser panel
+  - deleting an attachment from the UI
+  - real upload progress (XHR in Wails untested)
+
+### (Original Phase 4 notes)
 - Per-agent `workspace/`.
 - `createCodingTools` with `NodeExecutionEnv({cwd: workspace, shellEnv: minimal})`, plus the path guard hook.
 - **Default approvals:** `bash`, `write` and `edit` need approval. Per-agent policy: "ask every time", "allow in

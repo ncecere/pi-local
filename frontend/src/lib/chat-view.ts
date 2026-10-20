@@ -1,5 +1,11 @@
 import type { DynamicToolUIPart, UIMessage } from 'ai';
-import type { ChatAssistantMessage, ChatMessage, ChatToolMessage, ChatView } from '~/api/client';
+import type {
+  ChatApproval,
+  ChatAssistantMessage,
+  ChatMessage,
+  ChatToolMessage,
+  ChatView,
+} from '~/api/client';
 
 /**
  * Turns the platform's ChatView (pi's transcript plus the reply in progress)
@@ -60,6 +66,11 @@ export interface ReplyMetadata {
   usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   /** For a reply: why its last step ended (`length`: it hit the model's output limit). */
   stopReason?: string;
+  /**
+   * For the latest reply: requests waiting for approval whose call is not one
+   * of its steps (a subagent's call, or one the transcript doesn't show yet).
+   */
+  approvals?: ChatApproval[];
 }
 
 export type AgentUIMessage = UIMessage<ReplyMetadata>;
@@ -95,6 +106,54 @@ export function toolDetailsOf(part: { toolMetadata?: unknown }): unknown {
   return (part.toolMetadata as { details?: unknown } | undefined)?.details;
 }
 
+/**
+ * The approval request on a tool part (pending, or how it was decided), kept
+ * on its metadata; null when the call needed none. A pending one carries the
+ * redacted arguments the view's `approvals` list gives.
+ */
+export function approvalOf(part: object): ChatApproval | null {
+  const metadata = (part as { toolMetadata?: unknown }).toolMetadata;
+  const approval = (metadata as { approval?: unknown } | undefined)?.approval;
+  return approval &&
+    typeof approval === 'object' &&
+    typeof (approval as ChatApproval).id === 'string'
+    ? (approval as ChatApproval)
+    : null;
+}
+
+type Metadata = NonNullable<DynamicToolUIPart['toolMetadata']>;
+
+/**
+ * A tool part with its approval: on the metadata, and in its state. Waiting:
+ * `approval-requested`. Denied, timed out or cancelled: `output-denied` (it
+ * was not run). Approved: the call goes on as any other.
+ */
+function withApproval(part: DynamicToolUIPart, approval: ChatApproval): DynamicToolUIPart {
+  const toolMetadata: Metadata = {
+    ...(part.toolMetadata ?? {}),
+    approval: approval as unknown as Metadata[string],
+  };
+  const base = {
+    type: 'dynamic-tool' as const,
+    toolName: part.toolName,
+    toolCallId: part.toolCallId,
+    input: part.input ?? {},
+    toolMetadata,
+  };
+  if (approval.status === 'pending')
+    return { ...base, state: 'approval-requested', approval: { id: approval.id } };
+  if (approval.status === 'approved') return { ...part, toolMetadata } as DynamicToolUIPart;
+  return {
+    ...base,
+    state: 'output-denied',
+    approval: {
+      id: approval.id,
+      approved: false,
+      ...(approval.reason ? { reason: approval.reason } : {}),
+    },
+  };
+}
+
 /** The metadata with a tool's details added, when it has any. */
 function withDetails(
   metadata: DynamicToolUIPart['toolMetadata'],
@@ -124,6 +183,7 @@ export function viewToMessages(
   pending: readonly PendingMessage[] = [],
 ): AgentUIMessage[] {
   const messages: AgentUIMessage[] = [];
+  const replies: Reply[] = [];
   let reply: Reply | null = null;
   let turn = -1;
   // Transcript id -> the id the message already has on screen.
@@ -140,6 +200,7 @@ export function viewToMessages(
         recorded: {},
       };
       messages.push(reply.message);
+      replies.push(reply);
     }
     return reply;
   };
@@ -197,6 +258,27 @@ export function viewToMessages(
     }
     // A reply being written carries no failure from an earlier step.
     live.message.metadata = { status: 'streaming' };
+  }
+
+  // Requests waiting for approval: on their call's step, with the redacted
+  // arguments; any whose call is not in the transcript, on the latest reply.
+  const orphans: ChatApproval[] = [];
+  for (const approval of view?.approvals ?? []) {
+    if (approval.status !== 'pending') continue;
+    const owner = replies.find((candidate) => candidate.tools.has(approval.callId));
+    const part = owner?.tools.get(approval.callId);
+    if (!owner || !part) {
+      orphans.push(approval);
+      continue;
+    }
+    // A result already in: the request is over, whatever the list says.
+    if (part.state === 'output-available' || part.state === 'output-error') continue;
+    const next = withApproval(part, { ...(approvalOf(part) ?? {}), ...approval });
+    replacePart(owner, part, next);
+  }
+  if (orphans.length > 0) {
+    const last = replies.at(-1) ?? currentReply();
+    last.message.metadata = { ...(last.message.metadata ?? {}), approvals: orphans };
   }
 
   for (const message of pending) {
@@ -262,7 +344,7 @@ function addAssistantStep(reply: Reply, message: ChatAssistantMessage) {
   if (message.thinking) parts.push({ type: 'reasoning', text: message.thinking, state: 'done' });
   if (message.text) parts.push({ type: 'text', text: message.text, state: 'done' });
   for (const call of message.toolCalls ?? []) {
-    const part: DynamicToolUIPart = {
+    const plain: DynamicToolUIPart = {
       type: 'dynamic-tool',
       toolName: call.name,
       toolCallId: call.id,
@@ -272,6 +354,7 @@ function addAssistantStep(reply: Reply, message: ChatAssistantMessage) {
         ? { toolMetadata: { startedAt: call.startedAt, endedAt: call.endedAt } }
         : {}),
     };
+    const part = call.approval ? withApproval(plain, call.approval) : plain;
     reply.tools.set(call.id, part);
     parts.push(part);
   }
@@ -319,17 +402,28 @@ function addToolResult(reply: Reply, message: ChatToolMessage) {
     input: existing?.input ?? {},
     ...(metadata ? { toolMetadata: metadata } : {}),
   };
-  const done: DynamicToolUIPart = message.isError
-    ? { ...base, state: 'output-error', errorText: text || 'The tool failed.' }
-    : { ...base, state: 'output-available', output: { text } satisfies ToolOutput };
-  if (existing) {
-    const parts = reply.message.parts as Part[];
-    const index = parts.indexOf(existing);
-    if (index >= 0) parts[index] = done;
-  } else {
+  const approval = existing ? approvalOf(existing) : null;
+  const refused =
+    approval !== null && approval.status !== 'approved' && approval.status !== 'pending';
+  const done: DynamicToolUIPart = refused
+    ? withApproval({ ...base, state: 'input-available' }, approval)
+    : message.isError
+      ? { ...base, state: 'output-error', errorText: text || 'The tool failed.' }
+      : { ...base, state: 'output-available', output: { text } satisfies ToolOutput };
+  if (existing) replacePart(reply, existing, done);
+  else {
     reply.message.parts.push(done);
+    reply.tools.set(id, done);
   }
-  reply.tools.set(id, done);
+}
+
+/** Puts `next` where `previous` was in the reply's parts and tool index. */
+function replacePart(reply: Reply, previous: DynamicToolUIPart, next: DynamicToolUIPart) {
+  const parts = reply.message.parts as Part[];
+  const index = parts.indexOf(previous);
+  if (index >= 0) parts[index] = next;
+  else parts.push(next);
+  reply.tools.set(next.toolCallId, next);
 }
 
 /**

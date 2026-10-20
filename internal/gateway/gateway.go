@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
@@ -51,12 +52,19 @@ type Peer struct {
 	Via         string `json:"via"`
 }
 
+// Approvals keeps tool calls waiting for a person.
+type Approvals interface {
+	ReportOne(ctx context.Context, agentID string, r approvals.Report) (approvals.Answer, bool)
+	Sync(ctx context.Context, agentID string, reports []approvals.Report, at int64) []approvals.Answer
+}
+
 // Handler is the gateway's routes.
 type Handler struct {
-	Keys    Keys
-	Threads Threads
-	Usage   Usage
-	Asks    Asks
+	Keys      Keys
+	Threads   Threads
+	Usage     Usage
+	Asks      Asks
+	Approvals Approvals
 }
 
 const maxBody = 4 << 20
@@ -141,6 +149,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case h.Approvals != nil && r.Method == http.MethodPost && r.URL.Path == "/approvals/report":
+		var report approvals.Report
+		if !decode(w, r, &report) {
+			return
+		}
+		answer, good := h.Approvals.ReportOne(r.Context(), agentID, report)
+		if !good {
+			fail(w, http.StatusBadRequest, "invalid_approval", "the request couldn't be recorded")
+			return
+		}
+		ok(w, answer)
+	case h.Approvals != nil && r.Method == http.MethodPost && r.URL.Path == "/approvals/sync":
+		var body struct {
+			Approvals []approvals.Report `json:"approvals"`
+			At        int64              `json:"at"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if len(body.Approvals) > 1000 {
+			body.Approvals = body.Approvals[:1000]
+		}
+		ok(w, h.Approvals.Sync(r.Context(), agentID, body.Approvals, body.At))
 	case h.Asks != nil && strings.HasPrefix(r.URL.Path, "/a2a/"):
 		h.serveAsks(w, r, agentID)
 	default:

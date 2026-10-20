@@ -16,6 +16,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  ShieldAlert,
   Trash2,
   Undo2,
 } from 'lucide-react';
@@ -44,9 +45,11 @@ import {
 } from '~/components/ui/dropdown-menu';
 import { Spinner } from '~/components/ui/spinner';
 import { useDeleteThread, useRenameThread } from '~/hooks/use-agents';
+import { usePendingApprovals } from '~/hooks/use-approvals';
 import { type InboxActions, useInbox, useInboxActions } from '~/hooks/use-inbox';
 import { searchable, useMessageSearch } from '~/hooks/use-message-search';
 import { calledByLabel } from '~/lib/agent-asks';
+import { approvalHeadline } from '~/lib/approvals';
 import { keepFocusWhenRemoved } from '~/lib/focus-return';
 import {
   activityAt,
@@ -108,6 +111,7 @@ export function SidebarInbox({ filter }: { filter: string }) {
     (!agentFilter || entry.agentId === agentFilter) &&
     (!query || entry.title.toLowerCase().includes(query));
   const sections: Sections = {
+    approval: inbox.sections.approval.filter(show),
     pinned: inbox.sections.pinned.filter(show),
     working: inbox.sections.working.filter(show),
     inbox: inbox.sections.inbox.filter(show),
@@ -115,13 +119,24 @@ export function SidebarInbox({ filter }: { filter: string }) {
     done: inbox.sections.done.filter(show),
     archived: inbox.sections.archived.filter(show),
   };
-  const active = [...sections.pinned, ...sections.working, ...sections.inbox];
+  const active = [...sections.approval, ...sections.pinned, ...sections.working, ...sections.inbox];
+
+  // Requests waiting whose conversation isn't a row here (none, or not listed yet).
+  const pendingApprovals = usePendingApprovals().data;
+  const listedKeys = new Set(inbox.entries.map((entry) => entry.key));
+  const unlisted = (pendingApprovals ?? []).filter(
+    (approval) =>
+      approval.status === 'pending' &&
+      !(approval.threadId && listedKeys.has(`${approval.agentId}/${approval.threadId}`)) &&
+      (!agentFilter || approval.agentId === agentFilter),
+  );
 
   // Messages whose text holds the query (the messageSearch feature), beyond the titles that do.
   const messages = useMessageSearch(filter);
   const byKey = new Map(inbox.entries.map((entry) => [entry.key, entry]));
   const titled = new Set(
     [
+      ...sections.approval,
       ...sections.pinned,
       ...sections.working,
       ...sections.inbox,
@@ -334,6 +349,42 @@ export function SidebarInbox({ filter }: { filter: string }) {
           </p>
         </section>
       )}
+      {(sections.approval.length > 0 || unlisted.length > 0) && (
+        <section aria-labelledby="inbox-needs-you">
+          <Heading id="inbox-needs-you">Needs you</Heading>
+          {list(sections.approval, 'Conversations waiting for your approval')}
+          {unlisted.length > 0 && (
+            <ul aria-label="Requests waiting for your approval" className="flex flex-col gap-px">
+              {unlisted.map((approval) => (
+                <li key={`${approval.agentId}/${approval.id}`}>
+                  <Link
+                    {...(approval.threadId
+                      ? {
+                          to: '/agents/$agentId/threads/$threadId' as const,
+                          params: { agentId: approval.agentId, threadId: approval.threadId },
+                        }
+                      : {
+                          to: '/settings/agents/$agentId' as const,
+                          params: { agentId: approval.agentId },
+                        })}
+                    className="flex flex-col gap-0.5 rounded-md px-2.5 py-1.5 outline-none hover:bg-[var(--sidebar-row-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-bright)]"
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5 text-xs">
+                      <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-secondary)]">
+                        {approval.agentName}
+                      </span>
+                      <StatusBadge status="approval" />
+                    </span>
+                    <span className="truncate font-mono text-xs text-[var(--text-primary)]/90">
+                      {approvalHeadline(approval.tool, approval.arguments)}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       {sections.pinned.length > 0 && (
         <section aria-labelledby="inbox-pinned">
           <Heading id="inbox-pinned">Pinned</Heading>
@@ -460,6 +511,7 @@ function Heading({ id, children }: { id: string; children: ReactNode }) {
 }
 
 const STATUS_TONE: Record<NonNullable<InboxEntry['status']>, string> = {
+  approval: 'text-[var(--warning)]',
   working: 'text-[var(--status-working)]',
   failed: 'text-[var(--danger)]',
   unread: 'text-[var(--success)]',
@@ -467,6 +519,7 @@ const STATUS_TONE: Record<NonNullable<InboxEntry['status']>, string> = {
 };
 
 const STATUS_ICON: Record<NonNullable<InboxEntry['status']>, LucideIcon> = {
+  approval: ShieldAlert,
   working: CircleDashed,
   failed: CircleAlert,
   unread: CircleCheck,
@@ -569,9 +622,12 @@ const ICON_BUTTON =
 function StatusBadge({
   status,
   workingSince,
+  count,
 }: {
   status: NonNullable<InboxEntry['status']>;
   workingSince?: number;
+  /** For `approval`: how many requests wait, said when more than one. */
+  count?: number;
 }) {
   const Icon = STATUS_ICON[status];
   return (
@@ -586,6 +642,9 @@ function StatusBadge({
         aria-hidden="true"
       />
       {STATUS_LABEL[status]}
+      {status === 'approval' && count !== undefined && count > 1 && (
+        <span className="font-normal tabular-nums">({count})</span>
+      )}
       {status === 'working' && workingSince !== undefined && (
         <span className="font-normal">
           <Elapsed since={workingSince} />
@@ -811,7 +870,11 @@ function InboxRow({
         {untilLabel(meta.snoozedUntil, now)}
       </span>
     ) : status ? (
-      <StatusBadge status={status} workingSince={meta.workingSince} />
+      <StatusBadge
+        status={status}
+        workingSince={meta.workingSince}
+        count={entry.pendingApprovals}
+      />
     ) : bucket === 'done' && meta.settledAt ? (
       <span className="shrink-0 text-xs text-[var(--text-muted)] tabular-nums">
         {compactAgo(meta.settledAt, now)}
@@ -877,7 +940,11 @@ function InboxRow({
               dir="auto"
               className={cn(
                 'min-w-0 truncate text-sm',
-                status === 'unread' || status === 'woke' || status === 'failed' || active
+                status === 'unread' ||
+                  status === 'woke' ||
+                  status === 'failed' ||
+                  status === 'approval' ||
+                  active
                   ? 'font-medium text-[var(--text-primary)]'
                   : 'text-[var(--text-primary)]/90',
               )}

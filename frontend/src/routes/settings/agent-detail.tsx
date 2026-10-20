@@ -9,6 +9,7 @@ import { ConfigTab } from '~/components/agent-manager/config-tab';
 import { KindSettingsTab } from '~/components/agent-manager/kind-settings-tab';
 import { LogsTab } from '~/components/agent-manager/logs-tab';
 import { OverviewTab } from '~/components/agent-manager/overview-tab';
+import { ToolsTab } from '~/components/agent-manager/tools-tab';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { useAgentCatalog, useAgents } from '~/hooks/use-agents';
@@ -17,15 +18,26 @@ import { usePageTitle } from '~/lib/document-title';
 import { hasKindSettings } from '~/lib/kind-settings';
 import { cn } from '~/lib/utils';
 
-type TabId = 'overview' | 'kind' | 'can-ask' | 'config' | 'logs';
+type TabId = 'overview' | 'tools' | 'kind' | 'can-ask' | 'config' | 'logs';
+
+const TAB_IDS: readonly string[] = ['overview', 'tools', 'kind', 'can-ask', 'config', 'logs'];
 
 /** Settings → Agents → one agent: its details, kind settings, who it may ask, agent.yaml and logs. */
-export function SettingsAgentDetailPage({ agentId }: { agentId: string }) {
+export function SettingsAgentDetailPage({
+  agentId,
+  initialTab,
+}: {
+  agentId: string;
+  /** `?tab=`: the tab to open on ("tools" from the composer's attachments note). */
+  initialTab?: string;
+}) {
   const agents = useAgents();
   const catalog = useAgentCatalog();
   const agent = agents.data?.find((candidate) => candidate.id === agentId);
   usePageTitle(agent ? `${agent.name} · Agents · Settings` : 'Agent · Settings');
-  const [tab, setTab] = useState<TabId>('overview');
+  const [tab, setTab] = useState<TabId>(() =>
+    initialTab && TAB_IDS.includes(initialTab) ? (initialTab as TabId) : 'overview',
+  );
   const [deleting, setDeleting] = useState(false);
   const id = useId();
 
@@ -48,6 +60,7 @@ export function SettingsAgentDetailPage({ agentId }: { agentId: string }) {
 
   const tabs: { id: TabId; label: string }[] = [
     { id: 'overview', label: 'Overview' },
+    { id: 'tools', label: 'Tools' },
     ...(hasKindSettings(agent.agentKind)
       ? [{ id: 'kind' as const, label: `${agentKindLabel(agent)} settings` }]
       : []),
@@ -136,6 +149,7 @@ export function SettingsAgentDetailPage({ agentId }: { agentId: string }) {
 
       <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${current}`}>
         {current === 'overview' && <OverviewTab agent={agent} catalog={catalog.data} />}
+        {current === 'tools' && <ToolsTab agent={agent} />}
         {current === 'kind' && <KindSettingsTab agent={agent} />}
         {current === 'can-ask' && <CanAskTab agent={agent} agents={agents.data} />}
         {current === 'config' && <ConfigTab agent={agent} />}

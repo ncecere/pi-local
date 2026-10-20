@@ -263,7 +263,12 @@ export function useAgentThread({
 
   // ---- Sending ----------------------------------------------------------
   const submit = useCallback(
-    async (text: string, requestId: string = crypto.randomUUID()) => {
+    async (
+      text: string,
+      requestId: string = crypto.randomUUID(),
+      /** What goes back in the message box if it fails: the text as typed, without the files' block. */
+      typed: string = text,
+    ) => {
       const content = text.trim();
       if (!content) return false;
       setSendError(null);
@@ -311,7 +316,7 @@ export function useAgentThread({
           ),
         );
         // Back into the composer, unless something new was typed meanwhile.
-        setDraft((current) => (current.trim() ? current : content));
+        setDraft((current) => (current.trim() ? current : typed.trim()));
         setSendError(
           `Your message wasn't sent, so it's back in the message box. ${errorMessage(error, '')}`.trim(),
         );
@@ -322,12 +327,20 @@ export function useAgentThread({
     [agentId, threadId, exists, queryClient],
   );
 
-  const send = useCallback(async () => {
-    const text = draft;
-    if (!text.trim() || text.trim().length > AGENT_MESSAGE_MAX_LENGTH) return;
-    setDraft('');
-    await submit(text);
-  }, [draft, submit]);
+  /**
+   * Sends the draft. `compose` makes the message from it (adding the attached
+   * files' block); true once the agent accepted it.
+   */
+  const send = useCallback(
+    async (compose?: (text: string) => string) => {
+      const typed = draft;
+      const text = compose ? compose(typed) : typed;
+      if (!text.trim() || text.trim().length > AGENT_MESSAGE_MAX_LENGTH) return false;
+      setDraft('');
+      return submit(text, undefined, typed);
+    },
+    [draft, submit],
+  );
 
   // The home page's first message, once.
   const handedOver = useRef(false);

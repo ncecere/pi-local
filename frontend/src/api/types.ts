@@ -46,6 +46,68 @@ export interface Agent {
   dir: string;
   /** The newest runtime that wrote its storage. */
   piDurableVersion: string | null;
+  /**
+   * Its file tools, confined to its workspace folder (bash is not confined).
+   * Phase 4; absent from an older backend (read as no tools).
+   */
+  workspace?: AgentWorkspace;
+  /** Which tools ask first, and how long a request waits. Phase 4. */
+  approvals?: AgentApprovals;
+  /** Tool calls waiting for the person now. Phase 4. */
+  pendingApprovals?: number;
+}
+
+/** An agent's workspace tools (`read`, `write`, `edit`, `bash`); none: no file tools. */
+export type WorkspaceTool = 'read' | 'write' | 'edit' | 'bash';
+
+export interface AgentWorkspace {
+  tools: WorkspaceTool[];
+}
+
+export interface AgentApprovals {
+  /** Tool names or patterns with `*` (at most 100 of 1–200 of [A-Za-z0-9_.*-]). */
+  tools: string[];
+  /** How long a request waits before it is denied: 60 s – 30 days. */
+  timeoutSeconds: number;
+}
+
+export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'timed_out' | 'cancelled';
+
+/** A tool call waiting for (or decided by) the person: `GET /api/approvals`. */
+export interface Approval {
+  /** "ap_…", unique within its agent. */
+  id: string;
+  agentId: string;
+  agentName: string;
+  threadId: string | null;
+  tool: string;
+  /** A redacted, bounded view of the call's arguments. */
+  arguments: unknown;
+  /** Why it asks, when the agent's code says. */
+  summary: string | null;
+  status: ApprovalStatus;
+  /** Unix ms. */
+  requestedAt: number;
+  /** Unix ms. */
+  expiresAt: number;
+  decidedAt: number | null;
+  /** Given with a decision; the model reads it on denial. */
+  reason: string | null;
+}
+
+/** `GET /api/events` `approval` event. */
+export interface ApprovalEvent {
+  agentId: string;
+  approval: Approval;
+}
+
+/** `POST /api/agents/{a}/attachments`: the file as saved in the workspace. */
+export interface Attachment {
+  /** Relative to the workspace: `attachments/<YYYY-MM-DD>/<name>`. */
+  path: string;
+  name: string;
+  size: number;
+  mediaType: string;
 }
 
 /** One agent another may ask, and why: in its `canCall`, or through a team. */
@@ -330,7 +392,7 @@ export type ChatApproval = {
   id: string;
   callId: string;
   tool: string;
-  status: 'pending' | 'approved' | 'denied' | 'timed_out' | 'cancelled';
+  status: ApprovalStatus;
   requestedAt: number;
   expiresAt?: number;
   summary?: string;

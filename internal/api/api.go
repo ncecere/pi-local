@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncecere/pi-local/internal/agents"
+	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/supervisor"
@@ -37,15 +38,16 @@ type Runtimes interface {
 
 // API serves /api.
 type API struct {
-	DB       *sql.DB
-	Agents   *agents.Store
-	Threads  *threads.Index
-	Runtimes Runtimes
-	Hub      *events.Hub
-	Catalog  *models.Catalog
-	Usage    *usage.Store
-	Teams    *teams.Store
-	Manager  Manager
+	DB        *sql.DB
+	Agents    *agents.Store
+	Threads   *threads.Index
+	Runtimes  Runtimes
+	Hub       *events.Hub
+	Catalog   *models.Catalog
+	Usage     *usage.Store
+	Teams     *teams.Store
+	Manager   Manager
+	Approvals *approvals.Store
 	// SaveDialog asks where to save a file (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
 	SaveDialog func(defaultName string) (string, error)
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
@@ -96,6 +98,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /api/events", a.events)
 	a.modelRoutes(m)
 	a.manageRoutes(m)
+	a.toolRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
 	return m
@@ -288,6 +291,9 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"callable":         a.callable(ag.ID),
 		"dir":              ag.Dir,
 		"piDurableVersion": nullIfEmpty(ag.PiDurableVersion),
+		"workspace":        map[string]any{"tools": nonNil(ag.Config.Workspace.Tools)},
+		"approvals":        map[string]any{"tools": nonNil(ag.Config.Approvals.Tools), "timeoutSeconds": ag.Config.Approvals.Timeout()},
+		"pendingApprovals": a.pendingApprovals(ag.ID),
 	}
 }
 
@@ -310,6 +316,13 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+func (a *API) pendingApprovals(id string) int {
+	if a.Approvals == nil {
+		return 0
+	}
+	return a.Approvals.PendingCount(context.Background(), id)
 }
 
 // callable is everyone an agent may ask, with names.
@@ -357,13 +370,15 @@ func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
 }
 
 type agentInput struct {
-	Name         *string         `json:"name"`
-	Description  *string         `json:"description"`
-	TemplateID   *string         `json:"templateId"`
-	ModelID      *string         `json:"modelId"`
-	Instructions *string         `json:"instructions"`
-	KindSettings *map[string]any `json:"kindSettings"`
-	CanCall      *[]string       `json:"canCall"`
+	Name         *string           `json:"name"`
+	Description  *string           `json:"description"`
+	TemplateID   *string           `json:"templateId"`
+	ModelID      *string           `json:"modelId"`
+	Instructions *string           `json:"instructions"`
+	KindSettings *map[string]any   `json:"kindSettings"`
+	CanCall      *[]string         `json:"canCall"`
+	Workspace    *agents.Workspace `json:"workspace"`
+	Approvals    *agents.Approvals `json:"approvals"`
 }
 
 func (in agentInput) apply(c *agents.Config) error {
@@ -387,6 +402,15 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.CanCall != nil {
 		c.CanCall = *in.CanCall
+	}
+	if in.Workspace != nil {
+		c.Workspace = *in.Workspace
+	}
+	if in.Approvals != nil {
+		c.Approvals = *in.Approvals
+		if c.Approvals.TimeoutSeconds == agents.DefaultApprovalTimeout {
+			c.Approvals.TimeoutSeconds = 0 // the default stays implicit in agent.yaml
+		}
 	}
 	if in.ModelID != nil && *in.ModelID != "" {
 		m, good := modelRef(*in.ModelID)

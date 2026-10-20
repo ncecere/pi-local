@@ -142,7 +142,10 @@ export function WorkBlock({
   if (thinking) activity = workActivity({ type: 'reasoning' });
   else if (streaming && layout.last === 'tools' && layout.lastTool) {
     const step = agentToolStep(layout.lastTool);
-    activity = { label: `${step.summary}…`, brief: `Using ${step.label}` };
+    activity =
+      step.state === 'awaiting-approval'
+        ? workActivity({ type: 'tool', step: workStepOf(step) })
+        : { label: `${step.summary}…`, brief: `Using ${step.label}` };
   }
 
   const label = reasoningOnly

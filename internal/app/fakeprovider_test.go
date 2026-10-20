@@ -117,6 +117,26 @@ func (f *fakeProvider) serve(w http.ResponseWriter, r *http.Request) {
 			f.openAIText(w, body.Model, "Got: "+result)
 			return
 		}
+		user := lastUserText(body.Messages)
+		for prefix, tool := range map[string]string{"RUN:": "bash", "READ:": "read", "WRITE:": "write"} {
+			i := strings.Index(user, prefix)
+			if i < 0 {
+				continue
+			}
+			arg := strings.TrimSpace(user[i+len(prefix):])
+			var args []byte
+			switch tool {
+			case "bash":
+				args, _ = json.Marshal(map[string]string{"command": arg})
+			case "read":
+				args, _ = json.Marshal(map[string]string{"path": arg})
+			case "write":
+				path, content, _ := strings.Cut(arg, ":")
+				args, _ = json.Marshal(map[string]string{"path": path, "content": content})
+			}
+			f.openAIToolCall(w, body.Model, tool, string(args))
+			return
+		}
 		if i := strings.Index(lastUserText(body.Messages), "ASK:"); i >= 0 {
 			parts := strings.SplitN(lastUserText(body.Messages)[i+4:], ":", 2)
 			if len(parts) == 2 {

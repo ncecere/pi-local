@@ -182,6 +182,8 @@ func (s *Store) notify(c Change) {
 func copyOf(a *Agent) *Agent {
 	c := *a
 	c.Config.CanCall = append([]string(nil), a.Config.CanCall...)
+	c.Config.Workspace.Tools = append([]string(nil), a.Config.Workspace.Tools...)
+	c.Config.Approvals.Tools = append([]string(nil), a.Config.Approvals.Tools...)
 	if a.LastUsedAt != nil {
 		t := *a.LastUsedAt
 		c.LastUsedAt = &t

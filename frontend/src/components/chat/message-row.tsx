@@ -3,6 +3,7 @@ import { Clock } from 'lucide-react';
 import { memo, useId, useState } from 'react';
 import type { Agent } from '~/api/client';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
+import { ApprovalCard } from '~/components/chat/approval-card';
 import { MARKDOWN_PROSE, Markdown } from '~/components/chat/markdown';
 import { MessageActions } from '~/components/chat/message-actions';
 import {
@@ -17,7 +18,7 @@ import {
 import { ReplyFailureNote } from '~/components/chat/reply-outcome-note';
 import { WorkBlock } from '~/components/chat/reply-work';
 import type { ToolPart } from '~/components/chat/tool-steps';
-import type { ReplyMetadata } from '~/lib/chat-view';
+import { approvalOf, type ReplyMetadata } from '~/lib/chat-view';
 import { messageExcerpt } from '~/lib/message-excerpt';
 import { replyInfo } from '~/lib/reply-meta';
 import { cn } from '~/lib/utils';
@@ -136,13 +137,24 @@ export const MessageRow = memo(function MessageRow({
         </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
-        {streaming && agent && !text && !reasoningOf(message) && !message.parts.some(isToolPart) ? (
+        {streaming &&
+        agent &&
+        !text &&
+        !reasoningOf(message) &&
+        !message.parts.some(isToolPart) &&
+        !(message.metadata as ReplyMetadata | undefined)?.approvals?.length ? (
           // Nothing of the reply yet: say so beside its avatar, instead of a second one below.
           <p role="status" className="flex h-7 items-center text-xs text-[var(--text-muted)]">
             <span className="text-shimmer">Thinking…</span>
           </p>
         ) : (
-          <ReplyBody key={message.id} message={message} text={text} streaming={streaming} />
+          <ReplyBody
+            key={message.id}
+            message={message}
+            text={text}
+            streaming={streaming}
+            agentId={agent?.id}
+          />
         )}
         {interruption && (
           <p role="note" className="mb-1 text-xs text-[var(--text-muted)]">
@@ -185,22 +197,43 @@ function ReplyBody({
   message,
   text,
   streaming,
+  agentId,
 }: {
   message: UIMessage;
   text: string;
   streaming: boolean;
+  /** Whose reply it is: where an approval is sent. */
+  agentId?: string;
 }) {
   const layout = replyLayoutOf(
     message.parts as ToolPart[],
     isToolPart,
-    () => 'work',
+    // A call waiting for approval is a step of the work, and its card stays in sight below it.
+    (part) => (waitsForApproval(part) ? 'both' : 'work'),
     (part) => `tool-${part.toolCallId}`,
   );
+  const orphans = (message.metadata as ReplyMetadata | undefined)?.approvals ?? [];
   return (
     <>
       {layout.work.length > 0 && (
         <WorkBlock messageId={message.id} layout={layout} streaming={streaming} />
       )}
+      {agentId &&
+        layout.results.map((part) => {
+          const approval = approvalOf(part);
+          return approval ? (
+            <ApprovalCard
+              key={`approval-${approval.id}`}
+              agentId={agentId}
+              approval={approval}
+              args={part.input}
+            />
+          ) : null;
+        })}
+      {agentId &&
+        orphans.map((approval) => (
+          <ApprovalCard key={`approval-${approval.id}`} agentId={agentId} approval={approval} />
+        ))}
       {layout.text.map((group, index) => (
         <div
           key={group.key}
@@ -216,6 +249,9 @@ function ReplyBody({
     </>
   );
 }
+
+const waitsForApproval = (part: ToolPart) =>
+  part.state === 'approval-requested' && approvalOf(part)?.status === 'pending';
 
 /** A message longer than this many lines, or characters, is folded until asked. */
 const FOLD_LINES = 12;

@@ -5,6 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Agent, Team } from '~/api/client';
 import { AgentAvatar, agentStatusLabel } from '~/components/agent/agent-avatar';
 import { AgentPicker } from '~/components/agent/agent-picker';
+import {
+  AttachButton,
+  AttachmentTray,
+  DropOverlay,
+  useFileDrop,
+} from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
 import { writeHandover } from '~/hooks/use-agent-thread';
 import {
@@ -14,6 +20,7 @@ import {
   useAgents,
   useAgentThreads,
 } from '~/hooks/use-agents';
+import { useAttachments } from '~/hooks/use-attachments';
 import { useCurrentUser } from '~/hooks/use-session';
 import { useTeams } from '~/hooks/use-teams';
 import { agentKindLabel } from '~/lib/agent-groups';
@@ -91,6 +98,9 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   const talkingTo = team ? team.name : agent?.name;
 
   const [draft, setDraft] = useState('');
+  // Files for the first message, saved in the chosen agent's workspace.
+  const attachments = useAttachments(agent);
+  const drop = useFileDrop(attachments.add, attachments.enabled);
   const started = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   useEffect(() => focusComposerOnArrival(), []);
@@ -131,7 +141,11 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   const loading = agentsQuery.isPending;
 
   return (
-    <div className="flex h-full flex-col justify-center md:justify-normal">
+    <div
+      className="relative flex h-full flex-col justify-center md:justify-normal"
+      {...drop.handlers}
+    >
+      <DropOverlay show={drop.dragging} agentName={agent?.name} />
       <div className="flex-none px-4 pb-8 md:flex-1 md:overflow-y-auto md:pt-[11vh] md:pb-0">
         <div className="mx-auto w-full max-w-[41.75rem]">
           <h1 className="flex flex-col items-center gap-3 text-center text-[1.375rem] font-bold leading-tight tracking-tight md:flex-row md:text-left md:text-[1.875rem]">
@@ -263,8 +277,15 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
       <Composer
         value={draft}
         onChange={setDraft}
-        onSubmit={() => void start(draft)}
+        onSubmit={() => {
+          if (!attachments.busy) void start(attachments.compose(draft));
+        }}
         submitting={submitting}
+        tray={<AttachmentTray attachments={attachments} agent={agent} />}
+        attach={<AttachButton onFiles={attachments.add} disabled={!agent} />}
+        onPasteFiles={agent ? attachments.add : undefined}
+        hasExtra={attachments.ready.length > 0}
+        holdSend={attachments.busy ? 'Sending waits until the files are uploaded.' : null}
         disabled={!agent}
         placeholder={
           agent

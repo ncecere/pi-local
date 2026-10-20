@@ -223,6 +223,68 @@ thread. Live events: `event: team`, `data: {teamId, deleted, team?}`.
 In a conversation, an `ask_agent` tool call's `details` (ChatMessage tool results / ChatTool) are
 `{agentId, agentName, threadId}`, so the UI can link to the asked agent's conversation.
 
+## Workspace tools, approvals and attachments (Phase 4)
+
+Each agent has a **workspace** folder (`<agent>/workspace`). Its file tools (`read`, `write`, `edit`) can't reach
+outside it; `bash` runs in it with a minimal environment, but a shell can reach anything you can, so it asks first by
+default. **Approvals** make an agent ask before chosen tools run: the call waits (also while the agent sleeps, and
+across restarts of the app) until you approve or deny it, or it times out (denied).
+
+`Agent` gains:
+
+```ts
+  workspace: { tools: ("read" | "write" | "edit" | "bash")[] };   // none: no file tools
+  approvals: { tools: string[]; timeoutSeconds: number };          // tool names or patterns with *; 60 s – 30 days
+  pendingApprovals: number;                                        // waiting for you now
+```
+
+`PATCH /api/agents/{id}` takes `workspace?` and `approvals?` (the same shapes). Errors: `invalid_workspace_tools`,
+`invalid_approval_tools` (at most 100 patterns of 1–200 of `[A-Za-z0-9_.*-]`), `invalid_approval_timeout`.
+
+The UI offers three presets for an agent with tools (it may also edit the list):
+- **Ask first**: approvals `["bash", "write", "edit"]` (the default when tools are turned on)
+- **Ask for commands**: approvals `["bash"]`
+- **Don't ask**: no approvals for its workspace tools (show a warning: the agent can then change files and run
+  commands on its own)
+
+```ts
+type Approval = {
+  id: string;                 // "ap_…", unique within its agent
+  agentId: string; agentName: string;
+  threadId: string | null;
+  tool: string;
+  arguments: unknown;         // a redacted, bounded view of the call's arguments
+  summary: string | null;     // why it asks, when the agent's code says
+  status: "pending" | "approved" | "denied" | "timed_out" | "cancelled";
+  requestedAt: number;        // Unix ms
+  expiresAt: number;
+  decidedAt: number | null;
+  reason: string | null;      // given with a decision; the model reads it on denial
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/approvals?status=pending\|all` | `Approval[]` across agents, newest first (default pending; `all`: the last 200). |
+| `GET /api/agents/{a}/approvals?thread=` | One agent's, pending first. |
+| `POST /api/agents/{a}/approvals/{id}` | Body `{decision: "approve" \| "deny", reason?}` (reason ≤ 1000 chars). Answers `Approval`. `409 approval_decided` when it no longer waits. The decision reaches the agent at once (waking it). |
+
+Live events: `event: approval`, `data: {agentId, approval: Approval}` whenever one is asked or changes. In a
+thread's view, `ChatView.approvals` lists its pending requests and a tool call carries `approval` (runtime view.ts).
+
+### Attachments
+
+| Route | Answer |
+|---|---|
+| `POST /api/agents/{a}/attachments?name=<file name>` | Body: the file's bytes (any Content-Type; at most 100 MiB; send an ArrayBuffer, never a Blob). Saved in the workspace under `attachments/<YYYY-MM-DD>/<name>` (a ` (2)` suffix when the name is taken). `201 {path, name, size, mediaType}` (`path` relative to the workspace). `409 no_read_tool` when the agent doesn't have the `read` tool (it couldn't open it). |
+
+The composer sends the message with a line per file after the text:
+
+```
+Attached files (in your workspace):
+- attachments/2026-10-20/report.pdf (120 KB)
+```
+
 ## Not yet (later phases)
 
-Message search (Phase 7), approvals (Phase 4), the delta stream in the UI (Phase 6), 
+Message search (Phase 7), the delta stream in the UI (Phase 6), 

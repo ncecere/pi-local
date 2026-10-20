@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -59,7 +61,38 @@ type Config struct {
 	Instructions string         `yaml:"instructions,omitempty"`
 	// CanCall lists the agents (by ID) this agent may ask with ask_agent, besides what its teams allow.
 	CanCall []string `yaml:"canCall,omitempty"`
+	// Workspace: the file and shell tools the agent has, working in its workspace folder.
+	Workspace Workspace `yaml:"workspace,omitempty"`
+	// Approvals: the tools that wait for a person's approval before they run.
+	Approvals Approvals `yaml:"approvals,omitempty"`
 }
+
+// Workspace is an agent's workspace tools.
+type Workspace struct {
+	Tools []string `yaml:"tools,omitempty" json:"tools"`
+}
+
+// Approvals says which tools ask first (names, or patterns with *) and how long a request waits.
+type Approvals struct {
+	Tools          []string `yaml:"tools,omitempty" json:"tools"`
+	TimeoutSeconds int      `yaml:"timeoutSeconds,omitempty" json:"timeoutSeconds"`
+}
+
+// WorkspaceTools are the tools an agent's workspace may give it.
+var WorkspaceTools = []string{"read", "write", "edit", "bash"}
+
+// DefaultApprovalTimeout is how long a request waits when an agent doesn't say (24 hours).
+const DefaultApprovalTimeout = 24 * 60 * 60
+
+// Timeout is the request's wait in seconds, the default filled in.
+func (a Approvals) Timeout() int {
+	if a.TimeoutSeconds == 0 {
+		return DefaultApprovalTimeout
+	}
+	return a.TimeoutSeconds
+}
+
+var approvalPattern = regexp.MustCompile(`^[A-Za-z0-9_.*-]{1,200}$`)
 
 // Limits on what a config may hold.
 const (
@@ -117,6 +150,29 @@ func (c *Config) Validate() error {
 		if err != nil || len(raw) > MaxKindSettingsBytes {
 			return invalid("invalid_kind_settings", "Kind settings must be a JSON object of at most %d bytes.", MaxKindSettingsBytes)
 		}
+	}
+	seen := map[string]bool{}
+	var tools []string
+	for _, t := range c.Workspace.Tools {
+		if !slices.Contains(WorkspaceTools, t) {
+			return invalid("invalid_workspace_tools", "Unknown workspace tool %q: use read, write, edit or bash.", t)
+		}
+		if !seen[t] {
+			seen[t] = true
+			tools = append(tools, t)
+		}
+	}
+	c.Workspace.Tools = tools
+	if len(c.Approvals.Tools) > 100 {
+		return invalid("invalid_approval_tools", "At most 100 tools or patterns ask first.")
+	}
+	for _, t := range c.Approvals.Tools {
+		if !approvalPattern.MatchString(t) {
+			return invalid("invalid_approval_tools", "%q isn't a tool name or pattern (letters, digits, _ . - and *).", t)
+		}
+	}
+	if t := c.Approvals.TimeoutSeconds; t != 0 && (t < 60 || t > 30*24*60*60) {
+		return invalid("invalid_approval_timeout", "A request waits from 1 minute to 30 days.")
 	}
 	if c.Model.Provider == "" || c.Model.ID == "" || strings.ContainsAny(c.Model.Provider, "/ ") {
 		return invalid("invalid_model", "Choose one of the models offered.")

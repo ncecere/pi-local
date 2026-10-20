@@ -153,6 +153,16 @@
   }
 }
 
+/* An attachment uploading: a bar sliding across its chip (the upload reports no progress). */
+@keyframes attach-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
 /* A label for work in progress ("Thinking…", "Using bash…"): a soft light passes over it. */
 .text-shimmer {
   background:

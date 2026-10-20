@@ -15,14 +15,17 @@ import {
   type LucideIcon,
   MessagesSquare,
   Search,
+  ShieldAlert,
   SquareTerminal,
   Users,
   Wrench,
 } from 'lucide-react';
 import { useId, useState } from 'react';
+import { ApprovalOutcome } from '~/components/chat/approval-card';
 import { useAgents } from '~/hooks/use-agents';
 import { type AskStep, askStepOf, askSummary, type ListAgentsStep } from '~/lib/agent-asks';
-import { toolOutputText } from '~/lib/chat-view';
+import { approvalOutcome } from '~/lib/approvals';
+import { approvalOf, toolOutputText } from '~/lib/chat-view';
 import { formatDuration } from '~/lib/reply-meta';
 import { cn } from '~/lib/utils';
 import { isToolPart, summarizeToolPart, type ToolStepSummary } from '~/shared';
@@ -200,9 +203,20 @@ function ToolInputs({ input }: { input: unknown }) {
 function ToolOutput({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
   const [all, setAll] = useState(false);
   const raw = toolOutputText(part);
+  const approval = approvalOf(part);
+  if (step.state === 'awaiting-approval')
+    return <p className="text-[var(--text-muted)]">Not run yet: it waits for your approval.</p>;
   if (step.state === 'denied')
     return (
-      <p className="text-[var(--text-muted)]">Not run{step.reason ? `: ${step.reason}` : ''}.</p>
+      <p className="text-[var(--text-muted)]">
+        Not run
+        {approval && approval.status !== 'denied'
+          ? ` (${approvalOutcome(approval).toLowerCase()})`
+          : step.reason
+            ? `: ${step.reason}`
+            : ''}
+        .
+      </p>
     );
   if (raw === null || raw === '')
     return (
@@ -254,6 +268,8 @@ const hintOf = (part: ToolPart) => inputHint(part.input);
 
 /** The icon at the start of a step's row: the tool's own, or a spinner while it runs. */
 function StepIcon({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
+  if (step.state === 'awaiting-approval')
+    return <ShieldAlert className="size-4 shrink-0 text-[var(--warning)]" aria-hidden="true" />;
   if (step.state === 'running')
     return (
       <LoaderCircle
@@ -408,7 +424,8 @@ function AskDetails({ ask, step }: { ask: AskStep; step: ToolStepSummary }) {
 /** One line for a step: icon, tool, what it acted on, and how it went. */
 function StepLine({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
   const ask = useAskStep(part);
-  if (ask) return <AskLine part={part} step={step} ask={ask} />;
+  const approval = approvalOf(part);
+  if (ask && !approval) return <AskLine part={part} step={step} ask={ask} />;
   const hint = hintOf(part);
   const took = toolDuration(part);
   return (
@@ -428,7 +445,11 @@ function StepLine({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
           {formatDuration(took)}
         </span>
       )}
-      {step.state === 'denied' && <span className="shrink-0">not run</span>}
+      {approval ? (
+        <ApprovalOutcome approval={approval} className="shrink-0 max-w-[50%]" />
+      ) : (
+        step.state === 'denied' && <span className="shrink-0">not run</span>
+      )}
     </>
   );
 }
@@ -456,6 +477,15 @@ export function ToolStepRow({ part, step }: { part: ToolPart; step: ToolStepSumm
   const output = toolOutputText(part);
   const hasInputs = isRecord(part.input) ? Object.keys(part.input).length > 0 : part.input != null;
   const ask = useAskStep(part);
+  const approval = approvalOf(part);
+  // How its request ended, when the summary doesn't already say it.
+  const outcome =
+    approval &&
+    (approval.status === 'approved' ||
+      approval.status === 'timed_out' ||
+      approval.status === 'cancelled')
+      ? `, ${approvalOutcome(approval).toLowerCase()}`
+      : '';
   return (
     <div className="min-w-0">
       <button
@@ -463,9 +493,9 @@ export function ToolStepRow({ part, step }: { part: ToolPart; step: ToolStepSumm
         aria-expanded={open}
         aria-controls={detailsId}
         aria-label={
-          ask && step.state !== 'denied' && step.state !== 'awaiting-approval'
+          (ask && step.state !== 'denied' && step.state !== 'awaiting-approval'
             ? askSummary(ask, step.state)
-            : step.summary
+            : step.summary) + outcome
         }
         onClick={() => setOpen(!open)}
         className="flex w-full min-w-0 items-center gap-2 text-left text-[0.8125rem] text-[var(--text-muted)] transition-colors hover:text-[var(--text-secondary)]"

@@ -22,7 +22,7 @@ export function DocumentBranding({ router }: { router: AnyRouter }) {
   const { data } = useAuthConfig();
   const pathname = useRouterState({ router, select: (state) => state.location.pathname });
   const override = usePageTitleOverride();
-  // "(2) …": conversations with a reply or a failure that have not been seen.
+  // "(2) …": conversations with a reply or a failure not seen yet, or a tool call waiting for approval.
   const attention = useAttentionCount();
   const appName = data?.instance.name;
   const icon = brandIconHref(data?.instance.logoUrl);

@@ -1,5 +1,6 @@
 import { ArrowUp, Square } from 'lucide-react';
 import {
+  type ClipboardEvent,
   type KeyboardEvent,
   memo,
   type ReactNode,
@@ -10,6 +11,7 @@ import {
 } from 'react';
 import { FILLED_FOCUS_RING, FOCUS_RING } from '~/components/ui/focus-ring';
 import { AGENT_MESSAGE_MAX_LENGTH } from '~/hooks/use-agent-thread';
+import { filesOf } from '~/lib/attachments';
 import { isSendKey, sendKeyShortcuts } from '~/lib/send-keys';
 import { cn } from '~/lib/utils';
 import { useInvertSend } from '~/providers/theme-provider';
@@ -32,6 +34,16 @@ interface ComposerProps {
   placeholder?: string;
   /** Left of the send button: the agent picker. */
   options?: ReactNode;
+  /** Above the message field: attached files (AttachmentTray). */
+  tray?: ReactNode;
+  /** Before the options: the attach button. */
+  attach?: ReactNode;
+  /** Files pasted into the message field. */
+  onPasteFiles?: (files: File[]) => void;
+  /** Something besides text will be sent (attached files): an empty message may go. */
+  hasExtra?: boolean;
+  /** Sending waits for this (files still uploading); said under the field. */
+  holdSend?: string | null;
 }
 
 /**
@@ -50,6 +62,11 @@ export const Composer = memo(function Composer({
   placeholder = 'Message the agent…',
   autoFocus = false,
   options,
+  tray,
+  attach,
+  onPasteFiles,
+  hasExtra = false,
+  holdSend = null,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Enter adds a line and Cmd/Ctrl+Enter sends, when chosen in Appearance.
@@ -73,7 +90,16 @@ export const Composer = memo(function Composer({
   const tooLong = length > AGENT_MESSAGE_MAX_LENGTH;
   const lengthNoteId = useId();
   const queueNoteId = useId();
-  const canSubmit = length > 0 && !tooLong && !submitting && !disabled;
+  const holdNoteId = useId();
+  const canSubmit = (length > 0 || hasExtra) && !tooLong && !submitting && !disabled && !holdSend;
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (!onPasteFiles) return;
+    const files = filesOf(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    onPasteFiles(files);
+  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (isSendKey(event, { invert: invertSend })) {
@@ -86,19 +112,21 @@ export const Composer = memo(function Composer({
   return (
     <div className="mx-auto w-full max-w-[47rem] px-6 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-3 md:pb-0">
       <div className="rounded-[1.25rem] border border-[var(--border-strong)] bg-[var(--bg-control)] px-4 pb-4 pt-5 focus-within:outline focus-within:outline-1 focus-within:-outline-offset-1 focus-within:outline-[var(--accent-bright)] md:rounded-b-none md:border-b-0">
+        {tray}
         <textarea
           ref={textareaRef}
           rows={1}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={placeholder}
           disabled={disabled}
           aria-label="Message input"
           dir="auto"
           aria-invalid={tooLong || undefined}
           aria-describedby={
-            [tooLong && lengthNoteId, working && length > 0 && queueNoteId]
+            [tooLong && lengthNoteId, working && length > 0 && queueNoteId, holdSend && holdNoteId]
               .filter(Boolean)
               .join(' ') || undefined
           }
@@ -114,6 +142,11 @@ export const Composer = memo(function Composer({
             {AGENT_MESSAGE_MAX_LENGTH.toLocaleString('en-US')} characters.
           </p>
         )}
+        {holdSend && (
+          <p id={holdNoteId} className="mt-2 text-xs text-[var(--text-muted)]">
+            {holdSend}
+          </p>
+        )}
         {working && length > 0 && !tooLong && (
           <p id={queueNoteId} className="mt-2 text-xs text-[var(--text-muted)]">
             The agent is working. Your message will run after the current reply.
@@ -121,7 +154,10 @@ export const Composer = memo(function Composer({
         )}
 
         <div className="mt-5 flex items-center gap-2">
-          <div className="flex min-w-0 flex-1 items-center gap-2">{options}</div>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {attach}
+            {options}
+          </div>
 
           {working && onStop && (
             <button
@@ -142,7 +178,7 @@ export const Composer = memo(function Composer({
               <Square className="size-3.5 fill-current" />
             </button>
           )}
-          {(!working || length > 0) && (
+          {(!working || length > 0 || hasExtra) && (
             <button
               type="button"
               disabled={!canSubmit}

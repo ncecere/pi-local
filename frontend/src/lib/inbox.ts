@@ -39,10 +39,14 @@ export interface ThreadMeta {
   _at?: number;
 }
 
-export type Bucket = 'pinned' | 'working' | 'inbox' | 'snoozed' | 'done' | 'archived';
+/** `approval`: a tool call waits for the person (the "Needs you" section, above everything else). */
+export type Bucket = 'approval' | 'pinned' | 'working' | 'inbox' | 'snoozed' | 'done' | 'archived';
 
-/** What a row says it needs, most pressing first. */
-export type RowStatus = 'working' | 'failed' | 'unread' | 'woke' | null;
+/**
+ * What a row says it needs, most pressing first. `approval`: the agent is
+ * waiting for the person to approve a tool call; it is not working.
+ */
+export type RowStatus = 'approval' | 'working' | 'failed' | 'unread' | 'woke' | null;
 
 /** How long a conversation may be believed to be working with no word from it. */
 export const STALE_WORKING_MS = 2 * 60 * 60 * 1000;
@@ -140,8 +144,19 @@ export function isSettled(meta: ThreadMeta, thread: ThreadFacts, now: number): b
   );
 }
 
-/** Which section a conversation is in. Archived and snoozed come first: they hide it whatever else is true. */
-export function bucketOf(meta: ThreadMeta, thread: ThreadFacts, now: number): Bucket {
+/**
+ * Which section a conversation is in. A conversation waiting for the person's
+ * approval is in "Needs you" whatever else is true: the agent can't go on
+ * without them, and hiding it (snoozed, archived) would leave it stuck. Then
+ * archived and snoozed: they hide it whatever else is true.
+ */
+export function bucketOf(
+  meta: ThreadMeta,
+  thread: ThreadFacts,
+  now: number,
+  pendingApprovals = 0,
+): Bucket {
+  if (pendingApprovals > 0) return 'approval';
   if (meta.archivedAt !== undefined) return 'archived';
   if (isSnoozed(meta, now)) return 'snoozed';
   if (isSettled(meta, thread, now)) return 'done';
@@ -150,7 +165,9 @@ export function bucketOf(meta: ThreadMeta, thread: ThreadFacts, now: number): Bu
   return 'inbox';
 }
 
-export function statusOf(meta: ThreadMeta, now: number): RowStatus {
+/** A conversation with requests waiting is "Needs approval", not "Working": it waits for the person. */
+export function statusOf(meta: ThreadMeta, now: number, pendingApprovals = 0): RowStatus {
+  if (pendingApprovals > 0) return 'approval';
   if (isWorking(meta, now)) return 'working';
   const visited = meta.visitedAt ?? 0;
   if ((meta.failedAt ?? 0) > visited) return 'failed';
@@ -166,6 +183,7 @@ export function needsAttention(meta: ThreadMeta, now: number): boolean {
 }
 
 export const STATUS_LABEL: Record<NonNullable<RowStatus>, string> = {
+  approval: 'Needs approval',
   working: 'Working',
   failed: 'Failed',
   unread: 'Done',
@@ -224,6 +242,8 @@ export interface InboxEntry {
   updatedAt: number;
   /** Another agent asked in this conversation (agents asking agents). */
   calledBy?: { agentId: string; name: string; threadId: string } | null;
+  /** Tool calls in it waiting for the person's approval. */
+  pendingApprovals?: number;
   meta: ThreadMeta;
   bucket: Bucket;
   status: RowStatus;
@@ -266,6 +286,7 @@ export function nextWake(metas: Iterable<ThreadMeta>, now: number): number | nul
 }
 
 export interface Sections {
+  approval: InboxEntry[];
   pinned: InboxEntry[];
   working: InboxEntry[];
   inbox: InboxEntry[];
@@ -276,8 +297,17 @@ export interface Sections {
 
 /** Sorts entries into the sidebar's sections. */
 export function sectionsOf(entries: InboxEntry[], now: number): Sections {
-  const out: Sections = { pinned: [], working: [], inbox: [], snoozed: [], done: [], archived: [] };
+  const out: Sections = {
+    approval: [],
+    pinned: [],
+    working: [],
+    inbox: [],
+    snoozed: [],
+    done: [],
+    archived: [],
+  };
   for (const entry of entries) out[entry.bucket].push(entry);
+  out.approval.sort((a, b) => compareInbox(a, b, now));
   out.pinned.sort(comparePinned);
   out.working.sort((a, b) => compareInbox(a, b, now));
   out.inbox.sort((a, b) => compareInbox(a, b, now));
