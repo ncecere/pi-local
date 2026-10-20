@@ -289,11 +289,31 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
   - The UI still uses whole-view streams (Phase 6).
   - One runtime approvals test is load-sensitive (a 5 s timeout) and can fail when the machine is busy.
 
-### Phase 2: Models
+### Phase 2: Models ✅ done 2026-10-20
 - Providers (OpenAI, Anthropic, OpenAI-compatible/Ollama/LiteLLM), keychain keys, discovery, per-agent model.
 - Allow the model to be chosen per agent. Later, per thread: register several models in `createAgentModels`.
 - Relax `MODEL_API_KEY` for keyless Ollama.
 - Usage via `countingUsage` → gateway `/usage` → `app.db`, shown as a Settings → Usage page with prices.
+- **Done:**
+  - `internal/models` (catalog, presets, discovery, runtime env), `internal/secrets` (OS keychain), `internal/usage`
+  - the Models and Usage pages, and a model picker per agent
+  - keyless servers get a placeholder key (no runtime change)
+  - the supervisor restarts an agent whenever its resolved environment changes (a fingerprint), so a rotated key or
+    an edited model takes effect at once
+  - a removed or disabled model stops its agents with a reason, until they get another
+- **Tested:**
+  - end to end against fake OpenAI chat-completions and Anthropic Messages servers (the real streamed wire formats):
+    the key reaches the provider and never lands in `app.db` or the agent's folder; extra headers; discovery; usage
+    and cost; key rotation; in-use protection; discovery error messages
+  - checked by hand in the real UI: add a provider, find models, set the default, make an agent, chat, usage
+  - the real macOS keychain (set/get/delete) checked once
+- **Found and fixed:**
+  - `app.db` has one connection, so a query nested inside an open row loop deadlocks. `usage.Report` did this.
+    Rule: read the rows, close them, then query.
+  - The agent store and the catalog called each other under a lock. Changes are now serialized outside the read lock.
+- **Dev:** `pi-local-server -secrets memory` keeps keys out of the real keychain (`make run-server` uses it).
+- **Carried forward:** a model per thread (chat-level picker) instead of per agent; prices for known models
+  (manual for now).
 
 ### Phase 3: Agent manager
 - Create (from starter templates), edit `agent.yaml` in a form, raw YAML view, duplicate, delete, import/export folder.

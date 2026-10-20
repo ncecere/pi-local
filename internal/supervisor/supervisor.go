@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -141,11 +143,14 @@ type proc struct {
 	token    string
 	key      string
 	revision int
-	started  time.Time
-	done     chan struct{}
-	exitCode int
-	stopping bool // guarded by Supervisor.mu: an intended stop
-	log      *logFile
+	// fingerprint is a hash of the environment the runtime was started with: any difference (a new key, another
+	// model, a changed instruction) means the agent restarts on its next wake.
+	fingerprint string
+	started     time.Time
+	done        chan struct{}
+	exitCode    int
+	stopping    bool // guarded by Supervisor.mu: an intended stop
+	log         *logFile
 }
 
 func (p *proc) alive() bool {
@@ -222,6 +227,23 @@ func (s *Supervisor) Status(id string) (Status, string) {
 	return st.status, st.lastError
 }
 
+// fingerprint hashes an agent's resolved environment (in memory only: it covers secrets).
+func fingerprint(env map[string]string) string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+		h.Write([]byte(env[k]))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func randomHex(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -250,13 +272,18 @@ func (s *Supervisor) wake(ctx context.Context, id string) (*proc, error) {
 	}
 	spec, err := s.opts.Resolve(ctx, id)
 	if err != nil {
+		// An agent that can't run as configured (its model was removed): that is its status until it changes.
+		var se *StartError
+		if errors.As(err, &se) {
+			s.setStatus(id, st, Failed, se.Message)
+		}
 		return nil, err
 	}
 	if current != nil && current.alive() {
-		if current.revision == spec.Revision {
+		if current.fingerprint == fingerprint(spec.Env) {
 			return current, nil
 		}
-		slog.Info("agent configuration changed; restarting its runtime", "agent", id, "from", current.revision, "to", spec.Revision)
+		slog.Info("agent configuration changed; restarting its runtime", "agent", id, "revision", spec.Revision)
 		s.stopProc(st, current)
 	}
 	if s.opts.Refuse != nil {
@@ -306,7 +333,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 	if err != nil {
 		return nil, err
 	}
-	p := &proc{agentID: id, token: randomHex(24), revision: spec.Revision, started: time.Now(), done: make(chan struct{}), log: logs}
+	p := &proc{agentID: id, token: randomHex(24), revision: spec.Revision, fingerprint: fingerprint(spec.Env), started: time.Now(), done: make(chan struct{}), log: logs}
 	p.key = "pl." + id + "." + randomHex(24)
 
 	env := map[string]string{}
@@ -324,6 +351,9 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 	if s.opts.GatewayURL != "" {
 		env["PLATFORM_GATEWAY_URL"] = s.opts.GatewayURL
 		env["PLATFORM_KEY"] = p.key
+		if env["MODEL_USAGE_URL"] != "" {
+			env["MODEL_USAGE_KEY"] = p.key
+		}
 	}
 	args := append(append([]string{}, s.opts.Runtime.Args...), s.opts.Runtime.Script)
 	cmd := exec.Command(s.opts.Runtime.Node, args...)

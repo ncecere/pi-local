@@ -90,7 +90,73 @@ type AgentThread = {
 - `event: resync`, `data: {}` when events may have been missed; the lists should be read again
 - `: keep-alive` every 15 s
 
+## Models and providers (Phase 2)
+
+A **provider** is an account at a model service: OpenAI, Anthropic, or anything speaking one of their APIs (Ollama,
+LM Studio, LiteLLM, OpenRouter, vLLM …). Its key and header values live in the OS keychain; the API never returns them.
+A **model** is one of a provider's models that agents may use. Its ID is `"<provider>/<modelId>"`, split at the first
+`/` (`openrouter/anthropic/claude-sonnet-4` is model `anthropic/claude-sonnet-4` of provider `openrouter`). The demo
+model `demo/demo-1` always exists and needs nothing.
+
+```ts
+type ProviderKind = { id: "openai" | "anthropic" | "openai-compatible" | "openai-responses" | "anthropic-compatible";
+  name: string; api: string; defaultBaseUrl: string | null };
+type ProviderPreset = { id: string; name: string; kind: string; baseUrl: string; needsKey: boolean; note: string };
+type Provider = {
+  id: string;                  // slug: 1–32 of [a-z0-9-], unique; what agent.yaml names
+  name: string;                // 1–60 chars
+  kind: ProviderKind["id"];
+  baseUrl: string;             // http(s); http only for loopback/LAN servers
+  hasKey: boolean;             // a key is stored
+  headerNames: string[];       // extra request headers (their values are secret)
+  enabled: boolean;
+  models: Model[];             // the models agents may use, by name
+  createdAt: string; updatedAt: string;
+};
+type Model = {
+  id: string;                  // "<provider>/<modelId>"
+  provider: string; modelId: string;
+  name: string;                // 1–100 chars
+  contextWindow: number;       // tokens, default 128000
+  maxTokens: number;           // output tokens, default 16000
+  reasoning: boolean; images: boolean;
+  inputPrice: number | null;   // USD per million tokens; null: unpriced
+  outputPrice: number | null;
+  enabled: boolean;
+  usedBy: number;              // agents on this model
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/providers` | `{kinds: ProviderKind[], presets: ProviderPreset[], providers: Provider[], defaultModelId}` |
+| `POST /api/providers` | Body `{id?, name, kind, baseUrl?, apiKey?, headers?: Record<string,string>}` (`id` defaults to a slug of the name; `baseUrl` to the kind's default). `201 Provider`. Errors: `invalid_id`, `id_taken`, `invalid_name`, `invalid_kind`, `invalid_base_url`, `invalid_headers`. |
+| `PATCH /api/providers/{p}` | Body `{name?, baseUrl?, apiKey?, headers?, enabled?}`. `apiKey: ""` removes the key; `headers` replaces them all. Answers `Provider`. Agents using it restart on the change. |
+| `DELETE /api/providers/{p}` | `{ok: true}`. `409 in_use` with `details.agents: [{id, name}]` while agents use one of its models. |
+| `POST /api/providers/{p}/discover` | Lists the provider's models from its API: `{models: [{modelId, name, contextWindow: number \| null, added: boolean}]}`. `502 discovery_failed` with a message for people. |
+| `PUT /api/providers/{p}/models/{modelId...}` | Adds or changes a model. Body `{name?, contextWindow?, maxTokens?, reasoning?, images?, inputPrice?, outputPrice?, enabled?}`. Answers `Model`. |
+| `DELETE /api/providers/{p}/models/{modelId...}` | `{ok: true}`, or `409 in_use` as above. |
+| `PUT /api/settings/default-model` | Body `{modelId}`: the model new agents get. Answers `{defaultModelId}`. |
+
+`GET /api/agents/catalog` lists every enabled model of every enabled provider (and the demo model), as
+`{id, name, provider, providerName}`, with `defaultModelId`. An agent whose model was removed or turned off keeps it in
+`agent.yaml`; it fails to start (`status: "error"`, `lastError` says which model) until it is given another.
+
+### Usage
+
+`GET /api/me/usage?days=7|30|90` (default 30):
+
+```ts
+type UsageTotals = { requests: number; inputTokens: number; outputTokens: number; cacheReadTokens: number;
+  cacheWriteTokens: number; costUsd: number; unpricedRequests: number };   // unpricedRequests: not in costUsd
+type UsageReport = { from: string; to: string; days: number;               // dates, YYYY-MM-DD, local time
+  total: UsageTotals;
+  agents: (UsageTotals & { agentId: string; name: string })[];             // deleted agents keep their last name
+  models: (UsageTotals & { modelId: string; name: string })[];
+  byDay: (UsageTotals & { day: string })[] };                              // every day of the range, zeros included
+```
+
 ## Not yet (later phases)
 
 Message search (Phase 7), approvals (Phase 4), the delta stream in the UI (Phase 6), wake/hibernate controls and the
-data folder's location for an About page (Phase 3), models and providers (Phase 2).
+data folder's location for an About page (Phase 3).

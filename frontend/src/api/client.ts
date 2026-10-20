@@ -9,15 +9,26 @@ export { ApiError, apiErrorFrom } from './errors';
 export type {
   Agent,
   AgentEvent,
+  AgentRef,
   AgentStatus,
   AgentThread,
   AgentThreadEvent,
+  CatalogModel,
   ChatAssistantMessage,
   ChatMessage,
   ChatMessage as ChatViewMessage,
   ChatToolMessage,
   ChatUserMessage,
   ChatView,
+  DiscoveredModel,
+  Model,
+  Provider,
+  ProviderKind,
+  ProviderKindId,
+  ProviderPreset,
+  ProvidersResponse,
+  UsageReport,
+  UsageTotals,
 } from './types';
 
 export type Role = 'admin' | 'user';

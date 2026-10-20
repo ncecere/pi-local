@@ -107,6 +107,14 @@ const settingsChildren = [
     lazyRouteComponent(() => import('~/routes/settings/agents'), 'SettingsAgentsPage'),
   ),
   settingsPage(
+    '/settings/models',
+    lazyRouteComponent(() => import('~/routes/settings/models'), 'SettingsModelsPage'),
+  ),
+  settingsPage(
+    '/settings/usage',
+    lazyRouteComponent(() => import('~/routes/settings/usage'), 'SettingsUsagePage'),
+  ),
+  settingsPage(
     '/settings/conversations',
     lazyRouteComponent(
       () => import('~/routes/settings/conversations'),

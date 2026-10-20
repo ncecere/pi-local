@@ -25,8 +25,8 @@ app: ## The desktop app: bin/pi-local
 server: ## The headless server: bin/pi-local-server
 	go build -o bin/pi-local-server ./cmd/pi-local-server
 
-run-server: server ## Headless on http://127.0.0.1:5190 with a scratch data dir (runtime from source)
-	bin/pi-local-server -dev -data $${PI_LOCAL_DATA:-/tmp/pi-local-dev}
+run-server: server ## Headless on http://127.0.0.1:5190: scratch data dir, runtime from source, keys in memory
+	bin/pi-local-server -dev -secrets memory -data $${PI_LOCAL_DATA:-/tmp/pi-local-dev}
 
 dev-web: ## The UI with hot reload on :5191, proxying /api to run-server
 	cd frontend && pnpm dev

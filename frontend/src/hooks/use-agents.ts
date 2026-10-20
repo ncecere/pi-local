@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { type Agent, type AgentThread, agentPath, api, threadPath } from '~/api/client';
+import {
+  type Agent,
+  type AgentThread,
+  agentPath,
+  api,
+  type CatalogModel,
+  threadPath,
+} from '~/api/client';
 
 export const AGENTS_KEY = ['agents'] as const;
 export const threadsKey = (agentId: string) => ['agents', agentId, 'threads'] as const;
@@ -148,7 +155,8 @@ export function newThreadId(): string {
 
 export interface AgentCatalog {
   templates: { id: string; name: string; description: string }[];
-  models: { id: string; name: string }[];
+  /** Every enabled model of every enabled provider, and the demo model. */
+  models: CatalogModel[];
   defaultModelId: string | null;
   allowModelChoice: boolean;
   limit: number;

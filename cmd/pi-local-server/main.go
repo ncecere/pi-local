@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ncecere/pi-local/internal/app"
+	"github.com/ncecere/pi-local/internal/secrets"
 	"github.com/ncecere/pi-local/internal/supervisor"
 )
 
@@ -30,6 +31,7 @@ func main() {
 	dev := flag.Bool("dev", false, "run the runtime from source (node --import tsx runtime/src/main.ts)")
 	node := flag.String("node", "", "the node binary (default: from PATH)")
 	demoSpeed := flag.String("demo-speed", "", "the demo model's tokens per second")
+	secretStore := flag.String("secrets", "keychain", "where provider keys go: keychain, or memory (forgotten on exit: for development)")
 	flag.Parse()
 
 	host, _, err := net.SplitHostPort(*addr)
@@ -56,7 +58,17 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	a, err := app.New(ctx, app.Config{DataDir: *data, Runtime: rt, DemoTokensPerSecond: *demoSpeed})
+	var store secrets.Store = secrets.Keychain{}
+	switch *secretStore {
+	case "keychain":
+	case "memory":
+		store = secrets.NewMemory()
+		slog.Warn("provider keys are kept in memory only (-secrets memory)")
+	default:
+		slog.Error("-secrets is keychain or memory")
+		os.Exit(2)
+	}
+	a, err := app.New(ctx, app.Config{DataDir: *data, Runtime: rt, DemoTokensPerSecond: *demoSpeed, Secrets: store})
 	if err != nil {
 		slog.Error("starting Pi Local", "err", err)
 		os.Exit(1)

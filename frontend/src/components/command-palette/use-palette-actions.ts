@@ -1,5 +1,14 @@
 import { useNavigate } from '@tanstack/react-router';
-import { Bot, ChevronsLeftRight, MoonStar, Palette, Plus, Settings } from 'lucide-react';
+import {
+  Bot,
+  ChartColumn,
+  ChevronsLeftRight,
+  Cpu,
+  MoonStar,
+  Palette,
+  Plus,
+  Settings,
+} from 'lucide-react';
 import { useMemo } from 'react';
 import { focusComposerSoon, touchOnly } from '~/lib/focus-after-navigation';
 import { shortcutKeys } from '~/lib/keyboard-shortcuts';
@@ -50,6 +59,20 @@ export function usePaletteActions({
             keywords: 'agents create new rename delete',
             icon: Bot,
             onSelect: () => navigate({ to: '/settings/agents' }),
+          },
+          {
+            id: 'models',
+            label: 'Manage models',
+            keywords: 'models providers openai anthropic ollama api key default',
+            icon: Cpu,
+            onSelect: () => navigate({ to: '/settings/models' }),
+          },
+          {
+            id: 'usage',
+            label: 'See usage',
+            keywords: 'usage tokens cost spend requests',
+            icon: ChartColumn,
+            onSelect: () => navigate({ to: '/settings/usage' }),
           },
           {
             id: 'toggle-theme',

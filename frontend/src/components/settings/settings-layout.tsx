@@ -20,7 +20,13 @@ import { useTheme } from '~/providers/theme-provider';
 /** Settings, as Open Chat Interface lays them out: who you are and help on the left, the section on the right. */
 
 interface Tab {
-  to: '/settings' | '/settings/customization' | '/settings/agents' | '/settings/conversations';
+  to:
+    | '/settings'
+    | '/settings/customization'
+    | '/settings/agents'
+    | '/settings/models'
+    | '/settings/conversations'
+    | '/settings/usage';
   label: string;
   exact: boolean;
   /** Shown only while this optional feature is on. */
@@ -31,7 +37,9 @@ const ALL_TABS: Tab[] = [
   { to: '/settings', label: 'About', exact: true },
   { to: '/settings/customization', label: 'Customization', exact: false },
   { to: '/settings/agents', label: 'Agents', exact: false },
+  { to: '/settings/models', label: 'Models', exact: false },
   { to: '/settings/conversations', label: 'Conversations', exact: false },
+  { to: '/settings/usage', label: 'Usage', exact: false },
 ];
 
 const isActive = (tab: Tab, pathname: string) =>

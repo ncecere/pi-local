@@ -19,8 +19,10 @@ import (
 
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/events"
+	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/threads"
+	"github.com/ncecere/pi-local/internal/usage"
 )
 
 // Runtimes is what the API needs from the supervisor.
@@ -37,6 +39,8 @@ type API struct {
 	Threads  *threads.Index
 	Runtimes Runtimes
 	Hub      *events.Hub
+	Catalog  *models.Catalog
+	Usage    *usage.Store
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
 	KeepAlive time.Duration
 
@@ -44,12 +48,10 @@ type API struct {
 }
 
 const (
-	maxBodyBytes      = 256 << 10
-	maxMessageChars   = 32_000
-	maxTitleChars     = 200
-	keepAliveDefault  = 15 * time.Second
-	demoModelName     = "Demo (scripted)"
-	defaultModelIDStr = "demo/demo-1"
+	maxBodyBytes     = 256 << 10
+	maxMessageChars  = 32_000
+	maxTitleChars    = 200
+	keepAliveDefault = 15 * time.Second
 )
 
 var threadIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -85,6 +87,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("DELETE /api/agents/{agent}/threads/{thread}", a.withThread(a.deleteThread))
 
 	m.HandleFunc("GET /api/events", a.events)
+	a.modelRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
 	return m
@@ -266,7 +269,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"status":       string(status),
 		"running":      status == supervisor.Awake,
 		"lastError":    lastError,
-		"model":        modelJSON(ag.Config.Model),
+		"model":        a.modelJSON(ag.Config.Model),
 		"enabled":      true,
 		"lastUsedAt":   lastUsed,
 		"revision":     ag.Revision,
@@ -275,20 +278,8 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 	}
 }
 
-func modelJSON(m agents.ModelRef) map[string]string {
-	name := m.ID
-	if m == agents.DemoModel {
-		name = demoModelName
-	}
-	return map[string]string{"id": m.String(), "name": name, "provider": m.Provider}
-}
-
-func parseModel(id string) (agents.ModelRef, bool) {
-	provider, model, found := strings.Cut(id, "/")
-	if !found || provider == "" || model == "" {
-		return agents.ModelRef{}, false
-	}
-	return agents.ModelRef{Provider: provider, ID: model}, true
+func (a *API) modelJSON(m agents.ModelRef) map[string]string {
+	return map[string]string{"id": m.String(), "name": a.Catalog.ModelName(context.Background(), m.String()), "provider": m.Provider}
 }
 
 func (a *API) listAgents(w http.ResponseWriter, r *http.Request) {
@@ -300,10 +291,15 @@ func (a *API) listAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
+	choices, err := a.Catalog.Choices(r.Context())
+	if err != nil {
+		catalogFailure(w, err)
+		return
+	}
 	ok(w, map[string]any{
 		"templates":        agents.Kinds,
-		"models":           []map[string]string{{"id": defaultModelIDStr, "name": demoModelName}},
-		"defaultModelId":   defaultModelIDStr,
+		"models":           choices,
+		"defaultModelId":   a.Catalog.DefaultModel(r.Context()),
 		"allowModelChoice": true,
 		"limit":            1000,
 		"used":             len(a.Agents.List()),
@@ -332,7 +328,7 @@ func (in agentInput) apply(c *agents.Config) error {
 		c.Kind = *in.TemplateID
 	}
 	if in.ModelID != nil && *in.ModelID != "" {
-		m, good := parseModel(*in.ModelID)
+		m, good := modelRef(*in.ModelID)
 		if !good {
 			return &agents.InvalidError{Code: "invalid_model", Message: "Choose one of the models offered."}
 		}
@@ -360,6 +356,10 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var cfg agents.Config
+	if in.ModelID == nil || *in.ModelID == "" {
+		def := a.Catalog.DefaultModel(r.Context())
+		in.ModelID = &def
+	}
 	if err := in.apply(&cfg); err != nil {
 		agentFailure(w, err)
 		return

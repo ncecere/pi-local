@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ncecere/pi-local/internal/threads"
+	"github.com/ncecere/pi-local/internal/usage"
 )
 
 // Keys tells which agent a runtime key belongs to.
@@ -24,10 +25,16 @@ type Threads interface {
 	Sync(ctx context.Context, agentID string, statuses []threads.Status, at int64) error
 }
 
+// Usage records a runtime's model usage.
+type Usage interface {
+	RecordUsage(ctx context.Context, agentID, model string, c usage.Counts) error
+}
+
 // Handler is the gateway's routes.
 type Handler struct {
 	Keys    Keys
 	Threads Threads
+	Usage   Usage
 }
 
 const maxBody = 4 << 20
@@ -93,8 +100,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ok(w, map[string]bool{"ok": true})
 	case r.Method == http.MethodPost && r.URL.Path == "/usage":
-		// Phase 2 records usage; accepted and dropped until then.
-		io.Copy(io.Discard, io.LimitReader(r.Body, maxBody))
+		// MODEL_USAGE_URL names the model the runtime was started on (?model=provider/id), so a report that arrives
+		// after the agent moved to another model still counts for the one that answered.
+		var counts usage.Counts
+		if !decode(w, r, &counts) {
+			return
+		}
+		model := r.URL.Query().Get("model")
+		if model == "" || !counts.Valid() {
+			fail(w, http.StatusBadRequest, "invalid_usage", "usage needs a model and whole, positive counts")
+			return
+		}
+		if h.Usage != nil {
+			if err := h.Usage.RecordUsage(r.Context(), agentID, model, counts); err != nil {
+				slog.Error("recording usage", "agent", agentID, "err", err)
+				fail(w, http.StatusInternalServerError, "internal", "could not record usage")
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		// Approvals, schedules and MCP sign-in state come in later phases. A runtime treats 404 as "the host doesn't

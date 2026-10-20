@@ -70,6 +70,130 @@ export interface AgentEvent {
   agent?: Agent | null;
 }
 
+// ── Models and providers (docs/api.md, Phase 2) ─────────────────────────────────────────────
+
+export type ProviderKindId =
+  | 'openai'
+  | 'anthropic'
+  | 'openai-compatible'
+  | 'openai-responses'
+  | 'anthropic-compatible';
+
+/** An API a provider can speak. */
+export interface ProviderKind {
+  id: ProviderKindId;
+  name: string;
+  api: string;
+  defaultBaseUrl: string | null;
+}
+
+/** A starting point for a new provider: OpenAI, Ollama, LM Studio, … */
+export interface ProviderPreset {
+  id: string;
+  name: string;
+  kind: string;
+  baseUrl: string;
+  needsKey: boolean;
+  note: string;
+}
+
+/** An account at a model service. Its key and header values are never returned. */
+export interface Provider {
+  /** A slug: 1–32 of [a-z0-9-]. */
+  id: string;
+  /** 1–60 characters. */
+  name: string;
+  kind: ProviderKindId;
+  baseUrl: string;
+  /** A key is stored (in the OS keychain). */
+  hasKey: boolean;
+  /** Extra request headers; their values are secret. */
+  headerNames: string[];
+  enabled: boolean;
+  models: Model[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One of a provider's models that agents may use. */
+export interface Model {
+  /** "<provider>/<modelId>". */
+  id: string;
+  provider: string;
+  /** May itself contain slashes ("anthropic/claude-sonnet-4"). */
+  modelId: string;
+  name: string;
+  /** Tokens. */
+  contextWindow: number;
+  /** Output tokens. */
+  maxTokens: number;
+  reasoning: boolean;
+  images: boolean;
+  /** USD per million tokens; null: unpriced. */
+  inputPrice: number | null;
+  outputPrice: number | null;
+  enabled: boolean;
+  /** Agents on this model. */
+  usedBy: number;
+}
+
+/** `GET /api/providers`. */
+export interface ProvidersResponse {
+  kinds: ProviderKind[];
+  presets: ProviderPreset[];
+  providers: Provider[];
+  defaultModelId: string | null;
+}
+
+/** A model a provider's API lists (`POST /api/providers/{p}/discover`). */
+export interface DiscoveredModel {
+  modelId: string;
+  name: string;
+  contextWindow: number | null;
+  /** Already one of the provider's models. */
+  added: boolean;
+}
+
+/** A model as the agent catalog lists it: every enabled one, and the demo model. */
+export interface CatalogModel {
+  id: string;
+  name: string;
+  provider?: string;
+  providerName?: string;
+}
+
+/** `409 in_use`'s `details.agents`. */
+export interface AgentRef {
+  id: string;
+  name: string;
+}
+
+// ── Usage (docs/api.md, Usage) ───────────────────────────────────────────────────────────────
+
+export interface UsageTotals {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Requests to unpriced models are not in it. */
+  costUsd: number;
+  unpricedRequests: number;
+}
+
+/** `GET /api/me/usage?days=`. Dates are YYYY-MM-DD, local time. */
+export interface UsageReport {
+  from: string;
+  to: string;
+  days: number;
+  total: UsageTotals;
+  /** Deleted agents keep their last name. */
+  agents: (UsageTotals & { agentId: string; name: string })[];
+  models: (UsageTotals & { modelId: string; name: string })[];
+  /** Every day of the range, zeros included. */
+  byDay: (UsageTotals & { day: string })[];
+}
+
 // ── The runtime's chat view (runtime/src/lib/view.ts) ─────────────────────────────────────────
 
 /** Who sent a user message: a person, a service account, or a trigger (an unattended run). */

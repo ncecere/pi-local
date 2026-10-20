@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ncecere/pi-local/internal/secrets"
 	"github.com/ncecere/pi-local/internal/supervisor"
 )
 
@@ -44,6 +46,10 @@ func start(t *testing.T, dataDir string, cfg Config) *harness {
 	t.Helper()
 	cfg.DataDir = dataDir
 	cfg.Runtime = testRuntime(t)
+	if cfg.Secrets == nil {
+		// Never the real keychain in tests.
+		cfg.Secrets = secrets.NewMemory()
+	}
 	if cfg.StopGrace == 0 {
 		cfg.StopGrace = 10 * time.Second
 	}
@@ -53,6 +59,20 @@ func start(t *testing.T, dataDir string, cfg Config) *harness {
 	}
 	h := &harness{t: t, app: a, srv: httptest.NewServer(a.API.Handler())}
 	t.Cleanup(h.close)
+	// A failure explains itself: every agent's runtime log.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		logs, _ := filepath.Glob(filepath.Join(dataDir, "agents", "*", "logs", "runtime.log"))
+		for _, f := range logs {
+			raw, _ := os.ReadFile(f)
+			if len(raw) > 6000 {
+				raw = raw[len(raw)-6000:]
+			}
+			t.Logf("--- %s ---\n%s", f, raw)
+		}
+	})
 	return h
 }
 
@@ -214,7 +234,7 @@ func TestQuitMidReplyAndTheReplyFinishesAfterReopening(t *testing.T) {
 }
 
 func TestIdleAgentsHibernateAndListingDoesNotWakeThem(t *testing.T) {
-	h := start(t, t.TempDir(), Config{DemoTokensPerSecond: "100000", IdleTimeout: 500 * time.Millisecond, ReapInterval: 200 * time.Millisecond})
+	h := start(t, t.TempDir(), Config{DemoTokensPerSecond: "100000", IdleTimeout: 2 * time.Second, ReapInterval: 250 * time.Millisecond})
 	agent := h.createAgent("Sleeper")
 	if code, data := h.do("POST", "/api/agents/"+agent+"/threads/t1/messages", map[string]string{"text": "hi", "requestId": "r1"}); code != 202 {
 		t.Fatalf("send: %d %s", code, data)
@@ -395,7 +415,7 @@ func TestLiveEventsFollowAThread(t *testing.T) {
 func TestOneAppPerDataDirectory(t *testing.T) {
 	dir := t.TempDir()
 	start(t, dir, Config{})
-	_, err := New(context.Background(), Config{DataDir: dir, Runtime: testRuntime(t)})
+	_, err := New(context.Background(), Config{DataDir: dir, Runtime: testRuntime(t), Secrets: secrets.NewMemory()})
 	if !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("a second app on the same data directory: %v", err)
 	}

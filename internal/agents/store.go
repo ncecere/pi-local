@@ -58,9 +58,37 @@ type Store struct {
 	db   *sql.DB
 	root string // <data>/agents
 
+	writeMu   sync.Mutex // serializes Create, Update and Delete
 	mu        sync.RWMutex
 	agents    map[string]*Agent
 	listeners []func(Change)
+
+	// ModelAvailable says whether agents may be given a model now (set by the app from the model catalog). Only a
+	// model being chosen is checked: an agent keeps a model that went away until it is given another.
+	ModelAvailable func(ModelRef) bool
+}
+
+func (s *Store) checkModel(m ModelRef) error {
+	if m == DemoModel {
+		return nil
+	}
+	if s.ModelAvailable == nil || !s.ModelAvailable(m) {
+		return invalid("invalid_model", "Choose one of the models offered (%s isn't available).", m)
+	}
+	return nil
+}
+
+// UsingModel lists the agents on a model.
+func (s *Store) UsingModel(m ModelRef) []*Agent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*Agent
+	for _, a := range s.agents {
+		if a.Config.Model == m {
+			out = append(out, copyOf(a))
+		}
+	}
+	return out
 }
 
 var idPattern = regexp.MustCompile(`^ag_[a-z2-7]{16}$`)
@@ -166,8 +194,13 @@ func (s *Store) Get(id string) (*Agent, error) {
 
 // Create makes a new agent: its folder, agent.yaml and row.
 func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if err := s.checkModel(cfg.Model); err != nil {
 		return nil, err
 	}
 	id := newID()
@@ -198,13 +231,15 @@ func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
 
 // Update changes an agent's config through fn and bumps its revision (a running agent restarts with it).
 func (s *Store) Update(ctx context.Context, id string, fn func(*Config)) (*Agent, error) {
-	s.mu.Lock()
-	a, ok := s.agents[id]
-	if !ok {
-		s.mu.Unlock()
-		return nil, ErrNotFound
+	// Changes are serialized; the checks run without the read lock (checking a model asks the catalog, which may ask
+	// which agents use a model).
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	current, err := s.Get(id)
+	if err != nil {
+		return nil, err
 	}
-	cfg := a.Config
+	cfg := current.Config
 	if cfg.KindSettings != nil {
 		m := make(map[string]any, len(cfg.KindSettings))
 		for k, v := range cfg.KindSettings {
@@ -215,17 +250,25 @@ func (s *Store) Update(ctx context.Context, id string, fn func(*Config)) (*Agent
 	fn(&cfg)
 	cfg.Normalize()
 	if err := cfg.Validate(); err != nil {
-		s.mu.Unlock()
 		return nil, err
 	}
+	if cfg.Model != current.Config.Model {
+		if err := s.checkModel(cfg.Model); err != nil {
+			return nil, err
+		}
+	}
 	now := time.Now()
-	if err := writeConfig(a.Dir, cfg); err != nil {
-		s.mu.Unlock()
+	if err := writeConfig(current.Dir, cfg); err != nil {
 		return nil, err
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE agents SET revision = revision + 1, updated_at = ? WHERE id = ?`, now.UnixMilli(), id); err != nil {
-		s.mu.Unlock()
 		return nil, err
+	}
+	s.mu.Lock()
+	a, ok := s.agents[id]
+	if !ok {
+		s.mu.Unlock()
+		return nil, ErrNotFound
 	}
 	a.Config = cfg
 	a.Revision++
@@ -274,6 +317,8 @@ func (s *Store) RecordStorageVersion(ctx context.Context, id, version string) er
 // Delete removes an agent: its row (and its threads' records) and its folder, moved to <data>/trash so a mistake can
 // be undone by hand. The caller stops its runtime first.
 func (s *Store) Delete(ctx context.Context, id string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
 	a, ok := s.agents[id]
 	if !ok {

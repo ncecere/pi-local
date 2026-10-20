@@ -116,9 +116,8 @@ func (c *Config) Validate() error {
 			return invalid("invalid_kind_settings", "Kind settings must be a JSON object of at most %d bytes.", MaxKindSettingsBytes)
 		}
 	}
-	if c.Model != DemoModel {
-		// Phase 2 adds providers; until then only the demo model exists.
-		return invalid("invalid_model", "Unknown model %s.", c.Model)
+	if c.Model.Provider == "" || c.Model.ID == "" || strings.ContainsAny(c.Model.Provider, "/ ") {
+		return invalid("invalid_model", "Choose one of the models offered.")
 	}
 	return nil
 }

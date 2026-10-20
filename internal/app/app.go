@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,8 +24,11 @@ import (
 	"github.com/ncecere/pi-local/internal/appdb"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
+	"github.com/ncecere/pi-local/internal/models"
+	"github.com/ncecere/pi-local/internal/secrets"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/threads"
+	"github.com/ncecere/pi-local/internal/usage"
 )
 
 // Config configures an App.
@@ -37,6 +41,8 @@ type Config struct {
 	DemoTokensPerSecond string
 	// Supervisor timings; zero values take the supervisor's defaults.
 	IdleTimeout, ReapInterval, StopGrace time.Duration
+	// Secrets is where provider keys go (default: the OS keychain).
+	Secrets secrets.Store
 }
 
 // App is a running Pi Local.
@@ -47,8 +53,11 @@ type App struct {
 	Hub     *events.Hub
 	Sup     *supervisor.Supervisor
 	API     *api.API
+	Catalog *models.Catalog
+	Usage   *usage.Store
 
 	runtimeVersion string
+	gatewayURL     string
 	lock           *os.File
 	gateway        *http.Server
 	closeDB        func() error
@@ -122,6 +131,21 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	if a.Agents, err = agents.Open(ctx, db, filepath.Join(cfg.DataDir, "agents")); err != nil {
 		return nil, err
 	}
+	if cfg.Secrets == nil {
+		cfg.Secrets = secrets.Keychain{}
+	}
+	a.Catalog = models.New(db, cfg.Secrets)
+	a.Usage = usage.New(db)
+	a.Agents.ModelAvailable = func(m agents.ModelRef) bool { return a.Catalog.Available(context.Background(), m.String()) }
+	a.Catalog.UsedBy = func(model string) []models.AgentRef {
+		provider, id, _ := models.SplitModelID(model)
+		var out []models.AgentRef
+		for _, ag := range a.Agents.UsingModel(agents.ModelRef{Provider: provider, ID: id}) {
+			out = append(out, models.AgentRef{ID: ag.ID, Name: ag.Config.Name})
+		}
+		return out
+	}
+	a.Catalog.OnChange = a.catalogChanged
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
 	})
@@ -131,6 +155,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return nil, err
 	}
 	gatewayURL := "http://" + listener.Addr().String()
+	a.gatewayURL = gatewayURL
 
 	a.Sup = supervisor.New(supervisor.Options{
 		Runtime:      cfg.Runtime,
@@ -144,14 +169,14 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		ReapInterval: cfg.ReapInterval,
 		StopGrace:    cfg.StopGrace,
 	})
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
@@ -225,12 +250,58 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 		}
 		env["AGENT_KIND_SETTINGS"] = string(raw)
 	}
-	// Phase 1: every agent is on the scripted demo model.
-	env["MODEL_PROVIDER"] = "demo"
-	if a.cfg.DemoTokensPerSecond != "" {
-		env["DEMO_TOKENS_PER_SECOND"] = a.cfg.DemoTokensPerSecond
+	model := ag.Config.Model.String()
+	modelEnv, err := a.Catalog.RuntimeEnv(ctx, model)
+	if err != nil {
+		var unavailable *models.UnavailableError
+		if errors.As(err, &unavailable) {
+			return supervisor.Spec{}, &supervisor.StartError{AgentID: id, Code: -1, Message: unavailable.Message}
+		}
+		return supervisor.Spec{}, err
+	}
+	for k, v := range modelEnv {
+		env[k] = v
+	}
+	if model == models.DemoModelID {
+		if a.cfg.DemoTokensPerSecond != "" {
+			env["DEMO_TOKENS_PER_SECOND"] = a.cfg.DemoTokensPerSecond
+		}
+	} else {
+		// The runtime counts what its model uses and reports it here, naming the model it was started on.
+		env["MODEL_USAGE_URL"] = a.gatewayURL + "/usage?model=" + url.QueryEscape(model)
 	}
 	return supervisor.Spec{AgentID: id, Revision: ag.Revision, LogDir: ag.LogDir(), Env: env}, nil
+}
+
+// catalogChanged: a provider or one of its models changed. Awake agents on it restart with the change (their
+// runtime's environment differs now); an agent whose model is no longer available stops.
+func (a *App) catalogChanged(provider string) {
+	for _, ag := range a.Agents.List() {
+		if ag.Config.Model.Provider != provider {
+			continue
+		}
+		if status, _ := a.Sup.Status(ag.ID); status != supervisor.Awake {
+			continue
+		}
+		id := ag.ID
+		go func() {
+			if !a.Catalog.Available(context.Background(), ag.Config.Model.String()) {
+				a.Sup.Stop(id)
+			}
+			if err := a.Sup.Wake(context.Background(), id); err != nil {
+				slog.Info("an agent's model changed", "agent", id, "err", err)
+			}
+		}()
+	}
+}
+
+// RecordUsage keeps what a runtime reports its model used (the gateway's /usage).
+func (a *App) RecordUsage(ctx context.Context, agentID, model string, c usage.Counts) error {
+	name := agentID
+	if ag, err := a.Agents.Get(agentID); err == nil {
+		name = ag.Config.Name
+	}
+	return a.Usage.Record(ctx, agentID, name, model, a.Catalog.ModelName(ctx, model), c)
 }
 
 // refuse stops a runtime older than the one that last wrote an agent's storage from opening it: pi-durable storage

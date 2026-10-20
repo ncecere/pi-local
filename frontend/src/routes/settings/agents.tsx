@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { MessageSquarePlus, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
-import { type Agent, errorMessage } from '~/api/client';
+import { type Agent, type CatalogModel, errorMessage } from '~/api/client';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
 import { SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
@@ -25,6 +25,7 @@ import {
 } from '~/hooks/use-agents';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { usePageTitle } from '~/lib/document-title';
+import { groupModelsByProvider } from '~/lib/models';
 import { cn } from '~/lib/utils';
 
 const FIELD =
@@ -54,6 +55,12 @@ function AgentDialog({
   const [instructions, setInstructions] = useState(agent?.instructions ?? '');
   const busy = create.isPending || update.isPending;
   const error = create.error ?? update.error;
+  // An agent whose model was removed or turned off keeps it until given another.
+  const missingModel =
+    agent?.model && !catalog.models.some((model) => model.id === agent.model?.id)
+      ? agent.model
+      : null;
+  const groups = groupModelsByProvider(catalog.models);
 
   const submit = () => {
     if (agent)
@@ -185,23 +192,60 @@ function AgentDialog({
               Leave empty to use the default prompt for its kind.
             </span>
           </label>
-          {catalog.allowModelChoice && catalog.models.length > 1 && (
+          {catalog.allowModelChoice && (catalog.models.length > 1 || missingModel) && (
             <label htmlFor={`${id}-model`} className="flex flex-col gap-1.5 text-sm font-medium">
               Model
               <select
                 id={`${id}-model`}
                 value={modelId}
                 onChange={(event) => setModelId(event.target.value)}
+                aria-describedby={`${id}-model-hint`}
                 className={FIELD}
               >
                 {!catalog.defaultModelId && <option value="">The default model</option>}
-                {catalog.models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name}
-                    {model.id === catalog.defaultModelId ? ' (default)' : ''}
+                {missingModel && (
+                  <option value={missingModel.id} disabled>
+                    {missingModel.name} (no longer available)
                   </option>
-                ))}
+                )}
+                {groups.map((group) =>
+                  groups.length > 1 ? (
+                    <optgroup key={group.key} label={group.label}>
+                      {group.models.map((model) => (
+                        <ModelOption key={model.id} model={model} catalog={catalog} />
+                      ))}
+                    </optgroup>
+                  ) : (
+                    group.models.map((model) => (
+                      <ModelOption key={model.id} model={model} catalog={catalog} />
+                    ))
+                  ),
+                )}
               </select>
+              <span
+                id={`${id}-model-hint`}
+                className={cn(
+                  'text-xs font-normal',
+                  missingModel && modelId === missingModel.id
+                    ? 'text-[var(--danger-on-tint)]'
+                    : 'text-[var(--text-muted)]',
+                )}
+              >
+                {missingModel && modelId === missingModel.id ? (
+                  `${missingModel.name} was removed or turned off, so this agent can't start. Pick another model.`
+                ) : (
+                  <>
+                    Add providers and models in{' '}
+                    <Link
+                      to="/settings/models"
+                      className="text-[var(--accent-bright)] underline-offset-4 hover:underline"
+                    >
+                      Settings → Models
+                    </Link>
+                    .
+                  </>
+                )}
+              </span>
             </label>
           )}
           {error && (
@@ -225,6 +269,15 @@ function AgentDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ModelOption({ model, catalog }: { model: CatalogModel; catalog: AgentCatalog }) {
+  return (
+    <option value={model.id}>
+      {model.name}
+      {model.id === catalog.defaultModelId ? ' (default)' : ''}
+    </option>
   );
 }
 
@@ -284,7 +337,10 @@ function AgentRow({
           <AgentStatus agent={agent} />
         </span>
         {agent.status === 'error' && agent.lastError && (
-          <span className="mt-0.5 block truncate text-xs text-[var(--danger-on-tint)]">
+          <span
+            className="mt-0.5 line-clamp-2 text-xs text-[var(--danger-on-tint)]"
+            title={agent.lastError}
+          >
             {agent.lastError}
           </span>
         )}
