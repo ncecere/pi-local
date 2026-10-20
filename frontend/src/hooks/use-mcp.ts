@@ -83,6 +83,11 @@ export interface McpServerChange {
   url?: string;
   /** Replaces every value. */
   headers?: Record<string, string>;
+  /** Change or add some values, keeping the rest (applied after env/headers: remove, then set). */
+  envSet?: Record<string, string>;
+  envRemove?: string[];
+  headersSet?: Record<string, string>;
+  headersRemove?: string[];
   oauth?: boolean;
   enabled?: boolean;
 }
@@ -162,4 +167,15 @@ export function useImportMcpServers() {
         queryClient.invalidateQueries({ queryKey: MCP_IMPORT_KEY }),
       ]),
   });
+}
+
+/** One stored env value or header of a server, shown on request (`POST …/reveal`). */
+export function revealMcpSecret(
+  slug: string,
+  kind: 'env' | 'header',
+  name: string,
+): Promise<string> {
+  return api
+    .post<{ value: string }>(`${mcpServerPath(slug)}/reveal`, { kind, name })
+    .then((data) => data.value);
 }

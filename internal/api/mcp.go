@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/ncecere/pi-local/internal/mcp"
 )
@@ -17,6 +18,7 @@ func (a *API) mcpRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/mcp/servers/{slug}/test", a.testMCP)
 	m.HandleFunc("POST /api/mcp/servers/{slug}/sign-in", a.signInMCP)
 	m.HandleFunc("POST /api/mcp/servers/{slug}/sign-out", a.signOutMCP)
+	m.HandleFunc("POST /api/mcp/servers/{slug}/reveal", a.revealMCP)
 	m.HandleFunc("GET /api/mcp/import", a.importSources)
 	m.HandleFunc("POST /api/mcp/import", a.importMCP)
 }
@@ -107,6 +109,29 @@ func (a *API) signOutMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, s)
+}
+
+// revealMCP shows one stored env value or header. POST with a JSON body, so a page elsewhere can't read it (a cross-origin
+// JSON POST needs a preflight this server never grants); never logged.
+func (a *API) revealMCP(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		fail(w, http.StatusUnsupportedMediaType, "json_required", "Send JSON.")
+		return
+	}
+	var in struct {
+		Kind string `json:"kind"`
+		Name string `json:"name"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	v, err := a.MCP.Secret(r.Context(), r.PathValue("slug"), in.Kind, in.Name)
+	if err != nil {
+		mcpFailure(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	ok(w, map[string]string{"value": v})
 }
 
 func (a *API) importSources(w http.ResponseWriter, r *http.Request) {

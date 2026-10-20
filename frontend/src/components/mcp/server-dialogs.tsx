@@ -5,6 +5,13 @@ import { toast } from 'sonner';
 import { errorMessage, type McpServer, type McpTransport } from '~/api/client';
 import { McpTestResult, TrustWarning } from '~/components/mcp/server-bits';
 import {
+  changedValues,
+  isEdited,
+  NO_EDIT,
+  type StoredEdit,
+  StoredSecretsField,
+} from '~/components/mcp/stored-secrets';
+import {
   ErrorNotice,
   FIELD,
   Field,
@@ -26,6 +33,7 @@ import { Switch } from '~/components/ui/switch';
 import {
   type McpServerChange,
   type NewMcpServer,
+  revealMcpSecret,
   useCreateMcpServer,
   useDeleteMcpServer,
   useTestMcpServer,
@@ -40,7 +48,6 @@ import {
   mcpToolName,
   needsSignIn,
   parseArgs,
-  rowsFor,
   type SecretRow,
   slugFromName,
   slugProblem,
@@ -71,6 +78,9 @@ interface FormState {
   headerRows: SecretRow[] | null;
   oauth: boolean;
   enabled: boolean;
+  /** Editing: changes to the stored env values and headers, name by name. */
+  envEdit: StoredEdit;
+  headerEdit: StoredEdit;
 }
 
 const EMPTY_FORM: FormState = {
@@ -87,6 +97,8 @@ const EMPTY_FORM: FormState = {
   headerRows: [],
   oauth: false,
   enabled: true,
+  envEdit: NO_EDIT,
+  headerEdit: NO_EDIT,
 };
 
 const formOf = (server: McpServer): FormState => ({
@@ -103,10 +115,13 @@ const formOf = (server: McpServer): FormState => ({
   headerRows: null,
   oauth: server.oauth,
   enabled: server.enabled,
+  envEdit: NO_EDIT,
+  headerEdit: NO_EDIT,
 });
 
 /** What's wrong with the form before it is sent, or null. */
-function formProblem(form: FormState, adding: boolean): string | null {
+function formProblem(form: FormState, server: McpServer | null): string | null {
+  const adding = server === null;
   if (!form.name.trim()) return 'Give it a name.';
   if (adding) {
     const slug = slugProblem(form.slug);
@@ -118,6 +133,13 @@ function formProblem(form: FormState, adding: boolean): string | null {
       const env = envFromRows(form.envRows);
       if (env.error !== undefined) return env.error;
     }
+    if (server) {
+      const env = envFromRows(form.envEdit.added);
+      if (env.error !== undefined) return env.error;
+      const kept = server.envNames.filter((n) => !form.envEdit.removed.includes(n));
+      const taken = Object.keys(env.env).find((n) => kept.includes(n));
+      if (taken) return `${taken} is already set: change its value above.`;
+    }
   } else {
     const url = urlProblem(form.url);
     if (url) return url;
@@ -125,17 +147,25 @@ function formProblem(form: FormState, adding: boolean): string | null {
       const headers = headersFromRows(form.headerRows);
       if (headers.error !== undefined) return headers.error;
     }
+    if (server) {
+      const headers = headersFromRows(form.headerEdit.added);
+      if (headers.error !== undefined) return headers.error;
+      const kept = server.headerNames
+        .filter((n) => !form.headerEdit.removed.includes(n))
+        .map((n) => n.toLowerCase());
+      const taken = Object.keys(headers.headers).find((n) => kept.includes(n.toLowerCase()));
+      if (taken) return `${taken} is already set: change its value above.`;
+    }
   }
   return null;
 }
 
-/** Secret name/value rows: on a new server, rows; on an existing one, its names until replaced. */
+/** Secret name/value rows, for a new server (an existing one uses StoredSecretsField). */
 function SecretsField({
   legend,
   noun,
   namePlaceholder,
   rows,
-  names,
   onChange,
   hint,
 }: {
@@ -143,65 +173,21 @@ function SecretsField({
   noun: string;
   namePlaceholder: string;
   rows: SecretRow[] | null;
-  /** The names stored now (editing). */
-  names: string[] | null;
-  onChange: (rows: SecretRow[] | null) => void;
+  onChange: (rows: SecretRow[]) => void;
   hint?: ReactNode;
 }) {
   return (
     <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
       <legend className="mb-1.5 text-sm font-medium">
-        {legend} {names === null && <Optional />}
+        {legend} <Optional />
       </legend>
       {hint && <p className="-mt-1 text-xs text-[var(--text-muted)]">{hint}</p>}
-      {rows ? (
-        <>
-          {names !== null && (
-            <p className="text-xs text-[var(--text-muted)]">
-              These replace all its {noun}s when you save. Values are never shown: enter each one
-              again; remove every row to have none.
-            </p>
-          )}
-          <HeadersEditor
-            rows={rows}
-            onChange={onChange}
-            noun={noun}
-            namePlaceholder={namePlaceholder}
-          />
-          {names !== null && (
-            <div>
-              <Button type="button" variant="ghost" size="sm" onClick={() => onChange(null)}>
-                Keep the current {noun}s
-              </Button>
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          {!names || names.length === 0 ? (
-            <span className="text-sm text-[var(--text-muted)]">None.</span>
-          ) : (
-            <ul className="flex flex-wrap gap-1.5" aria-label={`Current ${noun}s`}>
-              {names.map((name) => (
-                <li
-                  key={name}
-                  className="rounded-md bg-[var(--bg-control)] px-2 py-0.5 font-mono text-xs"
-                >
-                  {name}
-                </li>
-              ))}
-            </ul>
-          )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange(rowsFor(names ?? []))}
-          >
-            {names && names.length > 0 ? 'Replace values' : `Add ${noun}s`}
-          </Button>
-        </div>
-      )}
+      <HeadersEditor
+        rows={rows ?? []}
+        onChange={onChange}
+        noun={noun}
+        namePlaceholder={namePlaceholder}
+      />
     </fieldset>
   );
 }
@@ -349,15 +335,27 @@ function ServerFields({
               className={cn(FIELD, 'font-mono')}
             />
           </Field>
-          <SecretsField
-            legend="Environment variables"
-            noun="variable"
-            namePlaceholder="API_TOKEN"
-            rows={form.envRows}
-            names={server ? server.envNames : null}
-            onChange={(envRows) => setForm({ envRows })}
-            hint="Such as an API token the server needs. Values are kept in the system keychain and never shown again."
-          />
+          {server ? (
+            <StoredSecretsField
+              legend="Environment variables"
+              noun="variable"
+              namePlaceholder="API_TOKEN"
+              names={server.envNames}
+              edit={form.envEdit}
+              onChange={(envEdit) => setForm({ envEdit })}
+              reveal={(name) => revealMcpSecret(server.slug, 'env', name)}
+              hint="Values are kept in the system keychain. Type a new value to change one; the others stay as they are."
+            />
+          ) : (
+            <SecretsField
+              legend="Environment variables"
+              noun="variable"
+              namePlaceholder="API_TOKEN"
+              rows={form.envRows}
+              onChange={(envRows) => setForm({ envRows })}
+              hint="Such as an API token the server needs, or a setting. Values are kept in the system keychain."
+            />
+          )}
         </>
       ) : (
         <>
@@ -378,15 +376,27 @@ function ServerFields({
               className={FIELD}
             />
           </Field>
-          <SecretsField
-            legend="Headers"
-            noun="header"
-            namePlaceholder="Authorization"
-            rows={form.headerRows}
-            names={server ? server.headerNames : null}
-            onChange={(headerRows) => setForm({ headerRows })}
-            hint="Sent with every request, such as an API key. Values are kept in the system keychain."
-          />
+          {server ? (
+            <StoredSecretsField
+              legend="Headers"
+              noun="header"
+              namePlaceholder="Authorization"
+              names={server.headerNames}
+              edit={form.headerEdit}
+              onChange={(headerEdit) => setForm({ headerEdit })}
+              reveal={(name) => revealMcpSecret(server.slug, 'header', name)}
+              hint="Sent with every request. Values are kept in the system keychain. Type a new value to change one."
+            />
+          ) : (
+            <SecretsField
+              legend="Headers"
+              noun="header"
+              namePlaceholder="Authorization"
+              rows={form.headerRows}
+              onChange={(headerRows) => setForm({ headerRows })}
+              hint="Sent with every request, such as an API key. Values are kept in the system keychain."
+            />
+          )}
           <div className="flex items-center justify-between gap-4">
             <span>
               <span id={`${id}-oauth-label`} className="block text-sm font-medium">
@@ -575,7 +585,7 @@ export function AddServerDialog({
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const issue = formProblem(form, true);
+    const issue = formProblem(form, null);
     if (issue) return setProblem(issue);
     setProblem(null);
     const base = {
@@ -725,23 +735,29 @@ function changesOf(server: McpServer, form: FormState): McpServerChange {
     const args = parseArgs(form.args);
     if (JSON.stringify(args) !== JSON.stringify(server.args)) body.args = args;
     if (form.cwd.trim() !== (server.cwd ?? '')) body.cwd = form.cwd.trim();
-    if (form.envRows) {
-      const env = envFromRows(form.envRows);
-      if (env.error === undefined) body.env = env.env;
-    }
+    const added = envFromRows(form.envEdit.added);
+    const envSet = {
+      ...changedValues(form.envEdit),
+      ...(added.error === undefined ? added.env : {}),
+    };
+    if (Object.keys(envSet).length > 0) body.envSet = envSet;
+    if (form.envEdit.removed.length > 0) body.envRemove = form.envEdit.removed;
   } else {
     if (form.url.trim() !== (server.url ?? '')) body.url = form.url.trim();
-    if (form.headerRows) {
-      const headers = headersFromRows(form.headerRows);
-      if (headers.error === undefined) body.headers = headers.headers;
-    }
+    const added = headersFromRows(form.headerEdit.added);
+    const headersSet = {
+      ...changedValues(form.headerEdit),
+      ...(added.error === undefined ? added.headers : {}),
+    };
+    if (Object.keys(headersSet).length > 0) body.headersSet = headersSet;
+    if (form.headerEdit.removed.length > 0) body.headersRemove = form.headerEdit.removed;
     if (form.oauth !== server.oauth) body.oauth = form.oauth;
   }
   if (form.enabled !== server.enabled) body.enabled = form.enabled;
   return body;
 }
 
-/** Changing a server: everything but its ID and kind; secrets are replaced, never shown. */
+/** Changing a server: everything but its ID and kind; stored values change one at a time, shown on request. */
 export function EditServerDialog({ server, onClose }: { server: McpServer; onClose: () => void }) {
   const update = useUpdateMcpServer();
   const [form, setFormState] = useState<FormState>(() => formOf(server));
@@ -751,11 +767,11 @@ export function EditServerDialog({ server, onClose }: { server: McpServer; onClo
     setFormState((before) => ({ ...before, ...change }));
   const changes = changesOf(server, form);
   const dirty =
-    Object.keys(changes).length > 1 || form.envRows !== null || form.headerRows !== null;
+    Object.keys(changes).length > 1 || isEdited(form.envEdit) || isEdited(form.headerEdit);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const issue = formProblem(form, false);
+    const issue = formProblem(form, server);
     if (issue) return setProblem(issue);
     setProblem(null);
     update.mutate(changes, {

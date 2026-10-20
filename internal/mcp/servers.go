@@ -75,8 +75,14 @@ type Input struct {
 	Env         *map[string]string `json:"env"`
 	URL         *string            `json:"url"`
 	Headers     *map[string]string `json:"headers"`
-	OAuth       *bool              `json:"oauth"`
-	Enabled     *bool              `json:"enabled"`
+	// EnvSet/HeadersSet change or add some values and EnvRemove/HeadersRemove drop some, keeping the rest (Env and
+	// Headers replace them all). Applied after Env/Headers: remove, then set.
+	EnvSet        map[string]string `json:"envSet"`
+	EnvRemove     []string          `json:"envRemove"`
+	HeadersSet    map[string]string `json:"headersSet"`
+	HeadersRemove []string          `json:"headersRemove"`
+	OAuth         *bool             `json:"oauth"`
+	Enabled       *bool             `json:"enabled"`
 }
 
 // Error is a failure for people.
@@ -316,6 +322,52 @@ func (c *Catalog) Exists(slug string) bool {
 	return n > 0
 }
 
+func (in Input) envPatched() bool     { return len(in.EnvSet) > 0 || len(in.EnvRemove) > 0 }
+func (in Input) headersPatched() bool { return len(in.HeadersSet) > 0 || len(in.HeadersRemove) > 0 }
+
+// patched is m without remove's names and with set's values (a copy; m is left alone).
+func patched(m map[string]string, remove []string, set map[string]string) map[string]string {
+	if len(remove) == 0 && len(set) == 0 {
+		return m
+	}
+	out := make(map[string]string, len(m)+len(set))
+	for k, v := range m {
+		out[k] = v
+	}
+	for _, k := range remove {
+		delete(out, k)
+	}
+	for k, v := range set {
+		out[k] = v
+	}
+	return out
+}
+
+// Secret is one stored environment variable's or header's value, for the person who added it to see again.
+func (c *Catalog) Secret(ctx context.Context, slug, kind, name string) (string, error) {
+	if _, err := c.Get(ctx, slug); err != nil {
+		return "", err
+	}
+	var key string
+	switch kind {
+	case "env":
+		key = envKey(slug)
+	case "header":
+		key = headersKey(slug)
+	default:
+		return "", bad("invalid_kind", "Ask for an env value or a header.")
+	}
+	m, err := c.secretMap(key)
+	if err != nil {
+		return "", err
+	}
+	v, ok := m[name]
+	if !ok {
+		return "", &Error{Status: http.StatusNotFound, Code: "not_found", Message: name + " isn't set."}
+	}
+	return v, nil
+}
+
 func (c *Catalog) secretMap(key string) (map[string]string, error) {
 	raw, err := c.secrets.Get(key)
 	if errors.Is(err, secrets.ErrNotFound) {
@@ -415,12 +467,14 @@ func (in Input) apply(d *draft) {
 	if in.Env != nil {
 		d.env = *in.Env
 	}
+	d.env = patched(d.env, in.EnvRemove, in.EnvSet)
 	if in.URL != nil {
 		d.URL = in.URL
 	}
 	if in.Headers != nil {
 		d.headers = *in.Headers
 	}
+	d.headers = patched(d.headers, in.HeadersRemove, in.HeadersSet)
 	if in.OAuth != nil {
 		d.OAuth = *in.OAuth
 	}
@@ -516,13 +570,13 @@ func (c *Catalog) Update(ctx context.Context, slug string, in Input) (*Server, e
 		c.mu.Unlock()
 		return nil, err
 	}
-	if in.Env != nil || d.Transport != cur.Transport {
+	if in.Env != nil || in.envPatched() || d.Transport != cur.Transport {
 		if err := c.storeMap(envKey(slug), d.env); err != nil {
 			c.mu.Unlock()
 			return nil, err
 		}
 	}
-	if in.Headers != nil || d.Transport != cur.Transport {
+	if in.Headers != nil || in.headersPatched() || d.Transport != cur.Transport {
 		if err := c.storeMap(headersKey(slug), d.headers); err != nil {
 			c.mu.Unlock()
 			return nil, err
@@ -530,7 +584,7 @@ func (c *Catalog) Update(ctx context.Context, slug string, in Input) (*Server, e
 	}
 	// What connects to the server changed: what the last test found may not hold any more (tools stay until the
 	// next test, which runs below).
-	connection := in.Command != nil || in.Args != nil || in.Cwd != nil || in.Env != nil || in.URL != nil || in.Headers != nil || in.OAuth != nil || in.Transport != nil
+	connection := in.Command != nil || in.Args != nil || in.Cwd != nil || in.Env != nil || in.envPatched() || in.URL != nil || in.Headers != nil || in.headersPatched() || in.OAuth != nil || in.Transport != nil
 	_, err = c.db.ExecContext(ctx, `UPDATE mcp_servers SET name = ?, description = ?, transport = ?, command = ?, args = ?, cwd = ?, env_names = ?, url = ?, header_names = ?, oauth = ?, enabled = ?, updated_at = ? WHERE slug = ?`,
 		d.Name, d.Description, d.Transport, nullable(d.Command), jsonOf(d.Args), nullable(d.Cwd), jsonOf(names(d.env)),
 		nullable(d.URL), jsonOf(names(d.headers)), boolInt(d.OAuth), boolInt(d.Enabled), time.Now().UnixMilli(), slug)

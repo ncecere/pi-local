@@ -224,3 +224,55 @@ func TestImportingFromOtherApps(t *testing.T) {
 		t.Fatalf("importing twice: %+v", again)
 	}
 }
+
+func TestOneEnvValueOrHeaderCanBeChangedShownOrRemoved(t *testing.T) {
+	h := start(t, t.TempDir(), Config{})
+	defer h.close()
+	node, _ := exec.LookPath("node")
+	keychain := h.app.cfg.Secrets.(*secrets.Memory)
+	h.mustDo("POST", "/api/mcp/servers", map[string]any{
+		"name": "Fixture", "transport": "stdio", "command": node, "args": []string{fixture("stdio-mcp-server.mjs")},
+		"env": map[string]string{"FIXTURE_VALUE": "first", "TOKEN": "s3cret", "OLD": "x"},
+	}, 201)
+	env := func() map[string]string {
+		raw, _ := keychain.Get("mcp:fixture:env")
+		m := map[string]string{}
+		json.Unmarshal([]byte(raw), &m)
+		return m
+	}
+
+	// Change one, add one, drop one: the others are kept.
+	s := decodeInto[mcpServerJSON](t, h.mustDo("PATCH", "/api/mcp/servers/fixture", map[string]any{
+		"envSet": map[string]string{"FIXTURE_VALUE": "second", "NEW": "y"}, "envRemove": []string{"OLD"},
+	}, 200))
+	if got := env(); got["FIXTURE_VALUE"] != "second" || got["TOKEN"] != "s3cret" || got["NEW"] != "y" || len(got) != 3 {
+		t.Fatalf("after the patch: %v", got)
+	}
+	if strings.Join(s.EnvNames, ",") != "FIXTURE_VALUE,NEW,TOKEN" {
+		t.Fatalf("names: %v", s.EnvNames)
+	}
+	// A bad name in a patch is refused like anywhere else, and changes nothing.
+	h.mustDo("PATCH", "/api/mcp/servers/fixture", map[string]any{"envSet": map[string]string{"not a name": "z"}}, 400)
+
+	// Shown on request, one at a time; only as JSON.
+	revealed := decodeInto[struct{ Value string }](t, h.mustDo("POST", "/api/mcp/servers/fixture/reveal", map[string]string{"kind": "env", "name": "TOKEN"}, 200))
+	if revealed.Value != "s3cret" {
+		t.Fatalf("revealed: %q", revealed.Value)
+	}
+	if code, _, _ := h.raw("POST", "/api/mcp/servers/fixture/reveal", "text/plain", []byte(`{"kind":"env","name":"TOKEN"}`)); code != 415 {
+		t.Fatalf("a form-like reveal: %d", code)
+	}
+	h.mustDo("POST", "/api/mcp/servers/fixture/reveal", map[string]string{"kind": "env", "name": "NOPE"}, 404)
+	h.mustDo("POST", "/api/mcp/servers/nope/reveal", map[string]string{"kind": "env", "name": "TOKEN"}, 404)
+
+	// The server runs with the changed value (an agent's copy restarts with it).
+	scripted(t, h)
+	agent := h.agentOn("Toolsmith", "script/s1", map[string]any{"mcp": []map[string]any{{"server": "fixture"}}})
+	if reply := lastReply(h.sendAndWait(agent, "t1", `CALL:mcp__fixture__echo:{"text":"hi"}`, "r1")); !strings.Contains(reply, "value: second") {
+		t.Fatalf("the tool saw: %q", reply)
+	}
+	h.mustDo("PATCH", "/api/mcp/servers/fixture", map[string]any{"envSet": map[string]string{"FIXTURE_VALUE": "third"}}, 200)
+	if reply := lastReply(h.sendAndWait(agent, "t1", `CALL:mcp__fixture__echo:{"text":"hi"}`, "r2")); !strings.Contains(reply, "value: third") {
+		t.Fatalf("after changing the value, the tool saw: %q", reply)
+	}
+}

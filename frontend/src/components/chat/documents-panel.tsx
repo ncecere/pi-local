@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { errorMessage } from '~/api/client';
 import type { ChatDocumentRef } from '~/api/types';
 import { DocumentValue } from '~/components/chat/document-views';
+import { SidePanelPortal } from '~/components/layout/side-panel-slot';
 import { Dialog, DialogContent, DialogTitle } from '~/components/ui/dialog';
 import { FOCUS_RING } from '~/components/ui/focus-ring';
 import { useMediaQuery } from '~/hooks/use-media-query';
@@ -144,29 +145,31 @@ export function DocumentsPanel({
 
   if (side && !hidden)
     return (
-      <aside
-        aria-label="Conversation documents"
-        className="flex w-[20rem] shrink-0 flex-col border-l border-[var(--border-subtle)] bg-[var(--bg-app)]/40"
-      >
-        <div className="flex items-center gap-2 px-4 pb-1 pt-[4.5rem]">
-          <h2 className="flex-1 text-sm font-semibold text-[var(--text-primary)]">Documents</h2>
-          <button
-            type="button"
-            onClick={() => setHidden(true)}
-            aria-label="Hide documents"
-            title="Hide documents"
-            className={cn(
-              'rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-control)] hover:text-[var(--text-primary)]',
-              FOCUS_RING,
-            )}
-          >
-            <PanelRightClose className="size-4" aria-hidden="true" />
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-          <DocumentList agentId={agentId} threadId={threadId} documents={documents} />
-        </div>
-      </aside>
+      <SidePanelPortal>
+        <aside
+          aria-label="Conversation documents"
+          className="flex w-[20rem] shrink-0 flex-col border-l border-[var(--border-subtle)] bg-[var(--bg-app)]/40"
+        >
+          <div className="flex items-center gap-2 px-4 pb-1 pt-[4.5rem]">
+            <h2 className="flex-1 text-sm font-semibold text-[var(--text-primary)]">Documents</h2>
+            <button
+              type="button"
+              onClick={() => setHidden(true)}
+              aria-label="Hide documents"
+              title="Hide documents"
+              className={cn(
+                'rounded-lg p-1 text-[var(--text-muted)] hover:bg-[var(--bg-control)] hover:text-[var(--text-primary)]',
+                FOCUS_RING,
+              )}
+            >
+              <PanelRightClose className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+            <DocumentList agentId={agentId} threadId={threadId} documents={documents} />
+          </div>
+        </aside>
+      </SidePanelPortal>
     );
 
   if (side) return opener(() => setHidden(false), 'Show documents');

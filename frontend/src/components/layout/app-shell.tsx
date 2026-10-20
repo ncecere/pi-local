@@ -1,6 +1,7 @@
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { CommandPalette } from '~/components/command-palette/command-palette';
+import { SidePanelSlotContext } from '~/components/layout/side-panel-slot';
 import { Sidebar } from '~/components/layout/sidebar';
 import { SkipLink } from '~/components/layout/skip-link';
 import { TopBar } from '~/components/layout/top-bar';
@@ -97,6 +98,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     });
   }
 
+  const [sideSlot, setSideSlot] = useState<HTMLDivElement | null>(null);
+
   return (
     <>
       <GlobalShortcuts
@@ -117,26 +120,32 @@ export function AppShell({ children }: { children: ReactNode }) {
             onOpenSidebar={() => setSidebarOpen(true)}
             onOpenCommandPalette={commandPalette.show}
           />
-          <main className="flex min-h-0 flex-1 flex-col rounded-tl-xl bg-[var(--bg-root)] bg-[image:var(--root-gradient)]">
-            {/*
-             * The top bar's floating controls (absolute, top-6, about 2.6rem
-             * tall) get a strip of their own, always: the page scrolls below
-             * it rather than under them, where they hid a conversation's first
-             * lines (#166). Announcements sit below the strip, outside the
-             * scroller, so they are not lost when the conversation scrolls.
-             */}
-            <div
-              data-banners
-              className={cn('shrink-0', sidebarOpen ? 'pt-[3.25rem]' : 'pt-[4.25rem]')}
-            />
-            <div
-              id="main-content"
-              // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region needs keyboard access per WCAG 2.1.1, and this doubles as the skip-link target
-              tabIndex={0}
-              className="scrollbar-thin min-h-0 flex-1 overflow-y-auto"
-            >
-              {children}
+          <main className="flex min-h-0 flex-1 overflow-hidden rounded-tl-xl bg-[var(--bg-root)] bg-[image:var(--root-gradient)]">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {/*
+               * The top bar's floating controls (absolute, top-6, about 2.6rem
+               * tall) get a strip of their own, always: the page scrolls below
+               * it rather than under them, where they hid a conversation's first
+               * lines (#166). Announcements sit below the strip, outside the
+               * scroller, so they are not lost when the conversation scrolls.
+               */}
+              <div
+                data-banners
+                className={cn('shrink-0', sidebarOpen ? 'pt-[3.25rem]' : 'pt-[4.25rem]')}
+              />
+              <div
+                id="main-content"
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region needs keyboard access per WCAG 2.1.1, and this doubles as the skip-link target
+                tabIndex={0}
+                className="scrollbar-thin min-h-0 flex-1 overflow-y-auto"
+              >
+                <SidePanelSlotContext.Provider value={sideSlot}>
+                  {children}
+                </SidePanelSlotContext.Provider>
+              </div>
             </div>
+            {/* A page's side panel (a conversation's documents), full height: see SidePanelPortal. */}
+            <div ref={setSideSlot} data-side-panel-slot className="flex shrink-0 empty:hidden" />
           </main>
         </div>
 

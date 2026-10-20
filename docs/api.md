@@ -333,11 +333,12 @@ type McpServer = {
 |---|---|
 | `GET /api/mcp/servers` | `McpServer[]` |
 | `POST /api/mcp/servers` | Body `{slug?, name, description?, transport, command?, args?, cwd?, env?: Record<string,string>, url?, headers?: Record<string,string>, oauth?}` (slug defaults from the name). Tests it right away (`tools`/`lastError` filled in). `201 McpServer`. Errors: `invalid_slug`, `slug_taken`, `invalid_name`, `invalid_transport`, `invalid_command`, `invalid_url` (https, or http on this computer/network), `invalid_headers`, `invalid_env`. |
-| `PATCH /api/mcp/servers/{slug}` | The same fields (not slug); `env`/`headers` replace all values. `enabled?`. Answers `McpServer`. Agents using it restart. |
+| `PATCH /api/mcp/servers/{slug}` | The same fields (not slug); `env`/`headers` replace all values. `envSet?`/`headersSet?` (`{name: value}`) change or add some and `envRemove?`/`headersRemove?` (names) drop some, keeping the rest (after `env`/`headers`: remove, then set). `enabled?`. Answers `McpServer`. Agents using it restart. |
 | `DELETE /api/mcp/servers/{slug}` | `{ok: true}`; `409 in_use` with `details.agents` while agents use it. Its keychain items go too. |
 | `POST /api/mcp/servers/{slug}/test` | Connects (stdio: starts it) and lists its tools, at most 60 s: `McpServer` with `tools`/`testedAt` or `lastError`. An OAuth server that needs a sign-in says so in `lastError` (`needs_sign_in`). |
 | `POST /api/mcp/servers/{slug}/sign-in` | OAuth: starts a sign-in in the browser (the app opens it) and answers at once `{authorizeUrl}`; the outcome comes as an `mcp` live event (the server, `signedIn` and `tools` updated, or `lastError`). Up to 5 minutes. |
 | `POST /api/mcp/servers/{slug}/sign-out` | Forgets its OAuth tokens. `McpServer`. |
+| `POST /api/mcp/servers/{slug}/reveal` | `{kind: "env" \| "header", name}` → `{value}`: one stored value, for the edit dialog's Show. JSON only (415 otherwise), `Cache-Control: no-store`; 404 for a name that isn't set. |
 | `GET /api/mcp/import` | Servers found in other apps' configs: `{sources: [{id: "claude" \| "cursor" \| "vscode", path, servers: [{name, transport, command?, args?, url?, envNames: string[], exists: boolean}]}]}` (`exists`: a server with that slug is already here; `unsupported`: why it can't be imported), and `searched`: every path looked at. |
 | `POST /api/mcp/import` | Body `{source, names: string[]}`: adds those servers (with their env/header values), each tested. `{servers: McpServer[], skipped: [{name, reason}]}`. |
 
