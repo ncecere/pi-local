@@ -276,3 +276,82 @@ func TestOneEnvValueOrHeaderCanBeChangedShownOrRemoved(t *testing.T) {
 		t.Fatalf("after changing the value, the tool saw: %q", reply)
 	}
 }
+
+type loginJSON struct {
+	State    string `json:"state"`
+	Output   string `json:"output"`
+	ExitCode *int   `json:"exitCode"`
+}
+
+func TestALocalServersSignInCommand(t *testing.T) {
+	h := start(t, t.TempDir(), Config{})
+	defer h.close()
+	node, _ := exec.LookPath("node")
+	h.mustDo("POST", "/api/mcp/servers", map[string]any{
+		"name": "Fixture", "transport": "stdio", "command": node, "args": []string{fixture("stdio-mcp-server.mjs")},
+		"env": map[string]string{"FIXTURE_VALUE": "from-the-keychain"},
+		// Prints a link (in colour, as CLIs do), sees the server's env, and succeeds.
+		"loginArgs": []string{"-e", `console.log("\x1b[1mOpen https://login.example.test/device and enter ABCD-1234\x1b[0m"); console.error("value=" + process.env.FIXTURE_VALUE); setTimeout(() => process.exit(0), 300)`},
+	}, 201)
+	state := func() loginJSON {
+		return decodeInto[loginJSON](t, h.mustDo("GET", "/api/mcp/servers/fixture/login", nil, 200))
+	}
+	if st := state(); st.State != "idle" {
+		t.Fatalf("before: %+v", st)
+	}
+	events, cancel := h.app.Hub.Subscribe()
+	defer cancel()
+
+	if st := decodeInto[loginJSON](t, h.mustDo("POST", "/api/mcp/servers/fixture/login", nil, 202)); st.State != "running" {
+		t.Fatalf("started: %+v", st)
+	}
+	h.mustDo("POST", "/api/mcp/servers/fixture/login", nil, 409) // one at a time
+	var st loginJSON
+	eventually(t, 15*time.Second, "the sign-in to finish", func() bool { st = state(); return st.State != "running" })
+	if st.State != "succeeded" || st.ExitCode == nil || *st.ExitCode != 0 {
+		t.Fatalf("finished: %+v", st)
+	}
+	if !strings.Contains(st.Output, "Open https://login.example.test/device and enter ABCD-1234\n") || strings.Contains(st.Output, "\x1b") {
+		t.Fatalf("output (escape codes dropped): %q", st.Output)
+	}
+	if !strings.Contains(st.Output, "value=from-the-keychain") {
+		t.Fatalf("the sign-in should run with the server's env: %q", st.Output)
+	}
+	sawLogin := false
+	deadline := time.After(5 * time.Second)
+	for !sawLogin {
+		select {
+		case ev := <-events:
+			sawLogin = ev.Name == "mcp-login"
+		case <-deadline:
+			t.Fatal("no mcp-login event")
+		}
+	}
+
+	// A failing sign-in says so, with its exit code; a cancelled one stops.
+	h.mustDo("PATCH", "/api/mcp/servers/fixture", map[string]any{"loginArgs": []string{"-e", `console.error("AADSTS65001 consent needed"); process.exit(3)`}}, 200)
+	h.mustDo("POST", "/api/mcp/servers/fixture/login", nil, 202)
+	eventually(t, 15*time.Second, "the failure", func() bool { st = state(); return st.State != "running" })
+	if st.State != "failed" || *st.ExitCode != 3 || !strings.Contains(st.Output, "consent needed") {
+		t.Fatalf("failed: %+v", st)
+	}
+	h.mustDo("PATCH", "/api/mcp/servers/fixture", map[string]any{"loginArgs": []string{"-e", `console.log("waiting"); setTimeout(() => {}, 60000)`}}, 200)
+	h.mustDo("POST", "/api/mcp/servers/fixture/login", nil, 202)
+	eventually(t, 10*time.Second, "it to print", func() bool { return strings.Contains(state().Output, "waiting") })
+	h.mustDo("DELETE", "/api/mcp/servers/fixture/login", nil, 200)
+	eventually(t, 10*time.Second, "the cancel", func() bool { st = state(); return st.State != "running" })
+	if st.State != "cancelled" {
+		t.Fatalf("cancelled: %+v", st)
+	}
+
+	// Refused: per-agent placeholders, and a server without a sign-in command.
+	h.mustDo("PATCH", "/api/mcp/servers/fixture", map[string]any{"loginArgs": []string{"${workspace}/login"}}, 400)
+	h.mustDo("PATCH", "/api/mcp/servers/fixture", map[string]any{"loginArgs": []string{}}, 200)
+	h.mustDo("POST", "/api/mcp/servers/fixture/login", nil, 400)
+	list := decodeInto[[]struct {
+		LoginArgs []string `json:"loginArgs"`
+	}](t, h.mustDo("GET", "/api/mcp/servers", nil, 200))
+	if len(list) != 1 || list[0].LoginArgs == nil || len(list[0].LoginArgs) != 0 {
+		t.Fatalf("cleared: %+v", list)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,6 +35,7 @@ func (a *API) manageRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/agents/{agent}/export", a.withAgent(a.exportAgent))
 	m.HandleFunc("POST /api/agents/{agent}/export-save", a.withAgent(a.exportSave))
 	m.HandleFunc("POST /api/choose-folder", a.chooseFolder)
+	m.HandleFunc("POST /api/open-url", a.openURL)
 	m.HandleFunc("POST /api/agents/import", a.importAgent)
 	m.HandleFunc("GET /api/about", func(w http.ResponseWriter, r *http.Request) { ok(w, a.Manager.About()) })
 	m.HandleFunc("POST /api/reveal", a.reveal)
@@ -274,6 +276,34 @@ func (a *API) chooseFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, map[string]any{"path": path})
+}
+
+// openURL opens an http(s) page in the system browser (desktop app). 501 elsewhere: the browser opens links itself.
+func (a *API) openURL(w http.ResponseWriter, r *http.Request) {
+	if a.OpenURL == nil {
+		fail(w, http.StatusNotImplemented, "not_supported", "Links open in this browser.")
+		return
+	}
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		fail(w, http.StatusUnsupportedMediaType, "json_required", "Send JSON.")
+		return
+	}
+	var in struct {
+		URL string `json:"url"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	u, err := url.Parse(in.URL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || len(in.URL) > 8192 {
+		fail(w, http.StatusBadRequest, "invalid_url", "Only http and https pages open in the browser.")
+		return
+	}
+	if err := a.OpenURL(u.String()); err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "Could not open the browser: "+err.Error())
+		return
+	}
+	ok(w, map[string]bool{"ok": true})
 }
 
 const maxImportBytes = 1 << 30

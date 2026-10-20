@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { Globe, RefreshCw, Terminal, Trash2 } from 'lucide-react';
+import { Globe, LogIn, RefreshCw, Terminal, Trash2 } from 'lucide-react';
 import { type FormEvent, type ReactNode, useId, useState } from 'react';
 import { toast } from 'sonner';
 import { errorMessage, type McpServer, type McpTransport } from '~/api/client';
@@ -43,6 +43,8 @@ import {
   AGENT_DIR_VAR,
   envFromRows,
   formatArgs,
+  hasLoginCommand,
+  loginArgsProblem,
   MAX_SERVER_NAME,
   MAX_SLUG,
   mcpToolName,
@@ -71,6 +73,8 @@ interface FormState {
   command: string;
   /** One argument per line. */
   args: string;
+  /** Its own sign-in command's arguments, one per line. */
+  loginArgs: string;
   cwd: string;
   /** null: keep the stored values (editing). */
   envRows: SecretRow[] | null;
@@ -91,6 +95,7 @@ const EMPTY_FORM: FormState = {
   description: '',
   command: '',
   args: '',
+  loginArgs: '',
   cwd: '',
   envRows: [],
   url: '',
@@ -109,6 +114,7 @@ const formOf = (server: McpServer): FormState => ({
   description: server.description,
   command: server.command ?? '',
   args: formatArgs(server.args),
+  loginArgs: formatArgs(server.loginArgs ?? []),
   cwd: server.cwd ?? '',
   envRows: null,
   url: server.url ?? '',
@@ -129,6 +135,8 @@ function formProblem(form: FormState, server: McpServer | null): string | null {
   }
   if (form.transport === 'stdio') {
     if (!form.command.trim()) return 'Enter the command that starts it, such as npx.';
+    const login = loginArgsProblem(parseArgs(form.loginArgs));
+    if (login) return login;
     if (form.envRows) {
       const env = envFromRows(form.envRows);
       if (env.error !== undefined) return env.error;
@@ -308,6 +316,32 @@ function ServerFields({
               spellCheck={false}
               aria-describedby={`${id}-args-hint`}
               className={cn(FIELD, 'h-auto min-h-24 resize-y py-2 font-mono text-xs')}
+            />
+          </Field>
+          <Field
+            id={`${id}-login-args`}
+            label={
+              <>
+                Sign-in arguments <Optional />
+              </>
+            }
+            hint={
+              <>
+                If the server signs in with its own command (like{' '}
+                <span className="font-mono">m365-mcp login</span>), the arguments for that, one per
+                line. It runs with the same command and adds a Sign in button.
+              </>
+            }
+          >
+            <textarea
+              id={`${id}-login-args`}
+              rows={2}
+              value={form.loginArgs}
+              onChange={(event) => setForm({ loginArgs: event.target.value })}
+              placeholder="login"
+              spellCheck={false}
+              aria-describedby={`${id}-login-args-hint`}
+              className={cn(FIELD, 'h-auto min-h-16 resize-y py-2 font-mono text-xs')}
             />
           </Field>
           <Field
@@ -546,10 +580,13 @@ function PresetChips({
 export function AddServerDialog({
   onClose,
   onSignIn,
+  onLogin,
 }: {
   onClose: () => void;
   /** Start an OAuth sign-in for the new server (the page follows it). */
   onSignIn: (server: McpServer) => void;
+  /** Run the new server's own sign-in command (the page's sign-in dialog replaces this one). */
+  onLogin?: (server: McpServer) => void;
 }) {
   const create = useCreateMcpServer();
   const test = useTestMcpServer();
@@ -565,6 +602,7 @@ export function AddServerDialog({
       form.command !== '' ||
       form.url !== '' ||
       form.args !== '' ||
+      form.loginArgs !== '' ||
       preset !== null);
 
   const pick = (next: McpPreset) => {
@@ -597,11 +635,13 @@ export function AddServerDialog({
     if (form.transport === 'stdio') {
       const env = envFromRows(form.envRows ?? []);
       const args = parseArgs(form.args);
+      const loginArgs = parseArgs(form.loginArgs);
       body = {
         ...base,
         transport: 'stdio',
         command: form.command.trim(),
         ...(args.length > 0 ? { args } : {}),
+        ...(loginArgs.length > 0 ? { loginArgs } : {}),
         ...(form.cwd.trim() ? { cwd: form.cwd.trim() } : {}),
         ...(env.error === undefined && Object.keys(env.env).length > 0 ? { env: env.env } : {}),
       };
@@ -620,7 +660,10 @@ export function AddServerDialog({
     create.mutate(body, { onSuccess: setCreated });
   };
 
-  if (created)
+  if (created) {
+    const ownSignIn = onLogin !== undefined && hasLoginCommand(created);
+    // Its test likely failed for want of a sign-in: Sign in comes first.
+    const signInFirst = needsSignIn(created) || (ownSignIn && Boolean(created.lastError));
     return (
       <Dialog open onOpenChange={(open) => !open && onClose()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
@@ -662,17 +705,24 @@ export function AddServerDialog({
                 Sign in
               </Button>
             )}
-            <Button
-              type="button"
-              variant={needsSignIn(created) ? 'secondary' : 'primary'}
-              onClick={onClose}
-            >
+            {ownSignIn && (
+              <Button
+                type="button"
+                variant={signInFirst ? 'primary' : 'secondary'}
+                onClick={() => onLogin(created)}
+              >
+                <LogIn />
+                Sign in
+              </Button>
+            )}
+            <Button type="button" variant={signInFirst ? 'secondary' : 'primary'} onClick={onClose}>
               Done
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     );
+  }
 
   return (
     <Dialog open onOpenChange={(open) => !open && !create.isPending && onClose()}>
@@ -734,6 +784,9 @@ function changesOf(server: McpServer, form: FormState): McpServerChange {
     if (form.command.trim() !== (server.command ?? '')) body.command = form.command.trim();
     const args = parseArgs(form.args);
     if (JSON.stringify(args) !== JSON.stringify(server.args)) body.args = args;
+    const loginArgs = parseArgs(form.loginArgs);
+    if (JSON.stringify(loginArgs) !== JSON.stringify(server.loginArgs ?? []))
+      body.loginArgs = loginArgs;
     if (form.cwd.trim() !== (server.cwd ?? '')) body.cwd = form.cwd.trim();
     const added = envFromRows(form.envEdit.added);
     const envSet = {

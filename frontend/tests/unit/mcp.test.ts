@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import type { McpServer, McpTool } from '../../src/api/types';
+import type { McpLoginStatus, McpServer, McpTool } from '../../src/api/types';
 import {
   agentMcpTools,
+  applyLoginStatus,
   applyMcpEvent,
   approvalSuggestions,
   chooseServer,
   commandLine,
   envFromRows,
   formatArgs,
+  hasLoginCommand,
   importKey,
   importRequests,
+  linkParts,
+  loginArgsProblem,
   mcpServerPath,
   mcpToolName,
   parseArgs,
@@ -42,6 +46,7 @@ const server = (slug: string, extra: Partial<McpServer> = {}): McpServer => ({
   command: 'npx',
   args: [],
   cwd: null,
+  loginArgs: [],
   envNames: [],
   url: null,
   headerNames: [],
@@ -375,5 +380,66 @@ describe('MCP_PRESETS', () => {
     expect(byId.memory?.args).toContain('@modelcontextprotocol/server-memory');
     expect(byId.everything?.args).toContain('@modelcontextprotocol/server-everything');
     expect(WORKSPACE_VAR).toBe(['$', '{workspace}'].join(''));
+  });
+});
+
+describe('a server’s own sign-in command', () => {
+  it('has a Sign in button only for stdio with loginArgs', () => {
+    expect(hasLoginCommand(server('a', { loginArgs: ['login'] }))).toBe(true);
+    expect(hasLoginCommand(server('a', { loginArgs: [] }))).toBe(false);
+    expect(hasLoginCommand(server('a', { transport: 'http', loginArgs: ['login'] }))).toBe(false);
+  });
+
+  it('refuses the per-agent placeholders', () => {
+    expect(loginArgsProblem(['login'])).toBeNull();
+    expect(loginArgsProblem(['login', `--dir=${WORKSPACE_VAR}`])).toContain('can’t use');
+    expect(loginArgsProblem([`${'$'}{agentDir}/x`])).toContain('can’t use');
+  });
+
+  it('links the web addresses in output, without the punctuation after them', () => {
+    expect(linkParts('Open https://example.com/device, then enter ABC.')).toEqual([
+      { text: 'Open ' },
+      { text: 'https://example.com/device', url: 'https://example.com/device' },
+      { text: ', then enter ABC.' },
+    ]);
+    expect(linkParts('(see https://a.example/x?y=1).\nhttp://localhost:3000/cb')).toEqual([
+      { text: '(see ' },
+      { text: 'https://a.example/x?y=1', url: 'https://a.example/x?y=1' },
+      { text: ').\n' },
+      { text: 'http://localhost:3000/cb', url: 'http://localhost:3000/cb' },
+    ]);
+    expect(linkParts('https://en.wikipedia.org/wiki/Foo_(bar)')[0]?.url).toBe(
+      'https://en.wikipedia.org/wiki/Foo_(bar)',
+    );
+    expect(linkParts('no links, just https:// here')).toEqual([
+      { text: 'no links, just https:// here' },
+    ]);
+    expect(linkParts('')).toEqual([]);
+  });
+
+  it('keeps the newer status when answers and events cross', () => {
+    const status = (extra: Partial<McpLoginStatus>): McpLoginStatus => ({
+      slug: 'a',
+      state: 'running',
+      output: '',
+      exitCode: null,
+      startedAt: 10,
+      finishedAt: null,
+      ...extra,
+    });
+    const more = status({ output: 'abc' });
+    expect(applyLoginStatus(undefined, more)).toBe(more);
+    // Output only grows; an earlier burst arriving late is ignored.
+    expect(applyLoginStatus(more, status({ output: 'a' }))).toBe(more);
+    const done = status({ state: 'failed', exitCode: 1, finishedAt: 20 });
+    expect(applyLoginStatus(more, done)).toBe(done);
+    // The same run never goes back to running.
+    expect(applyLoginStatus(done, more)).toBe(done);
+    // An older run never replaces a newer one; a newer one always does.
+    const newer = status({ startedAt: 30 });
+    expect(applyLoginStatus(newer, done)).toBe(newer);
+    expect(applyLoginStatus(done, newer)).toBe(newer);
+    const idle = status({ state: 'idle', startedAt: null });
+    expect(applyLoginStatus(done, idle)).toBe(idle);
   });
 });

@@ -19,6 +19,9 @@ func (a *API) mcpRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/mcp/servers/{slug}/sign-in", a.signInMCP)
 	m.HandleFunc("POST /api/mcp/servers/{slug}/sign-out", a.signOutMCP)
 	m.HandleFunc("POST /api/mcp/servers/{slug}/reveal", a.revealMCP)
+	m.HandleFunc("POST /api/mcp/servers/{slug}/login", a.startMCPLogin)
+	m.HandleFunc("GET /api/mcp/servers/{slug}/login", a.mcpLogin)
+	m.HandleFunc("DELETE /api/mcp/servers/{slug}/login", a.cancelMCPLogin)
 	m.HandleFunc("GET /api/mcp/import", a.importSources)
 	m.HandleFunc("POST /api/mcp/import", a.importMCP)
 }
@@ -109,6 +112,35 @@ func (a *API) signOutMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, s)
+}
+
+// startMCPLogin runs a local server's sign-in command (202: it runs on; the `mcp-login` event follows it).
+func (a *API) startMCPLogin(w http.ResponseWriter, r *http.Request) {
+	st, err := a.MCP.Login(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		mcpFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"data": st})
+}
+
+func (a *API) mcpLogin(w http.ResponseWriter, r *http.Request) {
+	st, err := a.MCP.LoginState(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		mcpFailure(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	ok(w, st)
+}
+
+func (a *API) cancelMCPLogin(w http.ResponseWriter, r *http.Request) {
+	st, err := a.MCP.CancelLogin(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		mcpFailure(w, err)
+		return
+	}
+	ok(w, st)
 }
 
 // revealMCP shows one stored env value or header. POST with a JSON body, so a page elsewhere can't read it (a cross-origin

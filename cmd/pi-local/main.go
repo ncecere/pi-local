@@ -186,6 +186,7 @@ func main() {
 				}
 			}()
 		}
+		core.API.OpenURL = func(u string) error { return wails.Browser.OpenURL(u) }
 		core.API.FolderDialog = func(title string) (string, error) {
 			return wails.Dialog.OpenFile().SetTitle(title).CanChooseDirectories(true).CanChooseFiles(false).CanCreateDirectories(true).AttachToWindow(window).PromptForSingleSelection()
 		}

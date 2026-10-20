@@ -58,6 +58,8 @@ func (p *Prober) run(ctx context.Context, request map[string]any, onEvent func(p
 	var stderr strings.Builder
 	cmd.Stderr = &limitedWriter{b: &stderr, max: 16 << 10}
 	cmd.WaitDelay = 2 * time.Second
+	// Cancelled (a timeout, the app quitting): stop the server it started too, not only the probe.
+	ownGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return probeEvent{}, fmt.Errorf("could not run the probe: %w", err)
 	}

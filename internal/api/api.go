@@ -64,6 +64,9 @@ type API struct {
 	SaveDialog func(defaultName string) (string, error)
 	// FolderDialog asks for a folder (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
 	FolderDialog func(title string) (string, error)
+	// OpenURL opens a web page in the person's browser (the desktop app, whose web view can't open windows). Nil: the
+	// UI is in a browser already.
+	OpenURL func(url string) error
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
 	KeepAlive time.Duration
 

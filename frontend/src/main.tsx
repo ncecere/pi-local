@@ -4,6 +4,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Toaster } from 'sonner';
 import { DocumentBranding } from '~/components/brand/document-branding';
+import { installExternalLinks } from '~/lib/external-links';
 import { AppearanceSync } from '~/lib/prefs';
 import { ThemeProvider } from '~/providers/theme-provider';
 import { router } from '~/router';
@@ -17,6 +18,8 @@ const queryClient = new QueryClient({
 
 const container = document.getElementById('root');
 if (!container) throw new Error('Root element not found');
+
+installExternalLinks();
 
 createRoot(container).render(
   <StrictMode>

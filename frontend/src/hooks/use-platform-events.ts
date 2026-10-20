@@ -10,6 +10,7 @@ import type {
   Approval,
   ApprovalEvent,
   McpEvent,
+  McpLoginStatus,
   McpServer,
   Schedule,
   ScheduleEvent,
@@ -23,7 +24,7 @@ import { transport } from '~/api/transport';
 import { AGENTS_KEY, applyAgentEvent, threadsKey } from '~/hooks/use-agents';
 import { APPROVALS_KEY } from '~/hooks/use-approvals';
 import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
-import { MCP_SERVERS_KEY } from '~/hooks/use-mcp';
+import { MCP_LOGINS_KEY, MCP_SERVERS_KEY, putMcpLogin } from '~/hooks/use-mcp';
 import { SCHEDULES_KEY, scheduleRunsKey } from '~/hooks/use-schedules';
 import { TEAMS_KEY } from '~/hooks/use-teams';
 import { UPDATE_KEY } from '~/hooks/use-update';
@@ -50,6 +51,9 @@ import { applyTeamEvent } from '~/lib/teams';
  * - `mcp`: an MCP server added, changed, tested, signed in or out, or deleted.
  *   It updates the catalog (['mcp', 'servers']) in place: an OAuth sign-in's
  *   outcome arrives this way.
+ * - `mcp-login`: a local server's own sign-in command printed something, or
+ *   started or ended. It updates that server's ['mcp', 'login', slug] in place
+ *   (the sign-in dialog shows it).
  * - `schedule`: a schedule made, changed (paused, its next time) or deleted.
  *   It updates ['schedules'] in place.
  * - `schedule_run`: a scheduled run ended. Its schedule's last run (and its
@@ -96,6 +100,7 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({ queryKey: TEAMS_KEY });
       void queryClient.invalidateQueries({ queryKey: APPROVALS_KEY });
       void queryClient.invalidateQueries({ queryKey: MCP_SERVERS_KEY });
+      void queryClient.invalidateQueries({ queryKey: MCP_LOGINS_KEY });
       void queryClient.invalidateQueries({ queryKey: SCHEDULES_KEY });
       void queryClient.invalidateQueries({ queryKey: UPDATE_KEY });
       void queryClient.invalidateQueries({
@@ -178,6 +183,16 @@ export function usePlatformEvents() {
       queryClient.setQueryData<McpServer[]>(MCP_SERVERS_KEY, (list) =>
         applyMcpEvent(list, event.slug, event.deleted ? null : event.server),
       );
+    });
+    source.on('mcp-login', (data) => {
+      let status: McpLoginStatus;
+      try {
+        status = JSON.parse(data) as McpLoginStatus;
+      } catch {
+        return;
+      }
+      if (status && typeof status === 'object' && typeof status.slug === 'string')
+        putMcpLogin(queryClient, status);
     });
     source.on('schedule', (data) => {
       let event: ScheduleEvent;

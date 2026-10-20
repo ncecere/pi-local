@@ -23,6 +23,7 @@ function server(overrides: Partial<McpServer> = {}): McpServer {
     command: 'node',
     args: ['main.ts'],
     cwd: null,
+    loginArgs: [],
     envNames: ['TDX_ALLOW_TICKET_UPDATES', 'TDX_TOKEN'],
     url: null,
     headerNames: [],

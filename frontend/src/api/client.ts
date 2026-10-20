@@ -44,6 +44,7 @@ export type {
   McpImportServer,
   McpImportSource,
   McpImportSourceId,
+  McpLoginStatus,
   McpServer,
   McpTool,
   McpTransport,

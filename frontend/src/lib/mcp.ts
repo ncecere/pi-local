@@ -1,4 +1,11 @@
-import type { Agent, AgentMcpServer, McpImportSourceId, McpServer, McpTool } from '~/api/types';
+import type {
+  Agent,
+  AgentMcpServer,
+  McpImportSourceId,
+  McpLoginStatus,
+  McpServer,
+  McpTool,
+} from '~/api/types';
 
 /**
  * MCP servers (docs/api.md, Phase 5): the pure parts of the catalog page, the
@@ -241,6 +248,74 @@ export function signInOutcome(
   )
     return 'failed';
   return 'waiting';
+}
+
+// ── A local server's own sign-in command ───────────────────────────────────────────────────
+
+/** A stdio server that signs in with its own command (`loginArgs`): it gets a Sign in button. */
+export const hasLoginCommand = (server: Pick<McpServer, 'transport' | 'loginArgs'>) =>
+  server.transport === 'stdio' && (server.loginArgs?.length ?? 0) > 0;
+
+/** Why sign-in arguments can't be used, or null (the backend refuses the placeholders too). */
+export function loginArgsProblem(args: readonly string[]): string | null {
+  if (args.some((arg) => arg.includes(WORKSPACE_VAR) || arg.includes(AGENT_DIR_VAR)))
+    return `Sign-in arguments can’t use ${WORKSPACE_VAR} or ${AGENT_DIR_VAR}: the sign-in runs once, not for each agent.`;
+  return null;
+}
+
+/**
+ * A sign-in run's status, kept when an answer or event arrives out of order: an
+ * older run never replaces a newer one, and the same run never goes back to
+ * running nor loses output it had (its output only grows, until it is cut to
+ * the last 16 KiB).
+ */
+export function applyLoginStatus(
+  before: McpLoginStatus | undefined,
+  next: McpLoginStatus,
+): McpLoginStatus {
+  if (!before || before.slug !== next.slug || next.startedAt === null) return next;
+  if (before.startedAt === null || next.startedAt > before.startedAt) return next;
+  if (next.startedAt < before.startedAt) return before;
+  if (before.state !== 'running' && next.state === 'running') return before;
+  if (
+    before.state === 'running' &&
+    next.state === 'running' &&
+    next.output.length < before.output.length
+  )
+    return before;
+  return next;
+}
+
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'`]+/g;
+
+/**
+ * Text cut into plain parts and web addresses (http and https), for a
+ * command's output with its links clickable. Punctuation ending a sentence
+ * after an address, or a bracket that closes around it, is not part of it.
+ */
+export function linkParts(text: string): { text: string; url?: string }[] {
+  const parts: { text: string; url?: string }[] = [];
+  let last = 0;
+  for (const match of text.matchAll(URL_IN_TEXT)) {
+    let url = match[0];
+    for (;;) {
+      const end = url.at(-1) ?? '';
+      if (/[.,;:!?]/.test(end)) url = url.slice(0, -1);
+      else if (
+        (end === ')' && !url.includes('(')) ||
+        (end === ']' && !url.includes('[')) ||
+        end === '}'
+      )
+        url = url.slice(0, -1);
+      else break;
+    }
+    if (!/^https?:\/\/[^/?#]/.test(url)) continue;
+    if (match.index > last) parts.push({ text: text.slice(last, match.index) });
+    parts.push({ text: url, url });
+    last = match.index + url.length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
 }
 
 // ── An agent's servers ──────────────────────────────────────────────────────────────────────

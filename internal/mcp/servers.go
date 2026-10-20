@@ -39,13 +39,15 @@ type Ref struct {
 
 // Server is a server as the UI sees it.
 type Server struct {
-	Slug         string    `json:"slug"`
-	Name         string    `json:"name"`
-	Description  string    `json:"description"`
-	Transport    string    `json:"transport"`
-	Command      *string   `json:"command"`
-	Args         []string  `json:"args"`
-	Cwd          *string   `json:"cwd"`
+	Slug        string   `json:"slug"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Transport   string   `json:"transport"`
+	Command     *string  `json:"command"`
+	Args        []string `json:"args"`
+	Cwd         *string  `json:"cwd"`
+	// LoginArgs: a stdio server's own sign-in command (its command with these arguments); empty: none.
+	LoginArgs    []string  `json:"loginArgs"`
 	EnvNames     []string  `json:"envNames"`
 	URL          *string   `json:"url"`
 	HeaderNames  []string  `json:"headerNames"`
@@ -71,6 +73,7 @@ type Input struct {
 	Transport   *string            `json:"transport"`
 	Command     *string            `json:"command"`
 	Args        *[]string          `json:"args"`
+	LoginArgs   *[]string          `json:"loginArgs"`
 	Cwd         *string            `json:"cwd"`
 	Env         *map[string]string `json:"env"`
 	URL         *string            `json:"url"`
@@ -115,11 +118,16 @@ type Catalog struct {
 	oauthMu  sync.Map // slug → *sync.Mutex: OAuth state saves one at a time per server
 	prober   *Prober
 	signings sync.Map // slug → struct{}: a sign-in in progress
+	logins   sync.Map // slug → *loginRun: a stdio server's sign-in command, running or the last one
+	loginsWG sync.WaitGroup
+	closed   chan struct{}
+	// OnLogin is told how a sign-in command is doing (its output as it comes, and when it ends).
+	OnLogin func(LoginStatus)
 }
 
 // New makes the catalog.
 func New(db *sql.DB, store secrets.Store) *Catalog {
-	return &Catalog{db: db, secrets: store, UsedBy: func(string) []Ref { return nil }, OnChange: func(string, *Server) {}}
+	return &Catalog{db: db, secrets: store, UsedBy: func(string) []Ref { return nil }, OnChange: func(string, *Server) {}, OnLogin: func(LoginStatus) {}, closed: make(chan struct{})}
 }
 
 // SetProber gives the catalog a way to test servers.
@@ -225,7 +233,7 @@ func jsonOf(v any) string {
 	return string(raw)
 }
 
-const cols = `slug, name, description, transport, command, args, cwd, env_names, url, header_names, oauth, oauth_redirect_url, enabled, tools, tested_at, last_error, imported_from, created_at, updated_at`
+const cols = `slug, name, description, transport, command, args, cwd, env_names, url, header_names, oauth, oauth_redirect_url, enabled, tools, tested_at, last_error, imported_from, created_at, updated_at, login_args`
 
 func (c *Catalog) scan(row interface{ Scan(...any) error }) (*Server, error) {
 	var s Server
@@ -234,7 +242,8 @@ func (c *Catalog) scan(row interface{ Scan(...any) error }) (*Server, error) {
 	var oauth, enabled int
 	var tested sql.NullInt64
 	var created, updated int64
-	if err := row.Scan(&s.Slug, &s.Name, &s.Description, &s.Transport, &command, &args, &cwd, &envNames, &url, &headerNames, &oauth, &redirect, &enabled, &tools, &tested, &lastErr, &imported, &created, &updated); err != nil {
+	var loginArgs sql.NullString
+	if err := row.Scan(&s.Slug, &s.Name, &s.Description, &s.Transport, &command, &args, &cwd, &envNames, &url, &headerNames, &oauth, &redirect, &enabled, &tools, &tested, &lastErr, &imported, &created, &updated, &loginArgs); err != nil {
 		return nil, err
 	}
 	str := func(n sql.NullString) *string {
@@ -250,7 +259,10 @@ func (c *Catalog) scan(row interface{ Scan(...any) error }) (*Server, error) {
 	json.Unmarshal([]byte(envNames), &s.EnvNames)
 	json.Unmarshal([]byte(headerNames), &s.HeaderNames)
 	json.Unmarshal([]byte(tools), &s.Tools)
-	for _, p := range []*[]string{&s.Args, &s.EnvNames, &s.HeaderNames} {
+	if loginArgs.Valid {
+		json.Unmarshal([]byte(loginArgs.String), &s.LoginArgs)
+	}
+	for _, p := range []*[]string{&s.Args, &s.EnvNames, &s.HeaderNames, &s.LoginArgs} {
 		if *p == nil {
 			*p = []string{}
 		}
@@ -417,6 +429,17 @@ func (c *Catalog) validate(d *draft) error {
 				return bad("invalid_command", "An argument is too long.")
 			}
 		}
+		if len(d.LoginArgs) > 100 {
+			return bad("invalid_command", "At most 100 sign-in arguments.")
+		}
+		for _, a := range d.LoginArgs {
+			if len(a) > 4096 || strings.ContainsRune(a, 0) {
+				return bad("invalid_command", "A sign-in argument is too long.")
+			}
+			if strings.Contains(a, "${workspace}") || strings.Contains(a, "${agentDir}") {
+				return bad("invalid_command", "The sign-in command runs once for everyone, not per agent: it can't use ${workspace} or ${agentDir}.")
+			}
+		}
 		if err := checkEnv(d.env); err != nil {
 			return err
 		}
@@ -433,7 +456,7 @@ func (c *Catalog) validate(d *draft) error {
 		if err := checkHeaders(d.headers); err != nil {
 			return err
 		}
-		d.Command, d.Args, d.Cwd, d.env = nil, []string{}, nil, nil
+		d.Command, d.Args, d.Cwd, d.env, d.LoginArgs = nil, []string{}, nil, nil, []string{}
 	default:
 		return bad("invalid_transport", "A server is stdio (a program on this computer) or http (a remote server).")
 	}
@@ -455,6 +478,9 @@ func (in Input) apply(d *draft) {
 	}
 	if in.Args != nil {
 		d.Args = *in.Args
+	}
+	if in.LoginArgs != nil {
+		d.LoginArgs = *in.LoginArgs
 	}
 	if in.Cwd != nil {
 		if strings.TrimSpace(*in.Cwd) == "" {
@@ -525,10 +551,10 @@ func (c *Catalog) Create(ctx context.Context, in Input, importedFrom string) (*S
 	if importedFrom != "" {
 		imported = importedFrom
 	}
-	_, err := c.db.ExecContext(ctx, `INSERT INTO mcp_servers (slug, name, description, transport, command, args, cwd, env_names, url, header_names, oauth, enabled, imported_from, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+	_, err := c.db.ExecContext(ctx, `INSERT INTO mcp_servers (slug, name, description, transport, command, args, cwd, env_names, url, header_names, oauth, enabled, imported_from, created_at, updated_at, login_args)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
 		slug, d.Name, d.Description, d.Transport, nullable(d.Command), jsonOf(d.Args), nullable(d.Cwd), jsonOf(names(d.env)),
-		nullable(d.URL), jsonOf(names(d.headers)), boolInt(d.OAuth), imported, now, now)
+		nullable(d.URL), jsonOf(names(d.headers)), boolInt(d.OAuth), imported, now, now, jsonOf(d.LoginArgs))
 	c.mu.Unlock()
 	if err != nil {
 		c.secrets.Delete(envKey(slug))
@@ -585,9 +611,9 @@ func (c *Catalog) Update(ctx context.Context, slug string, in Input) (*Server, e
 	// What connects to the server changed: what the last test found may not hold any more (tools stay until the
 	// next test, which runs below).
 	connection := in.Command != nil || in.Args != nil || in.Cwd != nil || in.Env != nil || in.envPatched() || in.URL != nil || in.Headers != nil || in.headersPatched() || in.OAuth != nil || in.Transport != nil
-	_, err = c.db.ExecContext(ctx, `UPDATE mcp_servers SET name = ?, description = ?, transport = ?, command = ?, args = ?, cwd = ?, env_names = ?, url = ?, header_names = ?, oauth = ?, enabled = ?, updated_at = ? WHERE slug = ?`,
+	_, err = c.db.ExecContext(ctx, `UPDATE mcp_servers SET name = ?, description = ?, transport = ?, command = ?, args = ?, cwd = ?, env_names = ?, url = ?, header_names = ?, oauth = ?, enabled = ?, updated_at = ?, login_args = ? WHERE slug = ?`,
 		d.Name, d.Description, d.Transport, nullable(d.Command), jsonOf(d.Args), nullable(d.Cwd), jsonOf(names(d.env)),
-		nullable(d.URL), jsonOf(names(d.headers)), boolInt(d.OAuth), boolInt(d.Enabled), time.Now().UnixMilli(), slug)
+		nullable(d.URL), jsonOf(names(d.headers)), boolInt(d.OAuth), boolInt(d.Enabled), time.Now().UnixMilli(), jsonOf(d.LoginArgs), slug)
 	c.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -619,6 +645,7 @@ func (c *Catalog) Delete(ctx context.Context, slug string) error {
 	c.secrets.Delete(envKey(slug))
 	c.secrets.Delete(headersKey(slug))
 	c.secrets.Delete(oauthKey(slug))
+	c.forgetLogin(slug)
 	c.OnChange(slug, nil)
 	return nil
 }

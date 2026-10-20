@@ -371,6 +371,11 @@ export interface McpServer {
   args: string[];
   /** stdio; null: ${workspace}. */
   cwd: string | null;
+  /**
+   * stdio: the arguments of its own sign-in command (`command` with these, its env and cwd),
+   * such as `["login"]`; empty: none. No ${workspace} or ${agentDir}: it runs once, not per agent.
+   */
+  loginArgs: string[];
   /** stdio: environment variables; their values are secret. */
   envNames: string[];
   /** http: the Streamable HTTP endpoint. */
@@ -393,6 +398,23 @@ export interface McpServer {
   importedFrom: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A stdio server's own sign-in command, running or the last one
+ * (`GET /api/mcp/servers/{slug}/login`, and the `mcp-login` live event).
+ */
+export interface McpLoginStatus {
+  slug: string;
+  /** idle: it never ran (since the app started). */
+  state: 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  /** stdout and stderr together, ANSI codes stripped: the last 16 KiB. */
+  output: string;
+  exitCode: number | null;
+  /** Unix ms. */
+  startedAt: number | null;
+  /** Unix ms. */
+  finishedAt: number | null;
 }
 
 /** `GET /api/events` `mcp` event. */

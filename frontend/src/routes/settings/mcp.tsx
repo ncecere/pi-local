@@ -14,6 +14,7 @@ import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { errorMessage, type McpServer } from '~/api/client';
 import { ImportDialog } from '~/components/mcp/import-dialog';
+import { McpLoginDialog } from '~/components/mcp/login-dialog';
 import { McpStatusBadge, McpTestResult } from '~/components/mcp/server-bits';
 import {
   AddServerDialog,
@@ -35,6 +36,7 @@ import {
 import { usePageTitle } from '~/lib/document-title';
 import {
   commandLine,
+  hasLoginCommand,
   importSourceName,
   needsSignIn,
   serverStatus,
@@ -79,6 +81,13 @@ function ServerDetails({ server }: { server: McpServer }) {
               {commandLine(server.command, server.args)}
             </span>
           </Detail>
+          {hasLoginCommand(server) && (
+            <Detail label="Sign-in command">
+              <span className="whitespace-pre-wrap break-all font-mono">
+                {commandLine(server.command, server.loginArgs)}
+              </span>
+            </Detail>
+          )}
           <Detail label="Working directory">
             <span className="break-all font-mono">{server.cwd || WORKSPACE_VAR}</span>
           </Detail>
@@ -172,6 +181,7 @@ function ServerCard({
   signIn,
   onSignIn,
   onCancelSignIn,
+  onLogin,
   onEdit,
   onDelete,
 }: {
@@ -181,6 +191,8 @@ function ServerCard({
   signIn: SignIn | undefined;
   onSignIn: () => void;
   onCancelSignIn: () => void;
+  /** Run its own sign-in command (a stdio server with `loginArgs`). */
+  onLogin: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -333,6 +345,12 @@ function ServerCard({
                 <RefreshCw />
                 Test
               </Button>
+              {hasLoginCommand(server) && (
+                <Button type="button" variant="secondary" size="sm" onClick={onLogin}>
+                  <LogIn />
+                  Sign in
+                </Button>
+              )}
               {server.transport === 'http' && server.oauth && (
                 <>
                   {(needsSignIn(server) || !server.signedIn) && (
@@ -400,7 +418,8 @@ type Open =
   | { kind: 'add' }
   | { kind: 'import' }
   | { kind: 'edit'; slug: string }
-  | { kind: 'delete'; slug: string };
+  | { kind: 'delete'; slug: string }
+  | { kind: 'login'; slug: string };
 
 /**
  * Settings → MCP: the catalog of MCP servers agents may use (docs/api.md,
@@ -523,6 +542,7 @@ export function SettingsMcpPage() {
                 signIn={signIns[server.slug]}
                 onSignIn={() => signIn(server)}
                 onCancelSignIn={() => stopWaiting(server.slug)}
+                onLogin={() => setOpen({ kind: 'login', slug: server.slug })}
                 onEdit={() => setOpen({ kind: 'edit', slug: server.slug })}
                 onDelete={() => setOpen({ kind: 'delete', slug: server.slug })}
               />
@@ -551,6 +571,10 @@ export function SettingsMcpPage() {
           onSignIn={(server) => {
             signIn(server);
           }}
+          onLogin={(server) => {
+            setOpenCard(server.slug, true);
+            setOpen({ kind: 'login', slug: server.slug });
+          }}
         />
       )}
       {open?.kind === 'import' && <ImportDialog onClose={close} />}
@@ -558,6 +582,7 @@ export function SettingsMcpPage() {
       {open?.kind === 'delete' && current && (
         <DeleteServerDialog server={current} onClose={close} />
       )}
+      {open?.kind === 'login' && current && <McpLoginDialog server={current} onClose={close} />}
     </>
   );
 }

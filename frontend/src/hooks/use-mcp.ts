@@ -1,19 +1,24 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ApiError,
   api,
   errorMessage,
   type McpImportList,
   type McpImportResult,
   type McpImportSourceId,
+  type McpLoginStatus,
   type McpServer,
   type McpTransport,
 } from '~/api/client';
 import { AGENTS_KEY } from '~/hooks/use-agents';
-import { applyMcpEvent, mcpServerPath } from '~/lib/mcp';
+import { applyLoginStatus, applyMcpEvent, mcpServerPath } from '~/lib/mcp';
 
 /** The catalog of MCP servers; the `mcp` live event keeps it current. */
 export const MCP_SERVERS_KEY = ['mcp', 'servers'] as const;
 export const MCP_IMPORT_KEY = ['mcp', 'import'] as const;
+/** Every server's sign-in command status; the `mcp-login` live event keeps them current. */
+export const MCP_LOGINS_KEY = ['mcp', 'login'] as const;
+export const mcpLoginKey = (slug: string) => [...MCP_LOGINS_KEY, slug] as const;
 
 export function useMcpServers(enabled = true) {
   return useQuery({
@@ -59,6 +64,8 @@ export interface NewMcpServer {
   transport: McpTransport;
   command?: string;
   args?: string[];
+  /** stdio: its own sign-in command's arguments. */
+  loginArgs?: string[];
   cwd?: string;
   env?: Record<string, string>;
   url?: string;
@@ -76,6 +83,8 @@ export interface McpServerChange {
   description?: string;
   command?: string;
   args?: string[];
+  /** []: no sign-in command. */
+  loginArgs?: string[];
   /** "" or null: the default (${workspace}). */
   cwd?: string | null;
   /** Replaces every value. */
@@ -126,6 +135,58 @@ export function useSignInMcpServer() {
 
 export const useSignOutMcpServer = () =>
   useServerMutation((slug: string) => api.post<McpServer>(mcpServerPath(slug, '/sign-out')));
+
+/** A sign-in status put in its query, unless what is there is newer (answers and events can cross). */
+export function putMcpLogin(queryClient: QueryClient, status: McpLoginStatus) {
+  queryClient.setQueryData<McpLoginStatus>(mcpLoginKey(status.slug), (before) =>
+    applyLoginStatus(before, status),
+  );
+}
+
+/**
+ * A stdio server's own sign-in command: the one running, or the last one
+ * (`state: "idle"`: none yet). The `mcp-login` live event keeps it current.
+ */
+export function useMcpLogin(slug: string, enabled = true) {
+  return useQuery({
+    queryKey: mcpLoginKey(slug),
+    queryFn: () => api.get<McpLoginStatus>(mcpServerPath(slug, '/login')),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** `409 login_running`: one is running already (its status is read again). */
+export const isLoginRunning = (error: unknown) =>
+  error instanceof ApiError && error.code === 'login_running';
+
+/**
+ * Runs the server's sign-in command. It answers at once (202); its output and
+ * outcome come as `mcp-login` live events, and after a success the backend
+ * tests the server again (an `mcp` event).
+ */
+export function useStartMcpLogin() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) => api.post<McpLoginStatus>(mcpServerPath(slug, '/login')),
+    onSuccess: (status) => putMcpLogin(queryClient, status),
+    onError: (error, slug) => {
+      if (isLoginRunning(error))
+        void queryClient.invalidateQueries({ queryKey: mcpLoginKey(slug) });
+    },
+  });
+}
+
+/** Stops the sign-in command that is running. */
+export function useCancelMcpLogin() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) => api.delete<McpLoginStatus>(mcpServerPath(slug, '/login')),
+    onSuccess: (status) => putMcpLogin(queryClient, status),
+    // It may have ended meanwhile: read what it came to.
+    onError: (_error, slug) => queryClient.invalidateQueries({ queryKey: mcpLoginKey(slug) }),
+  });
+}
 
 /** Servers found in other apps' configs. Read fresh each time it is asked for. */
 export function useMcpImportList(enabled: boolean) {

@@ -186,6 +186,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return out
 	}
 	a.MCP.OnChange = a.mcpChanged
+	a.MCP.OnLogin = func(st mcp.LoginStatus) { a.Hub.Publish("mcp-login", st) }
 	a.Search = search.New(db)
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
@@ -684,6 +685,9 @@ func (a *App) Close() {
 	}
 	if a.Schedules != nil {
 		a.Schedules.Close()
+	}
+	if a.MCP != nil {
+		a.MCP.Close()
 	}
 	if a.Sup != nil {
 		a.Sup.Close()
