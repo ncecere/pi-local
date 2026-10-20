@@ -1,0 +1,1571 @@
+{
+  "dev-build+vite-devserver": {
+    "frontend": {
+      "env": {
+        "finishedAt": "2026-10-20T13:36:39.446Z",
+        "href": "wails://localhost:9245/",
+        "isSecureContext": true,
+        "origin": "wails://localhost:9245",
+        "startedAt": "2026-10-20T13:35:40.657Z",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) wails.io"
+      },
+      "tests": {
+        "cancel-eventsource-close": {
+          "received": 4,
+          "server": {
+            "cancelledAfterMs": 1200,
+            "client": "es-cancel",
+            "completedNormally": false,
+            "ctxCancelled": true,
+            "eventsSent": 4,
+            "flushEnabled": true,
+            "id": "escancel-nt202i",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "why": "closed-by-client"
+        },
+        "cancel-fetch-abortcontroller": {
+          "received": 4,
+          "server": {
+            "cancelledAfterMs": 1201,
+            "client": "fetch-abort",
+            "completedNormally": false,
+            "ctxCancelled": true,
+            "eventsSent": 4,
+            "flushEnabled": true,
+            "id": "abort-tat0tk",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "why": "AbortError: Fetch is aborted"
+        },
+        "cancel-fetch-reader-cancel": {
+          "received": 4,
+          "server": {
+            "cancelledAfterMs": 1202,
+            "client": "reader-cancel",
+            "completedNormally": false,
+            "ctxCancelled": true,
+            "eventsSent": 4,
+            "flushEnabled": true,
+            "id": "rcancel-popkjb",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "why": "eof"
+        },
+        "concurrency-6-streams-plus-ping": {
+          "pingDuringStreamsMs": 1,
+          "streams": [
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 0,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 0,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 1
+            }
+          ]
+        },
+        "echo-1MB": {
+          "bytes": 1048586,
+          "ms": 8,
+          "roundTripEqual": true,
+          "status": 200
+        },
+        "echo-blob-body": {
+          "error": "SyntaxError: The string did not match the expected pattern."
+        },
+        "echo-body-variants": {
+          "arrayBuffer": {
+            "bytesReceivedByGo": 30,
+            "status": 200
+          },
+          "blob": {
+            "bytesReceivedByGo": 0,
+            "status": 200
+          },
+          "formData": {
+            "bytesReceivedByGo": 162,
+            "status": 200
+          },
+          "string": {
+            "bytesReceivedByGo": 30,
+            "status": 200
+          },
+          "uint8array": {
+            "bytesReceivedByGo": 30,
+            "status": 200
+          },
+          "urlSearchParams": {
+            "bytesReceivedByGo": 62,
+            "status": 200
+          }
+        },
+        "echo-small": {
+          "bytes": 72,
+          "roundTripEqual": true,
+          "status": 200
+        },
+        "loopback": {
+          "base": "http://127.0.0.1:57110",
+          "eventSourceCors": {
+            "arrivalSpanMs": 2750,
+            "bursts": 12,
+            "count": 12,
+            "errors": [],
+            "firstArrivalAfterOpenMs": 254,
+            "incremental": true,
+            "latencyMs": {
+              "max": 2,
+              "mean": 1,
+              "min": 0,
+              "p50": 1,
+              "p95": 2
+            },
+            "openedAfterMs": 2,
+            "readyState": 2,
+            "sample": [
+              {
+                "n": 1,
+                "recv": 1792503393689,
+                "t": 1792503393688
+              },
+              {
+                "n": 2,
+                "recv": 1792503393940,
+                "t": 1792503393938
+              },
+              {
+                "n": 3,
+                "recv": 1792503394189,
+                "t": 1792503394188
+              },
+              {
+                "n": 11,
+                "recv": 1792503396188,
+                "t": 1792503396187
+              },
+              {
+                "n": 12,
+                "recv": 1792503396439,
+                "t": 1792503396438
+              }
+            ],
+            "serverSpanMs": 2750,
+            "why": "done"
+          },
+          "fetchStreamCors": {
+            "arrivalSpanMs": 2754,
+            "bursts": 12,
+            "chunkCount": 13,
+            "contentType": "text/event-stream",
+            "count": 12,
+            "firstArrivalAfterOpenMs": 251,
+            "firstChunks": [
+              {
+                "atMs": 1,
+                "bytes": 8
+              },
+              {
+                "atMs": 251,
+                "bytes": 45
+              },
+              {
+                "atMs": 502,
+                "bytes": 45
+              },
+              {
+                "atMs": 752,
+                "bytes": 45
+              },
+              {
+                "atMs": 1003,
+                "bytes": 45
+              }
+            ],
+            "headersAfterMs": 1,
+            "incremental": true,
+            "lastChunks": [
+              {
+                "atMs": 2502,
+                "bytes": 46
+              },
+              {
+                "atMs": 2753,
+                "bytes": 46
+              },
+              {
+                "atMs": 3005,
+                "bytes": 68
+              }
+            ],
+            "latencyMs": {
+              "max": 3,
+              "mean": 0.83,
+              "min": 0,
+              "p50": 1,
+              "p95": 3
+            },
+            "sample": [
+              {
+                "n": 1,
+                "recv": 1792503396690,
+                "t": 1792503396690
+              },
+              {
+                "n": 2,
+                "recv": 1792503396941,
+                "t": 1792503396940
+              },
+              {
+                "n": 3,
+                "recv": 1792503397191,
+                "t": 1792503397191
+              },
+              {
+                "n": 11,
+                "recv": 1792503399192,
+                "t": 1792503399191
+              },
+              {
+                "n": 12,
+                "recv": 1792503399444,
+                "t": 1792503399441
+              }
+            ],
+            "serverSpanMs": 2751,
+            "status": 200,
+            "why": "eof"
+          },
+          "noCors": {
+            "error": "TypeError: Load failed",
+            "ok": false
+          },
+          "serverSeen": [
+            "GET /ping origin=\"wails://localhost:9245\"",
+            "GET /ping-cors origin=\"wails://localhost:9245\"",
+            "GET /stream-cors origin=\"wails://localhost:9245\"",
+            "GET /stream-cors origin=\"wails://localhost:9245\""
+          ],
+          "withCors": {
+            "body": {
+              "cors": true,
+              "ok": true
+            },
+            "ok": true,
+            "status": 200
+          }
+        },
+        "ping": {
+          "body": {
+            "host": "localhost:9245",
+            "mode": "dev-build",
+            "ok": true,
+            "origin": "",
+            "t": 1792503340657
+          },
+          "rttMs": 67,
+          "status": 200
+        },
+        "sse-eventsource-10s": {
+          "arrivalSpanMs": 9751,
+          "bursts": 40,
+          "count": 40,
+          "errors": [],
+          "firstArrivalAfterOpenMs": 251,
+          "incremental": true,
+          "latencyMs": {
+            "max": 1,
+            "mean": 0.1,
+            "min": 0,
+            "p50": 0,
+            "p95": 1
+          },
+          "openedAfterMs": 1,
+          "readyState": 2,
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503340988,
+              "t": 1792503340988
+            },
+            {
+              "n": 2,
+              "recv": 1792503341238,
+              "t": 1792503341238
+            },
+            {
+              "n": 3,
+              "recv": 1792503341489,
+              "t": 1792503341489
+            },
+            {
+              "n": 39,
+              "recv": 1792503350489,
+              "t": 1792503350489
+            },
+            {
+              "n": 40,
+              "recv": 1792503350739,
+              "t": 1792503350739
+            }
+          ],
+          "server": {
+            "client": "eventsource",
+            "completedNormally": true,
+            "ctxCancelled": false,
+            "eventsSent": 40,
+            "flushEnabled": true,
+            "id": "es-sk3wnl",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "serverSpanMs": 9751,
+          "why": "done"
+        },
+        "sse-fetch-reader-10s": {
+          "arrivalSpanMs": 9750,
+          "bursts": 40,
+          "chunkCount": 42,
+          "contentType": "text/event-stream",
+          "count": 40,
+          "firstArrivalAfterOpenMs": 252,
+          "firstChunks": [
+            {
+              "atMs": 2,
+              "bytes": 22
+            },
+            {
+              "atMs": 252,
+              "bytes": 45
+            },
+            {
+              "atMs": 502,
+              "bytes": 45
+            },
+            {
+              "atMs": 752,
+              "bytes": 45
+            },
+            {
+              "atMs": 1002,
+              "bytes": 58
+            }
+          ],
+          "headersAfterMs": 2,
+          "incremental": true,
+          "lastChunks": [
+            {
+              "atMs": 9752,
+              "bytes": 46
+            },
+            {
+              "atMs": 10002,
+              "bytes": 59
+            },
+            {
+              "atMs": 10003,
+              "bytes": 22
+            }
+          ],
+          "latencyMs": {
+            "max": 3,
+            "mean": 0.42,
+            "min": 0,
+            "p50": 0,
+            "p95": 1
+          },
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503350998,
+              "t": 1792503350998
+            },
+            {
+              "n": 2,
+              "recv": 1792503351248,
+              "t": 1792503351248
+            },
+            {
+              "n": 3,
+              "recv": 1792503351498,
+              "t": 1792503351498
+            },
+            {
+              "n": 39,
+              "recv": 1792503360498,
+              "t": 1792503360498
+            },
+            {
+              "n": 40,
+              "recv": 1792503360748,
+              "t": 1792503360748
+            }
+          ],
+          "server": {
+            "client": "fetch",
+            "completedNormally": true,
+            "ctxCancelled": false,
+            "eventsSent": 40,
+            "flushEnabled": true,
+            "id": "fetch-altrgs",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "serverSpanMs": 9750,
+          "status": 200,
+          "why": "eof"
+        },
+        "sse-fetch-reader-noflush-3s": {
+          "arrivalSpanMs": 2749,
+          "bursts": 12,
+          "chunkCount": 14,
+          "contentType": "text/event-stream",
+          "count": 12,
+          "firstArrivalAfterOpenMs": 252,
+          "firstChunks": [
+            {
+              "atMs": 1,
+              "bytes": 22
+            },
+            {
+              "atMs": 252,
+              "bytes": 45
+            },
+            {
+              "atMs": 502,
+              "bytes": 45
+            },
+            {
+              "atMs": 751,
+              "bytes": 45
+            },
+            {
+              "atMs": 1002,
+              "bytes": 58
+            }
+          ],
+          "headersAfterMs": 1,
+          "incremental": true,
+          "lastChunks": [
+            {
+              "atMs": 2751,
+              "bytes": 46
+            },
+            {
+              "atMs": 3001,
+              "bytes": 59
+            },
+            {
+              "atMs": 3001,
+              "bytes": 22
+            }
+          ],
+          "latencyMs": {
+            "max": 1,
+            "mean": 0.58,
+            "min": 0,
+            "p50": 1,
+            "p95": 1
+          },
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503361004,
+              "t": 1792503361003
+            },
+            {
+              "n": 2,
+              "recv": 1792503361254,
+              "t": 1792503361253
+            },
+            {
+              "n": 3,
+              "recv": 1792503361503,
+              "t": 1792503361502
+            },
+            {
+              "n": 11,
+              "recv": 1792503363503,
+              "t": 1792503363502
+            },
+            {
+              "n": 12,
+              "recv": 1792503363753,
+              "t": 1792503363753
+            }
+          ],
+          "server": {
+            "client": "fetch-noflush",
+            "completedNormally": true,
+            "ctxCancelled": false,
+            "eventsSent": 12,
+            "flushEnabled": false,
+            "id": "noflush-9mxh78",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "serverSpanMs": 2750,
+          "status": 200,
+          "why": "eof"
+        },
+        "wails-events-10s": {
+          "arrivalSpanMs": 9784,
+          "bursts": 40,
+          "count": 40,
+          "firstArrivalAfterOpenMs": 254,
+          "incremental": true,
+          "latencyMs": {
+            "max": 2,
+            "mean": 0.82,
+            "min": 0,
+            "p50": 1,
+            "p95": 1
+          },
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503373631,
+              "t": 1792503373629
+            },
+            {
+              "n": 2,
+              "recv": 1792503373881,
+              "t": 1792503373880
+            },
+            {
+              "n": 3,
+              "recv": 1792503374132,
+              "t": 1792503374131
+            },
+            {
+              "n": 39,
+              "recv": 1792503383165,
+              "t": 1792503383164
+            },
+            {
+              "n": 40,
+              "recv": 1792503383415,
+              "t": 1792503383414
+            }
+          ],
+          "serverSpanMs": 9785
+        },
+        "wails-streams-JSONStream-10s": {
+          "arrivalSpanMs": 9750,
+          "bursts": 40,
+          "count": 40,
+          "firstArrivalAfterOpenMs": 253,
+          "incremental": true,
+          "latencyMs": {
+            "max": 2,
+            "mean": 1.05,
+            "min": 0,
+            "p50": 1,
+            "p95": 2
+          },
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503383668,
+              "t": 1792503383667
+            },
+            {
+              "n": 2,
+              "recv": 1792503383918,
+              "t": 1792503383917
+            },
+            {
+              "n": 3,
+              "recv": 1792503384168,
+              "t": 1792503384167
+            },
+            {
+              "n": 39,
+              "recv": 1792503393167,
+              "t": 1792503393166
+            },
+            {
+              "n": 40,
+              "recv": 1792503393418,
+              "t": 1792503393417
+            }
+          ],
+          "serverSpanMs": 9750
+        }
+      }
+    },
+    "hideOnClose": {
+      "appStillRunningAfterClose": true,
+      "visibleAfterClose": false,
+      "visibleAfterShow": true,
+      "visibleBeforeClose": true,
+      "windowsAfterClose": 1
+    },
+    "loopbackSeen": [
+      "GET /ping origin=\"wails://localhost:9245\"",
+      "GET /ping-cors origin=\"wails://localhost:9245\"",
+      "GET /stream-cors origin=\"wails://localhost:9245\"",
+      "GET /stream-cors origin=\"wails://localhost:9245\""
+    ],
+    "serverStreams": {
+      "abort-tat0tk": {
+        "cancelledAfterMs": 1201,
+        "client": "fetch-abort",
+        "completedNormally": false,
+        "ctxCancelled": true,
+        "eventsSent": 4,
+        "flushEnabled": true,
+        "id": "abort-tat0tk",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-0exn0v": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-0exn0v",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-dniv0n": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-dniv0n",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-g74ckk": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-g74ckk",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-hcf5jt": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-hcf5jt",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-v70o1q": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-v70o1q",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-xbv1zy": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-xbv1zy",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "es-sk3wnl": {
+        "client": "eventsource",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 40,
+        "flushEnabled": true,
+        "id": "es-sk3wnl",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "escancel-nt202i": {
+        "cancelledAfterMs": 1200,
+        "client": "es-cancel",
+        "completedNormally": false,
+        "ctxCancelled": true,
+        "eventsSent": 4,
+        "flushEnabled": true,
+        "id": "escancel-nt202i",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "fetch-altrgs": {
+        "client": "fetch",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 40,
+        "flushEnabled": true,
+        "id": "fetch-altrgs",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "noflush-9mxh78": {
+        "client": "fetch-noflush",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": false,
+        "id": "noflush-9mxh78",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "rcancel-popkjb": {
+        "cancelledAfterMs": 1202,
+        "client": "reader-cancel",
+        "completedNormally": false,
+        "ctxCancelled": true,
+        "eventsSent": 4,
+        "flushEnabled": true,
+        "id": "rcancel-popkjb",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      }
+    },
+    "updatedAt": "2026-10-20T09:36:41-04:00"
+  },
+  "production-binary": {
+    "frontend": {
+      "env": {
+        "finishedAt": "2026-10-20T13:40:14.818Z",
+        "href": "wails://localhost/",
+        "isSecureContext": true,
+        "origin": "wails://localhost",
+        "startedAt": "2026-10-20T13:39:16.012Z",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) wails.io"
+      },
+      "tests": {
+        "cancel-eventsource-close": {
+          "received": 4,
+          "server": {
+            "cancelledAfterMs": 1200,
+            "client": "es-cancel",
+            "completedNormally": false,
+            "ctxCancelled": true,
+            "eventsSent": 4,
+            "flushEnabled": true,
+            "id": "escancel-iys7wu",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "why": "closed-by-client"
+        },
+        "cancel-fetch-abortcontroller": {
+          "received": 4,
+          "server": {
+            "cancelledAfterMs": 1200,
+            "client": "fetch-abort",
+            "completedNormally": false,
+            "ctxCancelled": true,
+            "eventsSent": 4,
+            "flushEnabled": true,
+            "id": "abort-so6k73",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "why": "AbortError: Fetch is aborted"
+        },
+        "cancel-fetch-reader-cancel": {
+          "received": 4,
+          "server": {
+            "cancelledAfterMs": 1202,
+            "client": "reader-cancel",
+            "completedNormally": false,
+            "ctxCancelled": true,
+            "eventsSent": 4,
+            "flushEnabled": true,
+            "id": "rcancel-vhvuab",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "why": "eof"
+        },
+        "concurrency-6-streams-plus-ping": {
+          "pingDuringStreamsMs": 3,
+          "streams": [
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            },
+            {
+              "count": 12,
+              "incremental": true,
+              "max": 1,
+              "p50": 0
+            }
+          ]
+        },
+        "echo-1MB": {
+          "bytes": 1048586,
+          "ms": 7,
+          "roundTripEqual": true,
+          "status": 200
+        },
+        "echo-blob-body": {
+          "error": "SyntaxError: The string did not match the expected pattern."
+        },
+        "echo-body-variants": {
+          "arrayBuffer": {
+            "bytesReceivedByGo": 30,
+            "status": 200
+          },
+          "blob": {
+            "bytesReceivedByGo": 0,
+            "status": 200
+          },
+          "formData": {
+            "bytesReceivedByGo": 162,
+            "status": 200
+          },
+          "string": {
+            "bytesReceivedByGo": 30,
+            "status": 200
+          },
+          "uint8array": {
+            "bytesReceivedByGo": 30,
+            "status": 200
+          },
+          "urlSearchParams": {
+            "bytesReceivedByGo": 62,
+            "status": 200
+          }
+        },
+        "echo-small": {
+          "bytes": 72,
+          "roundTripEqual": true,
+          "status": 200
+        },
+        "loopback": {
+          "base": "http://127.0.0.1:57523",
+          "eventSourceCors": {
+            "arrivalSpanMs": 2750,
+            "bursts": 12,
+            "count": 12,
+            "errors": [],
+            "firstArrivalAfterOpenMs": 257,
+            "incremental": true,
+            "latencyMs": {
+              "max": 1,
+              "mean": 0.67,
+              "min": 0,
+              "p50": 1,
+              "p95": 1
+            },
+            "openedAfterMs": 5,
+            "readyState": 2,
+            "sample": [
+              {
+                "n": 1,
+                "recv": 1792503609059,
+                "t": 1792503609058
+              },
+              {
+                "n": 2,
+                "recv": 1792503609308,
+                "t": 1792503609308
+              },
+              {
+                "n": 3,
+                "recv": 1792503609558,
+                "t": 1792503609557
+              },
+              {
+                "n": 11,
+                "recv": 1792503611559,
+                "t": 1792503611558
+              },
+              {
+                "n": 12,
+                "recv": 1792503611809,
+                "t": 1792503611808
+              }
+            ],
+            "serverSpanMs": 2750,
+            "why": "done"
+          },
+          "fetchStreamCors": {
+            "arrivalSpanMs": 2749,
+            "bursts": 12,
+            "chunkCount": 13,
+            "contentType": "text/event-stream",
+            "count": 12,
+            "firstArrivalAfterOpenMs": 259,
+            "firstChunks": [
+              {
+                "atMs": 7,
+                "bytes": 8
+              },
+              {
+                "atMs": 259,
+                "bytes": 45
+              },
+              {
+                "atMs": 508,
+                "bytes": 45
+              },
+              {
+                "atMs": 759,
+                "bytes": 45
+              },
+              {
+                "atMs": 1008,
+                "bytes": 45
+              }
+            ],
+            "headersAfterMs": 7,
+            "incremental": true,
+            "lastChunks": [
+              {
+                "atMs": 2509,
+                "bytes": 46
+              },
+              {
+                "atMs": 2758,
+                "bytes": 46
+              },
+              {
+                "atMs": 3008,
+                "bytes": 68
+              }
+            ],
+            "latencyMs": {
+              "max": 1,
+              "mean": 0.75,
+              "min": 0,
+              "p50": 1,
+              "p95": 1
+            },
+            "sample": [
+              {
+                "n": 1,
+                "recv": 1792503612068,
+                "t": 1792503612067
+              },
+              {
+                "n": 2,
+                "recv": 1792503612317,
+                "t": 1792503612316
+              },
+              {
+                "n": 3,
+                "recv": 1792503612568,
+                "t": 1792503612567
+              },
+              {
+                "n": 11,
+                "recv": 1792503614567,
+                "t": 1792503614567
+              },
+              {
+                "n": 12,
+                "recv": 1792503614817,
+                "t": 1792503614817
+              }
+            ],
+            "serverSpanMs": 2750,
+            "status": 200,
+            "why": "eof"
+          },
+          "noCors": {
+            "error": "TypeError: Load failed",
+            "ok": false
+          },
+          "serverSeen": [
+            "GET /ping origin=\"wails://localhost\"",
+            "GET /ping-cors origin=\"wails://localhost\"",
+            "GET /stream-cors origin=\"wails://localhost\"",
+            "GET /stream-cors origin=\"wails://localhost\""
+          ],
+          "withCors": {
+            "body": {
+              "cors": true,
+              "ok": true
+            },
+            "ok": true,
+            "status": 200
+          }
+        },
+        "ping": {
+          "body": {
+            "host": "localhost",
+            "mode": "production",
+            "ok": true,
+            "origin": "",
+            "t": 1792503556029
+          },
+          "rttMs": 81,
+          "status": 200
+        },
+        "sse-eventsource-10s": {
+          "arrivalSpanMs": 9750,
+          "bursts": 40,
+          "count": 40,
+          "errors": [],
+          "firstArrivalAfterOpenMs": 252,
+          "incremental": true,
+          "latencyMs": {
+            "max": 3,
+            "mean": 0.3,
+            "min": 0,
+            "p50": 0,
+            "p95": 2
+          },
+          "openedAfterMs": 1,
+          "readyState": 2,
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503556355,
+              "t": 1792503556355
+            },
+            {
+              "n": 2,
+              "recv": 1792503556605,
+              "t": 1792503556605
+            },
+            {
+              "n": 3,
+              "recv": 1792503556855,
+              "t": 1792503556855
+            },
+            {
+              "n": 39,
+              "recv": 1792503565855,
+              "t": 1792503565855
+            },
+            {
+              "n": 40,
+              "recv": 1792503566105,
+              "t": 1792503566105
+            }
+          ],
+          "server": {
+            "client": "eventsource",
+            "completedNormally": true,
+            "ctxCancelled": false,
+            "eventsSent": 40,
+            "flushEnabled": true,
+            "id": "es-27kfcz",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "serverSpanMs": 9750,
+          "why": "done"
+        },
+        "sse-fetch-reader-10s": {
+          "arrivalSpanMs": 9749,
+          "bursts": 40,
+          "chunkCount": 42,
+          "contentType": "text/event-stream",
+          "count": 40,
+          "firstArrivalAfterOpenMs": 253,
+          "firstChunks": [
+            {
+              "atMs": 2,
+              "bytes": 22
+            },
+            {
+              "atMs": 253,
+              "bytes": 45
+            },
+            {
+              "atMs": 502,
+              "bytes": 45
+            },
+            {
+              "atMs": 751,
+              "bytes": 45
+            },
+            {
+              "atMs": 1002,
+              "bytes": 58
+            }
+          ],
+          "headersAfterMs": 2,
+          "incremental": true,
+          "lastChunks": [
+            {
+              "atMs": 9752,
+              "bytes": 46
+            },
+            {
+              "atMs": 10002,
+              "bytes": 59
+            },
+            {
+              "atMs": 10003,
+              "bytes": 22
+            }
+          ],
+          "latencyMs": {
+            "max": 1,
+            "mean": 0.2,
+            "min": 0,
+            "p50": 0,
+            "p95": 1
+          },
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503566365,
+              "t": 1792503566364
+            },
+            {
+              "n": 2,
+              "recv": 1792503566614,
+              "t": 1792503566614
+            },
+            {
+              "n": 3,
+              "recv": 1792503566863,
+              "t": 1792503566863
+            },
+            {
+              "n": 39,
+              "recv": 1792503575864,
+              "t": 1792503575864
+            },
+            {
+              "n": 40,
+              "recv": 1792503576114,
+              "t": 1792503576114
+            }
+          ],
+          "server": {
+            "client": "fetch",
+            "completedNormally": true,
+            "ctxCancelled": false,
+            "eventsSent": 40,
+            "flushEnabled": true,
+            "id": "fetch-8465jb",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "serverSpanMs": 9750,
+          "status": 200,
+          "why": "eof"
+        },
+        "sse-fetch-reader-noflush-3s": {
+          "arrivalSpanMs": 2749,
+          "bursts": 12,
+          "chunkCount": 14,
+          "contentType": "text/event-stream",
+          "count": 12,
+          "firstArrivalAfterOpenMs": 252,
+          "firstChunks": [
+            {
+              "atMs": 2,
+              "bytes": 22
+            },
+            {
+              "atMs": 252,
+              "bytes": 45
+            },
+            {
+              "atMs": 502,
+              "bytes": 45
+            },
+            {
+              "atMs": 752,
+              "bytes": 45
+            },
+            {
+              "atMs": 1002,
+              "bytes": 58
+            }
+          ],
+          "headersAfterMs": 2,
+          "incremental": true,
+          "lastChunks": [
+            {
+              "atMs": 2752,
+              "bytes": 46
+            },
+            {
+              "atMs": 3001,
+              "bytes": 59
+            },
+            {
+              "atMs": 3002,
+              "bytes": 22
+            }
+          ],
+          "latencyMs": {
+            "max": 1,
+            "mean": 0.25,
+            "min": 0,
+            "p50": 0,
+            "p95": 1
+          },
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503576368,
+              "t": 1792503576367
+            },
+            {
+              "n": 2,
+              "recv": 1792503576618,
+              "t": 1792503576618
+            },
+            {
+              "n": 3,
+              "recv": 1792503576868,
+              "t": 1792503576868
+            },
+            {
+              "n": 11,
+              "recv": 1792503578868,
+              "t": 1792503578868
+            },
+            {
+              "n": 12,
+              "recv": 1792503579117,
+              "t": 1792503579117
+            }
+          ],
+          "server": {
+            "client": "fetch-noflush",
+            "completedNormally": true,
+            "ctxCancelled": false,
+            "eventsSent": 12,
+            "flushEnabled": false,
+            "id": "noflush-fzifhw",
+            "implementsFlusher": true,
+            "responseControllerFlushErr": "",
+            "responseWriterType": "*assetserver.contentTypeSniffer"
+          },
+          "serverSpanMs": 2750,
+          "status": 200,
+          "why": "eof"
+        },
+        "wails-events-10s": {
+          "arrivalSpanMs": 9774,
+          "bursts": 40,
+          "count": 40,
+          "firstArrivalAfterOpenMs": 252,
+          "incremental": true,
+          "latencyMs": {
+            "max": 1,
+            "mean": 0.63,
+            "min": 0,
+            "p50": 1,
+            "p95": 1
+          },
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503588992,
+              "t": 1792503588991
+            },
+            {
+              "n": 2,
+              "recv": 1792503589242,
+              "t": 1792503589242
+            },
+            {
+              "n": 3,
+              "recv": 1792503589493,
+              "t": 1792503589492
+            },
+            {
+              "n": 39,
+              "recv": 1792503598515,
+              "t": 1792503598515
+            },
+            {
+              "n": 40,
+              "recv": 1792503598766,
+              "t": 1792503598766
+            }
+          ],
+          "serverSpanMs": 9775
+        },
+        "wails-streams-JSONStream-10s": {
+          "arrivalSpanMs": 9750,
+          "bursts": 40,
+          "count": 40,
+          "firstArrivalAfterOpenMs": 253,
+          "incremental": true,
+          "latencyMs": {
+            "max": 2,
+            "mean": 1.1,
+            "min": 0,
+            "p50": 1,
+            "p95": 2
+          },
+          "sample": [
+            {
+              "n": 1,
+              "recv": 1792503599019,
+              "t": 1792503599018
+            },
+            {
+              "n": 2,
+              "recv": 1792503599268,
+              "t": 1792503599267
+            },
+            {
+              "n": 3,
+              "recv": 1792503599518,
+              "t": 1792503599518
+            },
+            {
+              "n": 39,
+              "recv": 1792503608519,
+              "t": 1792503608518
+            },
+            {
+              "n": 40,
+              "recv": 1792503608769,
+              "t": 1792503608768
+            }
+          ],
+          "serverSpanMs": 9750
+        }
+      }
+    },
+    "hideOnClose": {
+      "appStillRunningAfterClose": true,
+      "visibleAfterClose": false,
+      "visibleAfterShow": true,
+      "visibleBeforeClose": true,
+      "windowsAfterClose": 1
+    },
+    "loopbackSeen": [
+      "GET /ping origin=\"wails://localhost\"",
+      "GET /ping-cors origin=\"wails://localhost\"",
+      "GET /stream-cors origin=\"wails://localhost\"",
+      "GET /stream-cors origin=\"wails://localhost\""
+    ],
+    "onShutdownCalled": true,
+    "serverStreams": {
+      "abort-so6k73": {
+        "cancelledAfterMs": 1200,
+        "client": "fetch-abort",
+        "completedNormally": false,
+        "ctxCancelled": true,
+        "eventsSent": 4,
+        "flushEnabled": true,
+        "id": "abort-so6k73",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-6swf1n": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-6swf1n",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-7hqqrv": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-7hqqrv",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-av0tr2": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-av0tr2",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-nj77pr": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-nj77pr",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-t4ffxo": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-t4ffxo",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "conc-uevlxc": {
+        "client": "conc",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": true,
+        "id": "conc-uevlxc",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "es-27kfcz": {
+        "client": "eventsource",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 40,
+        "flushEnabled": true,
+        "id": "es-27kfcz",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "escancel-iys7wu": {
+        "cancelledAfterMs": 1200,
+        "client": "es-cancel",
+        "completedNormally": false,
+        "ctxCancelled": true,
+        "eventsSent": 4,
+        "flushEnabled": true,
+        "id": "escancel-iys7wu",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "fetch-8465jb": {
+        "client": "fetch",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 40,
+        "flushEnabled": true,
+        "id": "fetch-8465jb",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "noflush-fzifhw": {
+        "client": "fetch-noflush",
+        "completedNormally": true,
+        "ctxCancelled": false,
+        "eventsSent": 12,
+        "flushEnabled": false,
+        "id": "noflush-fzifhw",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      },
+      "rcancel-vhvuab": {
+        "cancelledAfterMs": 1202,
+        "client": "reader-cancel",
+        "completedNormally": false,
+        "ctxCancelled": true,
+        "eventsSent": 4,
+        "flushEnabled": true,
+        "id": "rcancel-vhvuab",
+        "implementsFlusher": true,
+        "responseControllerFlushErr": "",
+        "responseWriterType": "*assetserver.contentTypeSniffer"
+      }
+    },
+    "updatedAt": "2026-10-20T09:40:18-04:00"
+  }
+}

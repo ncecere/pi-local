@@ -1,0 +1,561 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from "node:http";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { type Conversation, type ConversationDocToken, type ConversationId, type DocumentWatch, type Harness, type JsonObject, LiveDoc } from "@earendil-works/pi-durable";
+import { abortBackground, type LiveWork, liveWork, olderThan, reportBackground } from "./background.ts";
+import { type Approvals, type DecisionInput, waitingThreads } from "./approvals.ts";
+import type { ThreadStore } from "./threads.ts";
+import { DELTA_VERSION, DeltaStream } from "./delta.ts";
+import { EXPOSED_KIND } from "./define.ts";
+import { CONTRACT_VERSION, PI_DURABLE_VERSION } from "./version.ts";
+import {
+	AUTHOR_KINDS,
+	type Author,
+	buildMessages,
+	buildView,
+	type ChatDocumentRef,
+	type ChatMessage,
+	type ChatView,
+	liveParts,
+	type MessagePage,
+	pageView,
+	parsePage,
+	USER_ENTRY,
+	type UserEntryData,
+} from "./view.ts";
+
+/** The documents an agent exposes to apps, by kind, with their bounds (define.ts, exposedDocuments). */
+export type ExposedDocuments = ReadonlyMap<string, { document: ConversationDocToken<JsonObject>; maxBytes: number }>;
+
+const ctx = BACKGROUND_CONTEXT;
+const MAX_BODY = 256 * 1024;
+const THREAD_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** The longest `olderThanMs` POST /background/abort takes (ten years). */
+const MAX_OLDER_THAN_MS = 10 * 366 * 24 * 3600 * 1000;
+/** How long POST /background/abort waits for the aborted work to end. */
+const ABORT_WAIT_MS = 5_000;
+
+export type RuntimeOptions = {
+	harness: Harness;
+	threads: ThreadStore;
+	/** Shared secret the platform presents; every route but /healthz requires it. */
+	token: string;
+	info: { agentId: string; name: string; model: string };
+	/** Prepares a thread before a message (its MCP servers), after it exists. */
+	beforeMessage?: (threadId: string, conversation: Conversation) => Promise<void>;
+	/** A message was submitted to the thread (its reply's end is reported to the platform). */
+	afterMessage?: (threadId: string, submissionId: number) => void;
+	/** The conversation documents apps may read (none by default). */
+	documents?: ExposedDocuments;
+	/**
+	 * Whether a task of this kind stands for a wait on a person's answer (an approval, a question): such a task, and the
+	 * work only waiting on it, keeps the agent awake neither as a busy thread nor as background work. Default: none.
+	 */
+	waitsForPerson?: (kind: string) => boolean;
+	/** Tool approvals (docs/approvals.md): shown in the view, decided through POST /approvals/{id}. */
+	approvals?: Approvals;
+};
+
+/**
+ * The agent's private HTTP interface. Only the platform calls it, with the agent's bearer token; clients never reach a
+ * runtime directly. Pi is the source of truth: the runtime keeps no state of its own besides the open harness.
+ */
+export function createRuntimeServer(options: RuntimeOptions): {
+	server: Server;
+	handler: RequestListener;
+	lastActivity: () => number;
+	/** Records activity now (a reply just ended, for instance), so the reaper doesn't hibernate an agent that just worked. */
+	touch: () => void;
+} {
+	const { harness, threads, approvals } = options;
+	const exposed: ExposedDocuments = options.documents ?? new Map();
+	const expected = Buffer.from(`Bearer ${options.token}`);
+	let lastActivity = Date.now();
+	const touch = () => {
+		lastActivity = Date.now();
+	};
+	// Open event streams. The platform's replicas don't share what each one has seen, so the runtime, which serves every
+	// stream, says how many are open (/status): whichever replica reaps idle agents asks here, never its own records.
+	let openStreams = 0;
+
+	const authorized = (request: IncomingMessage) => {
+		const header = Buffer.from(request.headers.authorization ?? "");
+		return header.length === expected.length && timingSafeEqual(header, expected);
+	};
+
+	// Live work from pi-durable's task graph (background.ts): busy threads and background work.
+	const firstSeen = new Map<number, number>();
+	const waitsForPerson = options.waitsForPerson ?? (() => false);
+	const currentWork = async () =>
+		liveWork(
+			harness,
+			(await threads.list()).map((thread) => thread.conversationId),
+			{ waitsForPerson, firstSeen },
+		);
+	// Background work ending counts as activity (the idle clock starts then), unless the platform aborted it for its
+	// age (POST /background/abort): the reaper hibernates the agent right after that. Work running doesn't touch: the
+	// platform sees it in backgroundWork, and must be able to tell it from requests when it is past its ceiling.
+	let activeUnits = new Set<number>();
+	const abortedForAge = new Set<number>();
+	const observe = (work: LiveWork) => {
+		const active = new Set(work.units.filter((unit) => !unit.idle).map((unit) => unit.taskId as number));
+		let ended = false;
+		for (const id of activeUnits) if (!active.has(id) && !abortedForAge.delete(id)) ended = true;
+		for (const id of abortedForAge) if (!active.has(id)) abortedForAge.delete(id);
+		activeUnits = active;
+		if (ended) touch();
+	};
+
+	const viewOf = async (threadId: string): Promise<ChatView | undefined> => {
+		const conversation = await threads.get(threadId);
+		if (conversation === undefined) return undefined;
+		const watch = await conversation.watch(ctx);
+		const value = watch.value;
+		await watch.stop();
+		return buildView(
+			value.entries,
+			value.docs["pi.live"] as never,
+			await documentRefs(harness, conversation.id, exposed),
+			approvals?.viewOf(threadId, conversation.id as unknown as number),
+		);
+	};
+
+	/** An exposed document of a thread: GET /threads/{thread}/documents/{kind}. */
+	const readDocument = async (threadId: string, kind: string, response: ServerResponse) => {
+		const conversation = await threads.get(threadId);
+		if (conversation === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
+		const entry = EXPOSED_KIND.test(kind) ? exposed.get(kind) : undefined;
+		// A kind the agent doesn't expose reads as one the thread doesn't have: apps learn nothing about the others.
+		const value = entry === undefined ? undefined : await harness.snapshot(entry.document, conversation.id, ctx);
+		if (entry === undefined || value === undefined || value === null) return fail(response, 404, "document_not_found", "The thread has no such document");
+		const text = JSON.stringify(value);
+		if (Buffer.byteLength(text, "utf8") > entry.maxBytes) {
+			return fail(response, 422, "document_too_large", `The document is larger than the agent exposes (${entry.maxBytes} bytes)`);
+		}
+		return json(response, 200, { kind, version: entry.document.definition.version, revision: revisionOf(text), value });
+	};
+
+	const route = async (request: IncomingMessage, response: ServerResponse) => {
+		const url = new URL(request.url ?? "/", "http://runtime");
+		const parts = url.pathname.split("/").filter(Boolean);
+		const method = request.method ?? "GET";
+
+		if (method === "GET" && url.pathname === "/healthz") return json(response, 200, { ok: true });
+		if (!authorized(request)) return fail(response, 401, "unauthorized", "Unauthorized");
+
+		if (method === "GET" && url.pathname === "/status") {
+			const work = await currentWork();
+			observe(work);
+			// A reply that waits only for a person's decision (an approval, docs/approvals.md) doesn't make its thread busy:
+			// busyThreads leaves it out (contract 2, docs/hibernation.md), and waitingThreads says how many there are.
+			const waiting = approvals?.waiting();
+			const waitingCount = waiting === undefined ? 0 : await waitingThreads(harness, threads, waiting.threads);
+			const busy = Math.max(0, work.busyThreads - waitingCount);
+			if (busy > 0) touch();
+			return json(response, 200, {
+				...options.info,
+				busyThreads: busy,
+				waitingThreads: waitingCount,
+				pendingApprovals: waiting?.pending ?? 0,
+				openStreams,
+				lastActivityAt: lastActivity,
+				backgroundWork: reportBackground(work),
+				contractVersion: CONTRACT_VERSION,
+				piDurableVersion: PI_DURABLE_VERSION,
+			});
+		}
+		if (method === "POST" && url.pathname === "/background/abort") {
+			// The platform's ceiling (docs/hibernation.md): background work older than this no longer keeps the agent awake.
+			const body = (await readJson(request)) as { olderThanMs?: unknown };
+			const age = body.olderThanMs;
+			if (typeof age !== "number" || !Number.isInteger(age) || age < 0 || age > MAX_OLDER_THAN_MS) {
+				return fail(response, 400, "invalid_older_than", "olderThanMs is a whole number of milliseconds, at least 0");
+			}
+			const work = await currentWork();
+			observe(work);
+			const old = olderThan(work, Date.now() - age);
+			for (const unit of old) abortedForAge.add(unit.taskId as number);
+			const { aborted, settled } = await abortBackground(harness, old, ABORT_WAIT_MS);
+			observe(await currentWork());
+			return json(response, 200, { aborted: aborted.length, settled });
+		}
+		if (method === "GET" && url.pathname === "/threads") return json(response, 200, await threads.list());
+		if (parts[0] === "approvals") return routeApproval(request, response, parts, url);
+
+		if (parts[0] !== "threads" || parts[1] === undefined) return fail(response, 404, "not_found", "Not found");
+		const threadId = parts[1];
+		if (!THREAD_ID.test(threadId)) return fail(response, 400, "invalid_thread_id", "Thread IDs are 1-64 letters, digits, dashes or underscores");
+		const action = parts[2];
+
+		if (method === "GET" && action === undefined) {
+			const { page, error } = parsePage(url.searchParams);
+			if (error !== undefined) return fail(response, 400, error.code, error.message);
+			// Someone reading a thread (often right after its reply) is using the agent.
+			touch();
+			const view = await viewOf(threadId);
+			if (view === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
+			return json(response, 200, page === undefined ? view : pageView(view, page));
+		}
+		if (method === "DELETE" && action === undefined) {
+			const conversation = await threads.get(threadId);
+			if (conversation !== undefined) await conversation.abort(ctx).catch(() => {});
+			await approvals?.reconcile(threadId).catch(() => {});
+			return (await threads.remove(threadId)) ? json(response, 200, { ok: true }) : fail(response, 404, "thread_not_found", "Thread not found");
+		}
+		if (method === "POST" && action === "messages") {
+			touch();
+			const body = (await readJson(request)) as { text?: unknown; requestId?: unknown; author?: unknown; announceAuthor?: unknown; whenBusy?: unknown };
+			const text = typeof body.text === "string" ? body.text.trim() : "";
+			const requestId = typeof body.requestId === "string" ? body.requestId : undefined;
+			if (text.length === 0 || text.length > 32_000) return fail(response, 400, "invalid_text", "text is required (at most 32,000 characters)");
+			if (requestId !== undefined && !THREAD_ID.test(requestId)) return fail(response, 400, "invalid_request_id", "requestId must be 1-64 letters, digits, dashes or underscores");
+			// While a reply runs: a follow-up waits for it to end; a steer joins it after its current tool round.
+			const whenBusy = body.whenBusy ?? "followUp";
+			if (whenBusy !== "followUp" && whenBusy !== "steer") return fail(response, 400, "invalid_when_busy", "whenBusy must be followUp or steer");
+			// The platform (the only caller) says who sent the message, and whether the model is told (shared threads).
+			const author = parseAuthor(body.author);
+			const conversation = await threads.ensure(threadId, text);
+			await options.beforeMessage?.(threadId, conversation);
+			const data: UserEntryData = { text, at: Date.now(), ...(author === undefined ? {} : { author }) };
+			const content = author !== undefined && body.announceAuthor === true ? `${speakerLine(author)}\n${text}` : text;
+			const submission = await conversation.submit(
+				{
+					type: "input",
+					content,
+					whenBusy,
+					entry: { kind: USER_ENTRY, data },
+					...(requestId === undefined ? {} : { requestId }),
+				},
+				ctx,
+			);
+			await threads.touch(threadId);
+			options.afterMessage?.(threadId, submission.id as number);
+			return json(response, 202, { submissionId: submission.id });
+		}
+		if (method === "POST" && action === "stop") {
+			touch();
+			const conversation = await threads.get(threadId);
+			if (conversation === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
+			await conversation.abort(ctx);
+			// A request whose call the stop ended is cancelled (and the platform told).
+			await approvals?.reconcile(threadId).catch(() => {});
+			return json(response, 202, { ok: true });
+		}
+		if (method === "GET" && action === "documents" && parts[3] !== undefined && parts.length === 4) {
+			touch();
+			return readDocument(threadId, parts[3], response);
+		}
+		if (method === "GET" && action === "events") {
+			const options = streamOptions(url.searchParams, request.headers["last-event-id"]);
+			if ("error" in options) return fail(response, 400, options.error.code, options.error.message);
+			return streamThread(threadId, request, response, options);
+		}
+		return fail(response, 404, "not_found", "Not found");
+	};
+
+	/**
+	 * Tool approvals: `GET /approvals[?thread=]` lists the requests (pending first), `POST /approvals/{id}` applies a
+	 * decision `{decision: approve|deny|timeout|cancel, reason?, decidedBy?}` (the platform's, or a test's).
+	 */
+	const routeApproval = async (request: IncomingMessage, response: ServerResponse, parts: string[], url: URL) => {
+		const method = request.method ?? "GET";
+		if (approvals === undefined) return fail(response, 404, "not_found", "Not found");
+		if (method === "GET" && parts.length === 1) {
+			const thread = url.searchParams.get("thread") ?? undefined;
+			return json(response, 200, approvals.list(thread));
+		}
+		const id = parts[1];
+		if (method === "POST" && parts.length === 2 && id !== undefined) {
+			touch();
+			if (!/^ap_[A-Za-z0-9_-]{1,64}$/.test(id)) return fail(response, 404, "approval_not_found", "Approval not found");
+			const body = (await readJson(request)) as { decision?: unknown; reason?: unknown; decidedBy?: unknown };
+			const decision = body.decision;
+			if (decision !== "approve" && decision !== "deny" && decision !== "timeout" && decision !== "cancel") {
+				return fail(response, 400, "invalid_decision", "decision must be approve, deny, timeout or cancel");
+			}
+			const input: DecisionInput = { decision };
+			if (typeof body.reason === "string") input.reason = body.reason;
+			const by = body.decidedBy as { kind?: unknown; id?: unknown; name?: unknown } | undefined;
+			if (typeof by === "object" && by !== null && (by.kind === "user" || by.kind === "service_account" || by.kind === "system") && typeof by.name === "string") {
+				input.decidedBy = { kind: by.kind, name: by.name, ...(typeof by.id === "string" ? { id: by.id } : {}) };
+			}
+			const result = await approvals.decide(id, input);
+			if (result === undefined) return fail(response, 404, "approval_not_found", "Approval not found");
+			return json(response, 200, { id, ...result });
+		}
+		return fail(response, 404, "not_found", "Not found");
+	};
+
+	/**
+	 * Server-sent events, coalesced to 10/s: by default the whole chat view after every commit that touches the thread
+	 * (`view` events); with `format=delta` a snapshot and then only the changes (see delta.ts). `limit` keeps either to
+	 * the latest messages.
+	 */
+	const streamThread = async (threadId: string, request: IncomingMessage, response: ServerResponse, options: StreamOptions) => {
+		const conversation = await threads.get(threadId);
+		if (conversation === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
+		const watch = await conversation.watch(ctx);
+		// The exposed documents are watched too: a change to one is a `document.updated` (deltas), or a view with its
+		// new revision.
+		const docs = new DocumentWatches(harness, conversation.id, exposed);
+		await docs.refresh();
+		response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
+		touch();
+		// The transcript is rebuilt only when the entries (or the thread's approvals) changed: a frame that only moves the
+		// reply in progress or a tool keeps the same entries (pi-durable shares unchanged parts between frames).
+		let entries: unknown;
+		let messages: ChatMessage[] = [];
+		let approvalsSeen = -1;
+		let approvalsVersion = 0;
+		let shown = approvals?.viewOf(threadId, conversation.id as unknown as number);
+		const current = (value: typeof watch.value): { view: ChatView; changed: boolean } => {
+			const changed = value.entries !== entries || approvalsSeen !== approvalsVersion;
+			if (changed) {
+				entries = value.entries;
+				approvalsSeen = approvalsVersion;
+				shown = approvals?.viewOf(threadId, conversation.id as unknown as number);
+				messages = buildMessages(value.entries, shown?.byCall);
+			}
+			const live = value.docs["pi.live"] as never as Parameters<typeof liveParts>[0];
+			const documents = docs.refs();
+			const pending = shown === undefined || shown.pending.length === 0 ? {} : { approvals: shown.pending };
+			return {
+				view: { busy: live?.run !== undefined, messages, ...liveParts(live), ...(documents === undefined ? {} : { documents }), ...pending },
+				changed,
+			};
+		};
+		const deltas = options.format === "delta" ? new DeltaStream(options.limit, options.lastSeq) : undefined;
+		const page: MessagePage | undefined = options.limit === undefined ? undefined : { limit: options.limit };
+		const send = (value: typeof watch.value) => {
+			const { view, changed } = current(value);
+			if (deltas === undefined) {
+				response.write(`event: view\ndata: ${JSON.stringify(page === undefined ? view : pageView(view, page))}\n\n`);
+				return;
+			}
+			let out = "";
+			for (const event of deltas.next(view, changed)) out += `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+			if (out !== "") response.write(out);
+		};
+		send(watch.value);
+		if (options.once) {
+			await watch.stop();
+			await docs.stop();
+			response.end();
+			return;
+		}
+		let latest = watch.value;
+		let timer: NodeJS.Timeout | undefined;
+		const schedule = () => {
+			touch();
+			timer ??= setTimeout(() => {
+				timer = undefined;
+				send(latest);
+			}, 100);
+		};
+		docs.onChange = schedule;
+		watch.start(async (value) => {
+			latest = value;
+			// A document a thread didn't have yet (one declared after the thread began) is watched once it exists.
+			await docs.refresh().catch(() => {});
+			schedule();
+		});
+		// An approval asked or decided in this thread changes the view without a commit to the conversation.
+		const unsubscribe = approvals?.onChange((changed) => {
+			if (changed !== threadId) return;
+			approvalsVersion++;
+			schedule();
+		});
+		const keepAlive = setInterval(() => response.write(": keep-alive\n\n"), 15_000);
+		openStreams++;
+		let ended = false;
+		const end = () => {
+			unsubscribe?.();
+			clearInterval(keepAlive);
+			if (timer !== undefined) clearTimeout(timer);
+			void watch.stop();
+			void docs.stop();
+			if (ended) return;
+			ended = true;
+			openStreams--;
+			// Someone was watching until now: the idle clock starts here.
+			touch();
+		};
+		request.on("close", end);
+		void watch.closed.then(() => {
+			end();
+			response.end();
+		});
+	};
+
+	const handler: RequestListener = (request, response) => {
+		route(request, response).catch((error: unknown) => {
+			const status = error instanceof RequestError ? error.status : 500;
+			if (status === 500) console.error("[runtime] request failed", error);
+			if (!response.headersSent) fail(response, status, status === 500 ? "internal" : "invalid_request", status === 500 ? "Internal error" : (error as Error).message);
+			else response.end();
+		});
+	};
+	return { server: createServer(handler), handler, lastActivity: () => lastActivity, touch };
+}
+
+type StreamOptions = { once: boolean; format: "view" | "delta"; limit?: number; lastSeq: number };
+
+/** A document's revision: a hash of its JSON (equal content, equal revision, on any runtime). */
+export function revisionOf(json: string): string {
+	return createHash("sha256").update(json).digest("base64url").slice(0, 22);
+}
+
+/** The exposed documents a conversation has, with their revisions; undefined when it has none. */
+async function documentRefs(harness: Harness, conversationId: ConversationId, exposed: ExposedDocuments): Promise<Record<string, ChatDocumentRef> | undefined> {
+	let out: Record<string, ChatDocumentRef> | undefined;
+	for (const [kind, { document }] of exposed) {
+		const value = await harness.snapshot(document, conversationId, ctx);
+		if (value === undefined || value === null) continue;
+		(out ??= {})[kind] = { revision: revisionOf(JSON.stringify(value)) };
+	}
+	return out;
+}
+
+/** One event stream's watches of a conversation's exposed documents. */
+class DocumentWatches {
+	private readonly watches = new Map<string, DocumentWatch<JsonObject>>();
+	/** Each document's latest value and its revision (computed once per value). */
+	private readonly latest = new Map<string, { value: unknown; revision: string }>();
+	private stopped = false;
+	/** Called when a watched document changes. */
+	onChange: () => void = () => {};
+
+	constructor(
+		private readonly harness: Harness,
+		private readonly conversationId: ConversationId,
+		private readonly exposed: ExposedDocuments,
+	) {}
+
+	/** Starts watching the exposed documents that exist and aren't watched yet. */
+	async refresh(): Promise<void> {
+		for (const [kind, { document }] of this.exposed) {
+			if (this.stopped || this.watches.has(kind)) continue;
+			const watch = await this.harness.watchDoc(document, this.conversationId, ctx);
+			if (watch === undefined) continue;
+			if (this.stopped) {
+				void watch.stop();
+				return;
+			}
+			this.watches.set(kind, watch);
+			this.note(kind, watch.value);
+			watch.start(async (value) => {
+				this.note(kind, value);
+				this.onChange();
+			});
+			void watch.closed.then(() => {
+				// Retired: forget it; a new incarnation is watched at the next refresh.
+				if (this.watches.get(kind) === watch) {
+					this.watches.delete(kind);
+					this.latest.delete(kind);
+				}
+			});
+		}
+	}
+
+	private note(kind: string, value: unknown): void {
+		if (this.latest.get(kind)?.value === value) return;
+		if (value === null || value === undefined) this.latest.delete(kind);
+		else this.latest.set(kind, { value, revision: revisionOf(JSON.stringify(value)) });
+	}
+
+	refs(): Record<string, ChatDocumentRef> | undefined {
+		let out: Record<string, ChatDocumentRef> | undefined;
+		for (const [kind, { revision }] of this.latest) (out ??= {})[kind] = { revision };
+		return out;
+	}
+
+	async stop(): Promise<void> {
+		this.stopped = true;
+		const watches = [...this.watches.values()];
+		this.watches.clear();
+		await Promise.all(watches.map((watch) => watch.stop().catch(() => {})));
+	}
+}
+
+/**
+ * An event stream's options: `once`, `format` (view, the default, or delta), `v` (the delta format's version: 1),
+ * `limit` (the latest messages only) and, for deltas, the Last-Event-ID a reconnecting client sends (its sequence
+ * goes on from there, after a new snapshot).
+ */
+export function streamOptions(query: URLSearchParams, lastEventId: string | string[] | undefined): StreamOptions | { error: { code: string; message: string } } {
+	const format = query.get("format") ?? "view";
+	if (format !== "view" && format !== "delta") return { error: { code: "invalid_format", message: "format must be view or delta" } };
+	const v = query.get("v");
+	if (v !== null && (format !== "delta" || v !== String(DELTA_VERSION))) {
+		return { error: { code: "unsupported_version", message: `The delta format's version is ${DELTA_VERSION}` } };
+	}
+	let limit: number | undefined;
+	if (query.get("limit") !== null) {
+		const { page, error } = parsePage(new URLSearchParams({ limit: query.get("limit")! }));
+		if (error !== undefined) return { error };
+		limit = page!.limit;
+	}
+	const last = typeof lastEventId === "string" && /^\d{1,15}$/.test(lastEventId) ? Number(lastEventId) : 0;
+	return { once: query.get("once") === "true", format, ...(limit === undefined ? {} : { limit }), lastSeq: format === "delta" ? last : 0 };
+}
+
+/** The author the platform sent, or undefined when absent or malformed. */
+function parseAuthor(value: unknown): Author | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const { kind, id, name, via } = value as Record<string, unknown>;
+	if (!AUTHOR_KINDS.has(kind as string) || typeof id !== "string" || typeof name !== "string") return undefined;
+	const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
+	return {
+		kind: kind as Author["kind"],
+		id: id.slice(0, 64),
+		name: clean(name),
+		...(typeof via === "string" && clean(via) !== "" ? { via: clean(via) } : {}),
+	};
+}
+
+/** The line that tells the model who is speaking (shared threads, where several people talk to the agent). */
+export function speakerLine(author: Author): string {
+	const name = author.name === "" ? "someone" : author.name;
+	// A trigger's run (a schedule or a webhook): no person is speaking.
+	if (author.kind === "trigger") return `[Message from trigger ${name}]`;
+	return `[Message from ${name}${author.via === undefined ? "" : ` via ${author.via}`}]`;
+}
+
+class RequestError extends Error {
+	constructor(
+		readonly status: number,
+		message: string,
+	) {
+		super(message);
+	}
+}
+
+/** Platform conventions: `{"data": …}` on success, `{"error": {"code", "message"}}` otherwise. */
+function json(response: ServerResponse, status: number, body: unknown): void {
+	if (status === 204) {
+		response.writeHead(204).end();
+		return;
+	}
+	response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ data: body }));
+}
+
+function fail(response: ServerResponse, status: number, code: string, message: string): void {
+	response
+		.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" })
+		.end(JSON.stringify({ error: { code, message } }));
+}
+
+async function readJson(request: IncomingMessage): Promise<unknown> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of request) {
+		size += (chunk as Buffer).length;
+		if (size > MAX_BODY) throw new RequestError(413, "request body too large");
+		chunks.push(chunk as Buffer);
+	}
+	try {
+		return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+	} catch {
+		throw new RequestError(400, "invalid JSON");
+	}
+}
