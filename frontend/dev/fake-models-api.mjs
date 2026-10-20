@@ -3,7 +3,9 @@
 //
 //   node dev/fake-models-api.mjs            # listens on 127.0.0.1:5198
 //   PI_LOCAL_API=http://127.0.0.1:5198 PORT=5197 pnpm dev
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { cursorMessage, DeltaStream, pageView } from './fake-delta.mjs';
 
 const port = Number(process.env.FAKE_API_PORT ?? 5198);
 const now = () => new Date().toISOString();
@@ -477,6 +479,8 @@ const threads = {
       lastReplyAt: null,
     }),
     thread('th-lead-1', 'Papers on durable agents'),
+    thread('th-lead-research', 'Research: durable agent runtimes'),
+    thread('th-lead-long', 'A very long conversation'),
   ],
   [SCOUT]: [
     thread('th-scout-1', 'Search arXiv for durable agent runtimes', {
@@ -564,6 +568,109 @@ const chatViews = {
       { id: 'a1', role: 'assistant', text: '1. Durable Agents (2025) …', at: t0 + 2000 },
     ],
   },
+};
+
+// A long conversation (paging: the stream sends the latest 100 messages).
+chatViews['th-lead-long'] = {
+  busy: false,
+  tools: [],
+  messages: Array.from({ length: 130 }, (_, i) => [
+    {
+      id: `lu${i}`,
+      role: 'user',
+      text: `Question number ${i + 1}?`,
+      at: t0 + i * 1000,
+      requestId: `seed-${i}`,
+    },
+    {
+      id: `la${i}`,
+      role: 'assistant',
+      text: `Answer number ${i + 1}.${i % 7 === 0 ? '\n\nA longer one, with a second paragraph to vary the heights a little.' : ''}`,
+      at: t0 + i * 1000 + 500,
+    },
+  ]).flat(),
+};
+
+// A researcher's conversation: its plan and sources are exposed documents.
+const threadDocs = {
+  'th-lead-research': {
+    'research.plan': {
+      question: 'Which runtimes make LLM agents durable?',
+      steps: [
+        {
+          id: 's1',
+          text: 'Survey papers on durable execution for agents',
+          status: 'done',
+          subagent: 'quick',
+          note: '3 found',
+        },
+        {
+          id: 's2',
+          text: 'Compare checkpointing approaches',
+          status: 'running',
+          subagent: 'deep',
+          note: '',
+        },
+        { id: 's3', text: 'Write the report', status: 'pending', subagent: '', note: '' },
+      ],
+    },
+    'research.sources': {
+      sources: [
+        {
+          url: 'https://arxiv.org/abs/2501.00001',
+          title: 'Durable Agents',
+          supports: ['Checkpoint every tool call'],
+          step: 's1',
+        },
+        {
+          url: 'https://arxiv.org/abs/2402.00002',
+          title: 'Resumable LLM Workflows',
+          supports: ['Replay-safe tools'],
+          step: 's1',
+        },
+      ],
+    },
+  },
+};
+const revisionOf = (value) =>
+  createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 22);
+chatViews['th-lead-research'] = {
+  busy: false,
+  tools: [],
+  messages: [
+    {
+      id: 'ru1',
+      role: 'user',
+      text: 'Research durable agent runtimes.',
+      at: t0,
+      requestId: 'seed-r1',
+    },
+    {
+      id: 'ra1',
+      role: 'assistant',
+      text: '',
+      at: t0 + 500,
+      toolCalls: [
+        {
+          id: 'rc1',
+          name: 'research_plan',
+          arguments: { question: 'Which runtimes make LLM agents durable?' },
+          startedAt: t0 + 600,
+          endedAt: t0 + 700,
+        },
+      ],
+    },
+    {
+      id: 'rt1',
+      role: 'tool',
+      toolCallId: 'rc1',
+      name: 'research_plan',
+      text: 'Plan written:\n- [ ] s1 …',
+      isError: false,
+      details: threadDocs['th-lead-research']['research.plan'],
+    },
+    { id: 'ra2', role: 'assistant', text: 'I wrote a plan and started on it.', at: t0 + 800 },
+  ],
 };
 
 // ── Approvals (Phase 4) ──────────────────────────────────────────────────────────────────
@@ -689,9 +796,26 @@ chatViews['th-lead-2'] = {
   ],
 };
 const threadClients = new Map();
+/** A thread's stream event(s) for one client: a whole view, or the delta format's changes. */
+function writeThread(client, v) {
+  if (!client.deltas) {
+    const shown = client.limit ? pageView(v, { limit: client.limit }) : v;
+    client.res.write(`event: view\ndata: ${JSON.stringify(shown)}\n\n`);
+    return;
+  }
+  let out = '';
+  for (const e of client.deltas.next(v))
+    out += `id: ${e.seq}\nevent: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
+  if (out) client.res.write(out);
+}
 function syncThreadView(threadId) {
   const v = chatViews[threadId];
   if (!v) return;
+  const docs = threadDocs[threadId];
+  if (docs)
+    v.documents = Object.fromEntries(
+      Object.entries(docs).map(([kind, value]) => [kind, { revision: revisionOf(value) }]),
+    );
   const pending = approvals.filter((x) => x.threadId === threadId && x.status === 'pending');
   for (const m of v.messages)
     for (const c of m.toolCalls ?? []) {
@@ -700,8 +824,62 @@ function syncThreadView(threadId) {
     }
   if (pending.length) v.approvals = pending.map(chatApproval);
   else delete v.approvals;
-  for (const res of threadClients.get(threadId) ?? [])
-    res.write(`event: view\ndata: ${JSON.stringify(v)}\n\n`);
+  for (const client of threadClients.get(threadId) ?? []) writeThread(client, v);
+}
+for (const id of Object.keys(threadDocs)) syncThreadView(id);
+
+/** A reply written token by token (the stream's partial), then added to the transcript. */
+const replying = new Map();
+function startReply(threadId, question) {
+  const cv = chatViews[threadId];
+  const words =
+    `You said: ${question}. ${'Here is a reply that streams in a word at a time, so the delta stream sends appends. '.repeat(2)}`.split(
+      /(?<= )/,
+    );
+  let i = 0;
+  cv.busy = true;
+  cv.partial = { text: '', thinking: '' };
+  const docs = threadDocs[threadId];
+  const timer = setInterval(() => {
+    if (i < words.length) {
+      cv.partial = { text: cv.partial.text + words[i++], thinking: '' };
+      // A researcher moves its plan on while it writes.
+      if (docs && i === 6) {
+        const plan = docs['research.plan'];
+        const running = plan.steps.find((x) => x.status === 'running');
+        if (running) running.status = 'done';
+        const next = plan.steps.find((x) => x.status === 'pending');
+        if (next) next.status = 'running';
+        docs['research.sources'].sources.push({
+          url: `https://example.org/paper-${docs['research.sources'].sources.length + 1}`,
+          title: `Another paper (${docs['research.sources'].sources.length + 1})`,
+          supports: [question.slice(0, 60)],
+          step: next?.id ?? '',
+        });
+      }
+      syncThreadView(threadId);
+      return;
+    }
+    clearInterval(timer);
+    replying.delete(threadId);
+    cv.messages.push({
+      id: `a-${Date.now()}`,
+      role: 'assistant',
+      text: cv.partial.text.trim(),
+      at: Date.now(),
+    });
+    delete cv.partial;
+    const queued = cv.queue?.shift();
+    if (queued) {
+      cv.messages.push(queued);
+      syncThreadView(threadId);
+      startReply(threadId, queued.text);
+      return;
+    }
+    cv.busy = false;
+    syncThreadView(threadId);
+  }, 120);
+  replying.set(threadId, timer);
 }
 syncThreadView('th-lead-2');
 
@@ -1037,33 +1215,85 @@ createServer(async (req, res) => {
         broadcast('thread', { agentId: parts[2], threadId: parts[4], deleted: false, thread: t });
       }
       const cv = chatViews[parts[4]];
-      cv.messages.push({ id: `u-${Date.now()}`, role: 'user', text: body.text, at: Date.now() });
-      cv.busy = true;
-      syncThreadView(parts[4]);
-      setTimeout(() => {
-        cv.messages.push({
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          text: `You said:\n\n${body.text}`,
-          at: Date.now(),
-        });
-        cv.busy = false;
+      if (body.whenBusy !== undefined && body.whenBusy !== 'steer' && body.whenBusy !== 'followUp')
+        return fail(res, 400, 'invalid_when_busy', 'whenBusy must be followUp or steer');
+      const message = {
+        id: `u-${Date.now()}`,
+        role: 'user',
+        text: String(body.text).trim(),
+        at: Date.now(),
+        ...(typeof body.requestId === 'string' ? { requestId: body.requestId } : {}),
+      };
+      if (replying.has(parts[4])) {
+        // A steer joins the reply in progress (after its "current step": a moment here); a follow-up waits for it.
+        if (body.whenBusy === 'steer')
+          setTimeout(() => {
+            cv.messages.push(message);
+            syncThreadView(parts[4]);
+          }, 1200);
+        else {
+          cv.queue = cv.queue ?? [];
+          cv.queue.push(message);
+        }
+      } else {
+        cv.messages.push(message);
         syncThreadView(parts[4]);
-      }, 800);
+        startReply(parts[4], message.text);
+      }
       return ok(res, { submissionId: `s-${Date.now()}` }, 202);
     }
     const v = chatViews[parts[4]];
     if (!v) return fail(res, 404, 'not_found', 'No such conversation.');
     if (parts[5] === 'events') {
+      const format = url.searchParams.get('format') ?? 'view';
+      if (format !== 'view' && format !== 'delta')
+        return fail(res, 400, 'invalid_format', 'format must be view or delta');
+      const vq = url.searchParams.get('v');
+      if (vq !== null && (format !== 'delta' || vq !== '1'))
+        return fail(res, 400, 'unsupported_version', "The delta format's version is 1");
+      const limit = url.searchParams.get('limit')
+        ? Number(url.searchParams.get('limit'))
+        : undefined;
+      const lastId = Number(req.headers['last-event-id'] ?? 0) || 0;
+      if (process.env.FAKE_LOG)
+        console.log(`events ${parts[4]} format=${format} limit=${limit} last-event-id=${lastId}`);
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
-      res.write(`event: view\ndata: ${JSON.stringify(v)}\n\n`);
+      const client = {
+        res,
+        limit,
+        deltas: format === 'delta' ? new DeltaStream(limit, lastId) : null,
+      };
+      writeThread(client, v);
+      if (url.searchParams.get('once') === 'true') return res.end();
       const set = threadClients.get(parts[4]) ?? new Set();
-      set.add(res);
+      set.add(client);
       threadClients.set(parts[4], set);
-      req.on('close', () => set.delete(res));
+      const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 15_000);
+      // FAKE_STREAM_TTL_MS: end each stream after a while, as a runtime that idles out does (clients reconnect).
+      const ttl = Number(process.env.FAKE_STREAM_TTL_MS ?? 0);
+      if (ttl > 0) setTimeout(() => res.end(), ttl);
+      req.on('close', () => {
+        clearInterval(keepAlive);
+        set.delete(client);
+      });
       return;
     }
-    if (parts.length === 5 && m === 'GET') return ok(res, v);
+    if (parts[5] === 'documents' && parts[6] && m === 'GET') {
+      const value = threadDocs[parts[4]]?.[parts[6]];
+      if (value === undefined)
+        return fail(res, 404, 'document_not_found', 'The thread has no such document');
+      return ok(res, { kind: parts[6], version: 1, revision: revisionOf(value), value });
+    }
+    if (parts.length === 5 && m === 'GET') {
+      const limit = url.searchParams.get('limit');
+      const before = url.searchParams.get('before');
+      if (limit === null && before === null) return ok(res, v);
+      const id = before ? cursorMessage(before) : undefined;
+      if (before && !id) return fail(res, 400, 'invalid_cursor', 'Invalid cursor');
+      // Slow enough to see the loading state.
+      await new Promise((r) => setTimeout(r, 300));
+      return ok(res, pageView(v, { limit: Number(limit ?? 50), ...(id ? { before: id } : {}) }));
+    }
   }
   if (parts[1] === 'agents' && parts[2] && parts[3]) {
     const a = agents.find((x) => x.id === parts[2]);

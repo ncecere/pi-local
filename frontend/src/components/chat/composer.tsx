@@ -1,4 +1,4 @@
-import { ArrowUp, Square } from 'lucide-react';
+import { ArrowUp, Square, Zap } from 'lucide-react';
 import {
   type ClipboardEvent,
   type KeyboardEvent,
@@ -12,7 +12,14 @@ import {
 import { FILLED_FOCUS_RING, FOCUS_RING } from '~/components/ui/focus-ring';
 import { AGENT_MESSAGE_MAX_LENGTH } from '~/hooks/use-agent-thread';
 import { filesOf } from '~/lib/attachments';
-import { isSendKey, sendKeyShortcuts } from '~/lib/send-keys';
+import { isApplePlatform } from '~/lib/keyboard-shortcuts';
+import {
+  isSendKey,
+  isSteerKey,
+  STEER_KEY_SHORTCUT,
+  sendKeyShortcuts,
+  steerKeyLabel,
+} from '~/lib/send-keys';
 import { cn } from '~/lib/utils';
 import { useInvertSend } from '~/providers/theme-provider';
 
@@ -22,6 +29,12 @@ interface ComposerProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  /**
+   * While the agent works: sends into the reply in progress (it joins after
+   * the current step) instead of queueing after it. Offered beside Queue, and
+   * on Alt+Enter.
+   */
+  onSteer?: () => void;
   /** Stops the agent's reply; shown while it works. */
   onStop?: () => void;
   /** The agent is working on a reply. Sending still works: the message queues. */
@@ -54,6 +67,7 @@ export const Composer = memo(function Composer({
   value,
   onChange,
   onSubmit,
+  onSteer,
   onStop,
   working = false,
   stopping = false,
@@ -69,6 +83,7 @@ export const Composer = memo(function Composer({
   holdSend = null,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const apple = isApplePlatform();
   // Enter adds a line and Cmd/Ctrl+Enter sends, when chosen in Appearance.
   const invertSend = useInvertSend();
 
@@ -101,7 +116,13 @@ export const Composer = memo(function Composer({
     onPasteFiles(files);
   }
 
+  const canSteer = working && Boolean(onSteer);
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (canSteer && isSteerKey(event)) {
+      event.preventDefault();
+      if (canSubmit && !event.repeat) onSteer?.();
+      return;
+    }
     if (isSendKey(event, { invert: invertSend })) {
       event.preventDefault();
       // A held key sends once.
@@ -149,7 +170,15 @@ export const Composer = memo(function Composer({
         )}
         {working && length > 0 && !tooLong && (
           <p id={queueNoteId} className="mt-2 text-xs text-[var(--text-muted)]">
-            The agent is working. Your message will run after the current reply.
+            The agent is working. Your message will run after the current reply
+            {canSteer ? (
+              <>
+                , or steer it now ({steerKeyLabel(apple)}): it joins the reply in progress after its
+                current step.
+              </>
+            ) : (
+              '.'
+            )}
           </p>
         )}
 
@@ -178,6 +207,26 @@ export const Composer = memo(function Composer({
               <Square className="size-3.5 fill-current" />
             </button>
           )}
+          {canSteer && (length > 0 || hasExtra) && (
+            <button
+              type="button"
+              disabled={!canSubmit}
+              onClick={onSteer}
+              aria-label="Steer now"
+              aria-keyshortcuts={STEER_KEY_SHORTCUT}
+              title={`Steer now (${steerKeyLabel(apple)}): joins the reply in progress after its current step`}
+              className={cn(
+                'inline-flex h-[2.125rem] shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors',
+                FOCUS_RING,
+                canSubmit
+                  ? 'border-[var(--border-strong)] bg-[var(--bg-control-hover)] text-[var(--text-primary)] hover:bg-[var(--accent-soft)]'
+                  : 'border-[var(--border-strong)] bg-[var(--accent-soft)] text-[var(--text-faint)]',
+              )}
+            >
+              <Zap className="size-3.5" aria-hidden="true" />
+              Steer
+            </button>
+          )}
           {(!working || length > 0 || hasExtra) && (
             <button
               type="button"
@@ -186,6 +235,7 @@ export const Composer = memo(function Composer({
               onClick={onSubmit}
               aria-label={working ? 'Queue message' : 'Send message'}
               aria-keyshortcuts={sendKeyShortcuts(invertSend)}
+              title={working ? 'Queue: runs after the current reply' : undefined}
               className={cn(
                 'inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-lg border transition-colors',
                 FOCUS_RING,

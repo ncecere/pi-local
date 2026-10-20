@@ -41,8 +41,14 @@ export interface PendingMessage {
    * row) as it moves from "sent from this tab" to "in the transcript".
    */
   state: 'sending' | 'queued' | 'failed' | 'confirmed';
-  /** User messages with this text in the transcript when it was sent. */
+  /**
+   * For transcripts that don't carry request IDs (older runtimes): user
+   * messages with this text and no request ID when it was sent, so the n-th
+   * such message after them is this one.
+   */
   baseline: number;
+  /** Sent to steer the reply in progress (`whenBusy: "steer"`) rather than queued after it. */
+  steer?: boolean;
   /** The transcript's id for it, once `confirmed`. */
   matchedId?: string;
 }
@@ -58,6 +64,8 @@ export interface ReplyMetadata {
   errorMessage?: string;
   /** For a user message from this tab: where it is. */
   pending?: Exclude<PendingMessage['state'], 'failed' | 'confirmed'>;
+  /** For a user message from this tab: sent to steer the reply in progress. */
+  steer?: boolean;
   /** When the message was sent, or the reply began (Unix ms), as the platform records it. */
   at?: number;
   /** For a reply: the model that wrote it (its last step's). */
@@ -77,11 +85,13 @@ export type AgentUIMessage = UIMessage<ReplyMetadata>;
 type Part = AgentUIMessage['parts'][number];
 
 /**
- * The id of the reply to the n-th user message (from 0): stable from the first
- * token to the last, and whatever id the question has (a message sent from
- * this tab is renamed by the transcript when it arrives).
+ * The id of the reply to a user message, from the id that message has on
+ * screen: stable from the first token to the last (a message sent from this
+ * tab keeps its id when the transcript has it), and when earlier pages are
+ * put before it (a turn's position would change then).
  */
-const replyIdFor = (turn: number) => (turn < 0 ? 'reply-start' : `reply-${turn}`);
+const replyIdFor = (questionId: string | null) =>
+  questionId === null ? 'reply-start' : `reply-${questionId}`;
 
 /** Whether a message is one sent from this tab and not in the transcript yet. */
 export const isPendingMessage = (message: { metadata?: unknown }) =>
@@ -154,11 +164,18 @@ function withApproval(part: DynamicToolUIPart, approval: ChatApproval): DynamicT
   };
 }
 
-/** The metadata with a tool's details added, when it has any. */
+/** Whether a tool's details were too large for the view (and left out). */
+export function toolDetailsOmittedOf(part: { toolMetadata?: unknown }): boolean {
+  return (part.toolMetadata as { detailsOmitted?: unknown } | undefined)?.detailsOmitted === true;
+}
+
+/** The metadata with a tool's details added (or that they were left out), when it has any. */
 function withDetails(
   metadata: DynamicToolUIPart['toolMetadata'],
   details: unknown,
+  omitted?: boolean,
 ): DynamicToolUIPart['toolMetadata'] {
+  if (omitted === true) return { ...(metadata ?? {}), detailsOmitted: true };
   if (details === undefined || details === null) return metadata;
   return { ...(metadata ?? {}), details: details as NonNullable<typeof metadata>[string] };
 }
@@ -185,7 +202,8 @@ export function viewToMessages(
   const messages: AgentUIMessage[] = [];
   const replies: Reply[] = [];
   let reply: Reply | null = null;
-  let turn = -1;
+  /** The on-screen id of the latest user message: the next reply answers it. */
+  let question: string | null = null;
   // Transcript id -> the id the message already has on screen.
   const alias = new Map<string, string>();
   for (const message of pending)
@@ -195,7 +213,7 @@ export function viewToMessages(
   const currentReply = (): Reply => {
     if (!reply) {
       reply = {
-        message: { id: replyIdFor(turn), role: 'assistant', parts: [], metadata: {} },
+        message: { id: replyIdFor(question), role: 'assistant', parts: [], metadata: {} },
         tools: new Map(),
         recorded: {},
       };
@@ -211,9 +229,9 @@ export function viewToMessages(
     if (skip.has(message)) continue;
     if (message.role === 'user') {
       reply = null;
-      turn++;
+      question = alias.get(message.id) ?? message.id;
       messages.push({
-        id: alias.get(message.id) ?? message.id,
+        id: question,
         role: 'user',
         parts: [{ type: 'text', text: message.text ?? '' }],
         ...(typeof message.at === 'number' ? { metadata: { at: message.at } } : {}),
@@ -236,12 +254,13 @@ export function viewToMessages(
       const part = live.tools.get(slot.callId);
       if (part && part.state === 'input-available') {
         if (slot.output) part.toolMetadata = { liveOutput: slot.output };
-        const metadata = withDetails(part.toolMetadata, slot.details);
+        const metadata = withDetails(part.toolMetadata, slot.details, slot.detailsOmitted);
         if (metadata) part.toolMetadata = metadata;
       } else if (!part) {
         const metadata = withDetails(
           slot.output ? { liveOutput: slot.output } : undefined,
           slot.details,
+          slot.detailsOmitted,
         );
         // A tool running whose call is not committed yet: show it anyway.
         const added: DynamicToolUIPart = {
@@ -287,7 +306,7 @@ export function viewToMessages(
       id: pendingIdOf(message),
       role: 'user',
       parts: [{ type: 'text', text: message.text }],
-      metadata: { pending: message.state },
+      metadata: { pending: message.state, ...(message.steer ? { steer: true } : {}) },
     });
   }
 
@@ -394,7 +413,7 @@ function addToolResult(reply: Reply, message: ChatToolMessage) {
   const text = message.text ?? '';
   const existing = reply.tools.get(id);
   // Its timing, from the call, stays with it when the result arrives; its details come with the result.
-  const metadata = withDetails(existing?.toolMetadata, message.details);
+  const metadata = withDetails(existing?.toolMetadata, message.details, message.detailsOmitted);
   const base = {
     type: 'dynamic-tool' as const,
     toolName: existing?.toolName ?? message.name ?? 'tool',
@@ -461,10 +480,18 @@ function signature(message: AgentUIMessage): string {
 }
 const sameMessage = (a: AgentUIMessage, b: AgentUIMessage) => signature(a) === signature(b);
 
-/** How many user messages in the transcript have exactly this text. */
-export function userMessagesWithText(view: ChatView | null, text: string): number {
+/**
+ * How many user messages in the transcript have exactly this text and no
+ * request ID: the ones a message sent now could be confused with when the
+ * transcript does not say which request a message came from.
+ */
+export function userMessagesWithText(
+  view: Pick<ChatView, 'messages'> | null,
+  text: string,
+): number {
   const wanted = text.trim();
   return (view?.messages ?? []).filter(
-    (message) => message.role === 'user' && (message.text ?? '').trim() === wanted,
+    (message) =>
+      message.role === 'user' && !message.requestId && (message.text ?? '').trim() === wanted,
   ).length;
 }

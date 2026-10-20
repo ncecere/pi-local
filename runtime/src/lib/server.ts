@@ -216,7 +216,7 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			const author = parseAuthor(body.author);
 			const conversation = await threads.ensure(threadId, text);
 			await options.beforeMessage?.(threadId, conversation);
-			const data: UserEntryData = { text, at: Date.now(), ...(author === undefined ? {} : { author }) };
+			const data: UserEntryData = { text, at: Date.now(), ...(author === undefined ? {} : { author }), ...(requestId === undefined ? {} : { requestId }) };
 			const content = author !== undefined && body.announceAuthor === true ? `${speakerLine(author)}\n${text}` : text;
 			const submission = await conversation.submit(
 				{
@@ -231,6 +231,34 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			await threads.touch(threadId);
 			options.afterMessage?.(threadId, submission.id as number);
 			return json(response, 202, { submissionId: submission.id });
+		}
+		if (method === "POST" && action === "fork") {
+			// A new thread from this one (edit and resend a message, or branch the conversation): with beforeMessageId it
+			// keeps the transcript up to the message before that one; with afterMessageId, up to and with that one.
+			touch();
+			const body = (await readJson(request)) as { threadId?: unknown; beforeMessageId?: unknown; afterMessageId?: unknown };
+			const newId = body.threadId;
+			if (typeof newId !== "string" || !THREAD_ID.test(newId)) return fail(response, 400, "invalid_thread_id", "threadId must be 1-64 letters, digits, dashes or underscores");
+			const before = typeof body.beforeMessageId === "string" ? body.beforeMessageId : undefined;
+			const after = typeof body.afterMessageId === "string" ? body.afterMessageId : undefined;
+			if ((before === undefined) === (after === undefined)) return fail(response, 400, "invalid_fork", "Give beforeMessageId or afterMessageId");
+			const view = await viewOf(threadId);
+			if (view === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
+			const index = view.messages.findIndex((m) => m.id === (before ?? after));
+			if (index < 0) return fail(response, 400, "invalid_message_id", "No such message in this thread");
+			// The entry a message came from: its ID is e<entry>, or e<entry>:<n> for one of several messages of an entry.
+			const entryOf = (id: string) => Number(/^e(\d+)/.exec(id)?.[1]);
+			const keep = before !== undefined ? view.messages[index - 1] : view.messages[index];
+			const at = keep === undefined ? undefined : entryOf(keep.id);
+			if (at !== undefined && !Number.isSafeInteger(at)) return fail(response, 400, "invalid_message_id", "That message can't be forked from");
+			try {
+				const forked = await threads.fork(threadId, newId, at);
+				if (forked === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
+			} catch (error) {
+				if (/exists/.test((error as Error).message)) return fail(response, 409, "thread_exists", "That thread ID is taken");
+				throw error;
+			}
+			return json(response, 201, { threadId: newId });
 		}
 		if (method === "POST" && action === "stop") {
 			touch();

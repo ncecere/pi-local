@@ -429,7 +429,19 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
 - Import from Claude Desktop / Cursor / VS Code `mcp.json` (cheap and very handy).
 - Show the full command before the first run of any stdio server added by import.
 
-### Phase 6: Chat features the platform unlocked
+### Phase 6: Chat features ✅ done 2026-10-20
+- **Delta stream:** `format=delta&v=1&limit=100`, a faithful port of `applyDelta` (property-tested with 300 random
+  sequences), `Last-Event-ID`, and a gap means a new snapshot.
+- **Request IDs** on user entries (runtime), so the UI matches sends by ID; the n-th-text fallback stays for old
+  conversations.
+- **Paging:** "Load earlier", anchored scroll.
+- **Steer:** a button and ⌥Return.
+- **A documents panel:** research plan and sources, triage queue.
+- **Tool "Details".**
+- **Tested:** the delta/steer/paging pass-through and the documents relay (Go); by hand, steering and the documents
+  panel in the browser.
+
+### (Original Phase 6 notes)
 - Delta stream in `use-agent-thread` (port `applyDelta`, keep the property test).
 - **Steer** (`whenBusy: "steer"`) from the composer while busy.
 - **Tool approvals:** inline card in the transcript, a global approvals inbox in the sidebar (pushed, not polled),

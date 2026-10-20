@@ -19,6 +19,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/icons"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"github.com/ncecere/pi-local/frontend"
 	"github.com/ncecere/pi-local/internal/app"
@@ -29,6 +30,7 @@ import (
 func main() {
 	defaultData, _ := app.DefaultDataDir()
 	dataDir := flag.String("data", envOr("PI_LOCAL_DATA", defaultData), "data directory")
+	hidden := flag.Bool("hidden", false, "start in the menu bar without opening the window (launch at login)")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -39,7 +41,15 @@ func main() {
 		apiHandler = core.API.Handler()
 	}
 	var window *application.WebviewWindow
+	var services []application.Service
+	note := &notifier{}
+	if bundled() {
+		// Native notifications need an app bundle; without one (development) they go through osascript.
+		note.native = notifications.New()
+		services = append(services, application.NewService(note.native))
+	}
 	wails := application.New(application.Options{
+		Services:    services,
 		Name:        "Pi Local",
 		Description: "Your own Pi Durable agents, on this computer",
 		Assets: application.AssetOptions{
@@ -88,6 +98,7 @@ func main() {
 		MinWidth:         420,
 		MinHeight:        480,
 		URL:              "/?shell=desktop-mac",
+		Hidden:           *hidden,
 		BackgroundColour: application.NewRGB(10, 10, 10),
 		Mac: application.MacWindow{
 			TitleBar:                application.MacTitleBarHiddenInset,
@@ -111,10 +122,26 @@ func main() {
 	menu := wails.NewMenu()
 	menu.Add("Open Pi Local").OnClick(func(*application.Context) { show() })
 	menu.AddSeparator()
+	workingItem := menu.Add("Nothing working").SetEnabled(false)
+	needsItem := menu.Add("Nothing needs you").OnClick(func(*application.Context) { show() })
+	menu.AddSeparator()
 	menu.Add("Quit Pi Local").OnClick(func(*application.Context) { wails.Quit() })
 	tray.SetMenu(menu)
 
 	if core != nil {
+		core.API.Desktop = desktop{dataDir: *dataDir}
+		watch(core, window, note, func(working, needsYou int) {
+			workingItem.SetLabel(plural(working, "agent working", "agents working", "Nothing working"))
+			needsItem.SetLabel(plural(needsYou, "request needs you", "requests need you", "Nothing needs you"))
+			menu.Update()
+		})
+		if note.native != nil {
+			go func() {
+				if ok, _ := note.native.CheckNotificationAuthorization(); !ok {
+					note.native.RequestNotificationAuthorization()
+				}
+			}()
+		}
 		core.API.SaveDialog = func(name string) (string, error) {
 			return wails.Dialog.SaveFile().SetFilename(name).AddFilter("Zip archive", "*.zip").CanCreateDirectories(true).AttachToWindow(window).PromptForSingleSelection()
 		}
@@ -186,4 +213,15 @@ func startupFailure(w http.ResponseWriter, r *http.Request, err error) {
 <p style="color:#f5a3a3">%s</p>
 <p style="color:#a3a3a3">Fix this and open Pi Local again. If Node.js is missing, install Node %d.%d or newer (for example <code>brew install node</code>).</p></main>`,
 		html.EscapeString(err.Error()), runtimeenv.MinNodeMajor, runtimeenv.MinNodeMinor)
+}
+
+func plural(n int, one, many, none string) string {
+	switch n {
+	case 0:
+		return none
+	case 1:
+		return "1 " + one
+	default:
+		return fmt.Sprintf("%d %s", n, many)
+	}
 }

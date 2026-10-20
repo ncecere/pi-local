@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { Clock } from 'lucide-react';
+import { Clock, Zap } from 'lucide-react';
 import { memo, useId, useState } from 'react';
 import type { Agent } from '~/api/client';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
@@ -53,6 +53,8 @@ export function messageExcerptOf(message: UIMessage): string | null {
   return excerpt;
 }
 
+const STEER_NOTE = 'Steering: joins the reply in progress after its current step.';
+
 const PENDING_NOTE: Record<NonNullable<ReplyMetadata['pending']>, string> = {
   sending: 'Sending…',
   queued: 'Queued: the agent takes it next.',
@@ -73,6 +75,7 @@ export const MessageRow = memo(function MessageRow({
 
   if (message.role === 'user') {
     const pending = (message.metadata as ReplyMetadata | undefined)?.pending;
+    const steer = (message.metadata as ReplyMetadata | undefined)?.steer === true;
     return (
       <article
         className="group flex flex-col items-end"
@@ -95,8 +98,12 @@ export const MessageRow = memo(function MessageRow({
             role="status"
             className="mt-1.5 flex items-center gap-1 text-xs text-[var(--text-muted)]"
           >
-            <Clock className="size-3" aria-hidden="true" />
-            {PENDING_NOTE[pending]}
+            {steer ? (
+              <Zap className="size-3" aria-hidden="true" />
+            ) : (
+              <Clock className="size-3" aria-hidden="true" />
+            )}
+            {steer && pending === 'queued' ? STEER_NOTE : PENDING_NOTE[pending]}
           </p>
         ) : (
           <MessageActions

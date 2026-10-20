@@ -180,6 +180,18 @@ func (x *Index) Sending(ctx context.Context, agentID, threadID, text string, cal
 	return created, nil
 }
 
+// Adopt records a thread the runtime just made (a fork), idle, with the source's title.
+func (x *Index) Adopt(ctx context.Context, agentID, threadID, title string) error {
+	now := x.now().UnixMilli()
+	_, err := x.db.ExecContext(ctx, `INSERT INTO threads (agent_id, thread_id, title, created_at, updated_at, busy, status_at, recorded_at)
+		VALUES (?, ?, ?, ?, ?, 0, ?, ?) ON CONFLICT (agent_id, thread_id) DO NOTHING`, agentID, threadID, TitleFrom(title), now, now, now, now)
+	if err != nil {
+		return err
+	}
+	x.changed(ctx, agentID, threadID)
+	return nil
+}
+
 // Rename sets the title people see, over the runtime's.
 func (x *Index) Rename(ctx context.Context, agentID, threadID, title string) (*Thread, error) {
 	res, err := x.db.ExecContext(ctx, `UPDATE threads SET title_override = ? WHERE agent_id = ? AND thread_id = ?`, title, agentID, threadID)

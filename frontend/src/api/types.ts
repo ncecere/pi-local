@@ -451,7 +451,7 @@ export interface UsageReport {
 
 /** Who sent a user message: a person, a service account, or a trigger (an unattended run). */
 export type Author = {
-  kind: 'user' | 'service_account' | 'trigger';
+  kind: 'user' | 'service_account' | 'trigger' | 'agent';
   id: string;
   name: string;
   via?: string;
@@ -474,6 +474,9 @@ export type ChatView = {
 };
 
 export type ChatDocumentRef = { revision: string };
+
+/** `GET /api/agents/{a}/threads/{t}/documents/{kind}`: an exposed document's current value. */
+export type ThreadDocument = { kind: string; version: number; revision: string; value: unknown };
 
 export type ChatPartial = { text: string; thinking: string };
 
@@ -527,6 +530,8 @@ export type ChatUserMessage = {
   text: string;
   author?: Author;
   at?: number;
+  /** The request ID it was sent with: a client matches what it sent by it (never by text). */
+  requestId?: string;
 };
 
 export type ChatAssistantMessage = {

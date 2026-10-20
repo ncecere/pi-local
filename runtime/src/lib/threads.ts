@@ -58,6 +58,38 @@ export class ThreadStore {
 		}, ctx);
 	}
 
+	/**
+	 * A new thread from an existing one (edit a message, branch a conversation): `at`, the newest entry of the source
+	 * the new thread keeps (its transcript up to there, then its own); undefined starts it empty. The source is
+	 * untouched. Answers undefined when the source doesn't exist, and throws when the new ID is taken.
+	 */
+	async fork(sourceId: string, threadId: string, at: number | undefined): Promise<Conversation | undefined> {
+		const source = (await this.harness.snapshot(ThreadsDoc, ctx))?.threads[sourceId];
+		if (source === undefined) return undefined;
+		if ((await this.get(threadId)) !== undefined || this.creating.has(threadId)) throw new Error(`thread ${threadId} exists`);
+		const options = {
+			ownership: { kind: "ownerless" as const },
+			agent: this.agent(),
+			init: async (tx: Parameters<NonNullable<Parameters<Harness["createConversation"]>[0]["init"]>>[0], conversationId: number) => {
+				const now = Date.now();
+				(await tx.doc(ThreadsDoc)).threads[threadId] = { conversationId, title: source.title, createdAt: now, updatedAt: now };
+			},
+		};
+		let created: Promise<Conversation>;
+		if (at === undefined) created = this.harness.createConversation(options as never, ctx);
+		else {
+			const parent = await this.harness.conversation(source.conversationId as Conversation["id"], ctx);
+			if (parent === undefined) return undefined;
+			created = parent.fork(at as never, options as never, ctx);
+		}
+		this.creating.set(threadId, created);
+		try {
+			return await created;
+		} finally {
+			this.creating.delete(threadId);
+		}
+	}
+
 	async remove(threadId: string): Promise<boolean> {
 		return this.harness.commit(async (tx) => {
 			const threads = (await tx.doc(ThreadsDoc)).threads;

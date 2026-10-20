@@ -32,7 +32,7 @@ describe('viewToMessages', () => {
     const messages = viewToMessages(transcript);
     expect(messages.map((message) => [message.id, message.role])).toEqual([
       ['e1', 'user'],
-      ['reply-0', 'assistant'],
+      ['reply-e1', 'assistant'],
     ]);
     const reply = messages[1]!;
     expect(reply.parts.map((part) => part.type)).toEqual([
@@ -100,7 +100,7 @@ describe('viewToMessages', () => {
         { id: 'e5', role: 'assistant', text: 'Sure.', stopReason: 'stop' },
       ],
     });
-    expect(messages.map((message) => message.id)).toEqual(['e1', 'reply-0', 'e4', 'reply-1']);
+    expect(messages.map((message) => message.id)).toEqual(['e1', 'reply-e1', 'e4', 'reply-e4']);
     const reply = messages[1]!;
     expect(reply.parts).toEqual([
       { type: 'text', text: 'Roses are red, violets are blue.', state: 'done' },
@@ -203,7 +203,7 @@ describe('viewToMessages', () => {
       partial: { text: '', thinking: '' },
     });
     const reply = messages[1]!;
-    expect(reply.id).toBe('reply-0');
+    expect(reply.id).toBe('reply-e1');
     expect(reply.metadata).toEqual({ status: 'streaming' });
     const tool = reply.parts[0] as Record<string, unknown>;
     expect(tool.state).toBe('input-available');
@@ -241,6 +241,60 @@ describe('viewToMessages', () => {
       metadata: { pending: 'queued' },
     });
     expect(messages).toHaveLength(3);
+  });
+});
+
+describe('reply ids', () => {
+  it('stay the same when earlier messages are put before the transcript', () => {
+    const page = viewToMessages(transcript);
+    const withEarlier = viewToMessages({
+      ...transcript,
+      messages: [
+        { id: 'e0', role: 'user', text: 'Earlier question' },
+        { id: 'e0:1', role: 'assistant', text: 'Earlier answer' },
+        ...transcript.messages,
+      ],
+    });
+    expect(withEarlier.slice(2).map((message) => message.id)).toEqual(
+      page.map((message) => message.id),
+    );
+    // Unchanged rows keep their objects across the page being added.
+    const merged = reuseUnchanged(page, withEarlier);
+    expect(merged[2]).toBe(page[0]);
+    expect(merged[3]).toBe(page[1]);
+  });
+});
+
+describe('tool details', () => {
+  it('keeps a result’s details, and says when they were left out', () => {
+    const messages = viewToMessages({
+      busy: true,
+      messages: [
+        { id: 'e1', role: 'user', text: 'plan it' },
+        {
+          id: 'e2',
+          role: 'assistant',
+          text: '',
+          toolCalls: [
+            { id: 'c1', name: 'research_plan', arguments: {} },
+            { id: 'c2', name: 'big', arguments: {} },
+          ],
+        },
+        {
+          id: 'e3',
+          role: 'tool',
+          toolCallId: 'c1',
+          name: 'research_plan',
+          text: 'ok',
+          isError: false,
+          details: { question: 'q', steps: [] },
+        },
+      ],
+      tools: [{ callId: 'c2', name: 'big', status: 'running', detailsOmitted: true }],
+    });
+    const parts = messages[1]!.parts as { toolMetadata?: Record<string, unknown> }[];
+    expect(parts[0]!.toolMetadata).toMatchObject({ details: { question: 'q', steps: [] } });
+    expect(parts[1]!.toolMetadata).toMatchObject({ detailsOmitted: true });
   });
 });
 
@@ -294,7 +348,7 @@ describe('reconcile and stable identity', () => {
     const confirmed = reconcile(queued, { ...transcript, busy: false });
     expect(confirmed[0]).toMatchObject({ state: 'confirmed', matchedId: 'e1' });
     const after = viewToMessages(transcript, confirmed);
-    expect(after.map((message) => message.id)).toEqual(['pending-r1', 'reply-0']);
+    expect(after.map((message) => message.id)).toEqual(['pending-r1', 'reply-pending-r1']);
     // Not shown twice, and no longer marked as waiting.
     expect(after[0]!.metadata).toBeUndefined();
   });
@@ -314,7 +368,7 @@ describe('reconcile and stable identity', () => {
         messages: [{ id: 'e1', role: 'user', text: 'hi' }],
       }),
     );
-    expect(early.map((message) => message.id)).toEqual(['pending-r1', 'reply-0']);
+    expect(early.map((message) => message.id)).toEqual(['pending-r1', 'reply-pending-r1']);
   });
 
   it('tells the same words sent twice apart, oldest first', () => {
@@ -338,6 +392,47 @@ describe('reconcile and stable identity', () => {
       messages: view.messages.slice(0, 2),
     });
     expect(half.map((message) => message.state)).toEqual(['confirmed', 'queued']);
+  });
+
+  it('matches by request ID, never by text, when the transcript carries request IDs', () => {
+    const view: ChatView = {
+      busy: false,
+      tools: [],
+      messages: [
+        { id: 'e1', role: 'user', text: 'again', requestId: 'b' },
+        { id: 'e2', role: 'assistant', text: 'ok' },
+        { id: 'e3', role: 'user', text: 'again', requestId: 'a' },
+      ],
+    };
+    // Sent a then b, but the transcript has them the other way round (a steer jumped ahead).
+    const result = reconcile([sent('a', 'again'), sent('b', 'again')], view);
+    expect(result.map((message) => [message.requestId, message.state, message.matchedId])).toEqual([
+      ['a', 'confirmed', 'e3'],
+      ['b', 'confirmed', 'e1'],
+    ]);
+    // Another tab's message with the same words is not this one.
+    const other = reconcile([sent('mine', 'again')], view);
+    expect(other[0]!.state).toBe('queued');
+    // Text edited on the way (trimmed, or the files' block) still matches by ID.
+    const edited = reconcile([sent('a', 'again, differently')], view);
+    expect(edited[0]).toMatchObject({ state: 'confirmed', matchedId: 'e3' });
+  });
+
+  it('falls back to the text for messages without request IDs (older conversations)', () => {
+    const view: ChatView = {
+      busy: false,
+      tools: [],
+      messages: [
+        { id: 'e1', role: 'user', text: 'hello' },
+        { id: 'e2', role: 'user', text: 'hello', requestId: 'x' },
+        { id: 'e3', role: 'user', text: 'hello' },
+      ],
+    };
+    // One message without an ID had the text when it was sent: the next one is this.
+    const baseline = userMessagesWithText({ messages: view.messages.slice(0, 2) }, 'hello');
+    expect(baseline).toBe(1);
+    const result = reconcile([sent('r', 'hello', baseline)], view);
+    expect(result[0]).toMatchObject({ state: 'confirmed', matchedId: 'e3' });
   });
 
   it('leaves the array alone when nothing matched, and failed messages unmatched', () => {

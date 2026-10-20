@@ -15,7 +15,7 @@ export const AUTHOR_KINDS: ReadonlySet<string> = new Set(["user", "service_accou
  * the speaker) plus `data`, what the transcript shows: the text as sent, when, and by whom.
  */
 export const USER_ENTRY = "pdp.user";
-export type UserEntryData = { text: string; at: number; author?: Author };
+export type UserEntryData = { text: string; at: number; author?: Author; requestId?: string };
 
 /** The chat view the platform relays to clients: transcript plus the reply in progress. */
 export type ChatView = {
@@ -100,7 +100,7 @@ export type ChatUsage = { input: number; output: number; cacheRead: number; cach
 
 /** `at`: Unix milliseconds (a user message's sending, an assistant reply's start). */
 export type ChatMessage =
-	| { id: string; role: "user"; text: string; author?: Author; at?: number }
+	| { id: string; role: "user"; text: string; author?: Author; at?: number; requestId?: string }
 	| {
 			id: string;
 			role: "assistant";
@@ -155,6 +155,8 @@ export function buildMessages(entries: readonly EntryRecord[], approvals?: Reado
 				converted.text = data.text ?? converted.text;
 				if (data.at !== undefined) converted.at = data.at;
 				if (data.author !== undefined) converted.author = data.author;
+				// The sender's request ID: a client matches what it sent to the transcript by it, not by the text.
+				if (data.requestId !== undefined) converted.requestId = data.requestId;
 			}
 			messages.push(converted);
 		});
@@ -182,9 +184,10 @@ export function liveParts(live: Readonly<LiveState> | undefined): Pick<ChatView,
 /** A pdp.user entry's data, read defensively (it is stored JSON). */
 function userData(value: unknown): Partial<UserEntryData> | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
-	const { text, at, author } = value as Record<string, unknown>;
+	const { text, at, author, requestId } = value as Record<string, unknown>;
 	const out: Partial<UserEntryData> = {};
 	if (typeof text === "string") out.text = text;
+	if (typeof requestId === "string") out.requestId = requestId;
 	if (typeof at === "number") out.at = at;
 	if (typeof author === "object" && author !== null) {
 		const { kind, id, name, via } = author as Record<string, unknown>;

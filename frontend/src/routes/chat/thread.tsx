@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
-import { ArrowDown, CornerUpLeft } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowDown, ArrowUp, CornerUpLeft, LoaderCircle } from 'lucide-react';
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import { publishAgentLive } from '~/components/agent/avatar/agent-live';
 import {
@@ -10,6 +10,7 @@ import {
   useFileDrop,
 } from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
+import { DocumentsPanel } from '~/components/chat/documents-panel';
 import { preloadMarkdownRenderer, useMarkdownRendererReady } from '~/components/chat/markdown';
 import { textOf } from '~/components/chat/message-content';
 import { MessageList } from '~/components/chat/message-list';
@@ -87,14 +88,21 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
     return null;
   }, [busy, messages]);
 
-  const scroll = useChatScroll(messages, working, undefined, true, shown);
+  // Earlier pages put before the transcript are not the conversation moving on.
+  const scroll = useChatScroll(session.liveMessages, working, undefined, true, shown);
+  const { loadEarlier } = session;
+  const { keepPlaceForPrepend } = scroll;
+  const showEarlier = useCallback(
+    () => void loadEarlier(keepPlaceForPrepend),
+    [loadEarlier, keepPlaceForPrepend],
+  );
 
   // Files attached to the next message: chosen, dropped on the conversation, or pasted.
   const attachments = useAttachments(agent);
   const drop = useFileDrop(attachments.add, attachments.enabled && Boolean(agent?.enabled));
-  const sendWithFiles = () => {
+  const sendWithFiles = (steer = false) => {
     if (attachments.busy) return;
-    void session.send(attachments.compose).then((sent) => {
+    void session.send(attachments.compose, { steer }).then((sent) => {
       if (sent) attachments.clear();
     });
   };
@@ -180,125 +188,199 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
   return (
     <>
       <h1 className="sr-only">{title ?? 'Conversation'}</h1>
-      <div className="relative flex h-full flex-col" {...drop.handlers}>
-        <DropOverlay show={drop.dragging} agentName={agent?.name} />
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <div
-            ref={scroll.scrollRef}
-            onScroll={scroll.onScroll}
-            data-conversation-scroller
-            className="relative flex-1 overflow-y-auto"
-          >
-            <div ref={scroll.contentRef}>
-              {calledBy && (
-                <div className="mx-auto max-w-[42rem] px-4 pt-4">
-                  <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-control)]/40 px-3.5 py-2 text-sm text-[var(--text-secondary)]">
-                    <CornerUpLeft
-                      className="size-4 shrink-0 text-[var(--text-muted)]"
-                      aria-hidden="true"
-                    />
-                    <span>
-                      Asked by{' '}
-                      <span className="font-medium text-[var(--text-primary)]">
-                        {calledBy.name}
-                      </span>
-                    </span>
-                    <span aria-hidden="true">—</span>
-                    <Link
-                      to="/agents/$agentId/threads/$threadId"
-                      params={{ agentId: calledBy.agentId, threadId: calledBy.threadId }}
-                      className="text-[var(--text-primary)] underline decoration-[var(--border-strong)] underline-offset-4 hover:decoration-current"
-                    >
-                      open their conversation
-                    </Link>
-                  </p>
-                </div>
-              )}
-              <MessageList
-                messages={messages}
-                liveReplyId={liveReplyId}
-                working={working}
-                waitingLabel={waitingLabel}
-                agent={agent}
-                onRetry={retry}
-                scrollRef={scroll.scrollRef}
-              />
-              {(session.sendError || note || dropped) && (
-                <div className="mx-auto max-w-[42rem] space-y-2 px-4 pb-4">
-                  {dropped && (
-                    <NoReplyNote agentName={agent?.name ?? 'The agent'} onRetry={retry} />
-                  )}
-                  {session.sendError && (
-                    <p
-                      role="alert"
-                      className="rounded-xl bg-[var(--danger)]/15 px-4 py-3 text-sm text-[var(--danger-on-tint)]"
-                    >
-                      {session.sendError}
-                    </p>
-                  )}
-                  {note && (
-                    <p role="status" className="text-sm text-[var(--text-muted)]">
-                      {note}{' '}
-                      {session.connection === 'paused' && (
-                        <button type="button" className="underline" onClick={session.reconnect}>
-                          Resume
-                        </button>
-                      )}
-                      {session.connection === 'reconnecting' && session.connectError && (
-                        <span>({session.connectError})</span>
-                      )}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-            {/* Room below a just-sent question so it can sit at the top of the view. */}
-            <div ref={scroll.spacerRef} aria-hidden="true" />
-          </div>
-          {scroll.detached && (
-            <button
-              type="button"
-              onClick={scroll.jumpToLatest}
-              className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-sm text-[var(--text-secondary)] shadow-sm transition-colors hover:text-[var(--text-primary)]"
+      <div className="relative flex h-full">
+        <div className="relative flex h-full min-w-0 flex-1 flex-col" {...drop.handlers}>
+          <DropOverlay show={drop.dragging} agentName={agent?.name} />
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <div
+              ref={scroll.scrollRef}
+              onScroll={scroll.onScroll}
+              data-conversation-scroller
+              className="relative flex-1 overflow-y-auto"
             >
-              <ArrowDown className="size-4" aria-hidden="true" />
-              Jump to latest
-            </button>
-          )}
-        </div>
+              <div ref={scroll.contentRef}>
+                {calledBy && (
+                  <div className="mx-auto max-w-[42rem] px-4 pt-4">
+                    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-control)]/40 px-3.5 py-2 text-sm text-[var(--text-secondary)]">
+                      <CornerUpLeft
+                        className="size-4 shrink-0 text-[var(--text-muted)]"
+                        aria-hidden="true"
+                      />
+                      <span>
+                        Asked by{' '}
+                        <span className="font-medium text-[var(--text-primary)]">
+                          {calledBy.name}
+                        </span>
+                      </span>
+                      <span aria-hidden="true">—</span>
+                      <Link
+                        to="/agents/$agentId/threads/$threadId"
+                        params={{ agentId: calledBy.agentId, threadId: calledBy.threadId }}
+                        className="text-[var(--text-primary)] underline decoration-[var(--border-strong)] underline-offset-4 hover:decoration-current"
+                      >
+                        open their conversation
+                      </Link>
+                    </p>
+                  </div>
+                )}
+                {session.hasEarlier && (
+                  <EarlierMessages
+                    onLoad={showEarlier}
+                    loading={session.loadingEarlier}
+                    error={session.earlierError}
+                    auto={scroll.detached}
+                    scrollRef={scroll.scrollRef}
+                  />
+                )}
+                <MessageList
+                  messages={messages}
+                  liveReplyId={liveReplyId}
+                  working={working}
+                  waitingLabel={waitingLabel}
+                  agent={agent}
+                  onRetry={retry}
+                  scrollRef={scroll.scrollRef}
+                />
+                {(session.sendError || note || dropped) && (
+                  <div className="mx-auto max-w-[42rem] space-y-2 px-4 pb-4">
+                    {dropped && (
+                      <NoReplyNote agentName={agent?.name ?? 'The agent'} onRetry={retry} />
+                    )}
+                    {session.sendError && (
+                      <p
+                        role="alert"
+                        className="rounded-xl bg-[var(--danger)]/15 px-4 py-3 text-sm text-[var(--danger-on-tint)]"
+                      >
+                        {session.sendError}
+                      </p>
+                    )}
+                    {note && (
+                      <p role="status" className="text-sm text-[var(--text-muted)]">
+                        {note}{' '}
+                        {session.connection === 'paused' && (
+                          <button type="button" className="underline" onClick={session.reconnect}>
+                            Resume
+                          </button>
+                        )}
+                        {session.connection === 'reconnecting' && session.connectError && (
+                          <span>({session.connectError})</span>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+              {/* Room below a just-sent question so it can sit at the top of the view. */}
+              <div ref={scroll.spacerRef} aria-hidden="true" />
+            </div>
+            {scroll.detached && (
+              <button
+                type="button"
+                onClick={scroll.jumpToLatest}
+                className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-sm text-[var(--text-secondary)] shadow-sm transition-colors hover:text-[var(--text-primary)]"
+              >
+                <ArrowDown className="size-4" aria-hidden="true" />
+                Jump to latest
+              </button>
+            )}
+          </div>
 
-        <Composer
-          autoFocus={handover?.focus ?? false}
-          value={session.draft}
-          onChange={session.setDraft}
-          onSubmit={sendWithFiles}
-          onStop={() => void session.stop()}
-          tray={<AttachmentTray attachments={attachments} agent={agent} />}
-          attach={<AttachButton onFiles={attachments.add} disabled={!agent?.enabled} />}
-          onPasteFiles={agent?.enabled ? attachments.add : undefined}
-          hasExtra={attachments.ready.length > 0}
-          holdSend={attachments.busy ? 'Sending waits until the files are uploaded.' : null}
-          working={busy}
-          stopping={session.stopping}
-          disabled={agent ? !agent.enabled : false}
-          placeholder={
-            agent && !agent.enabled
-              ? `${agent.name} is disabled.`
-              : agent
-                ? `Message ${agent.name}…`
-                : undefined
-          }
-          options={
-            <AgentPicker
-              agents={agent ? [agent] : []}
-              selected={agent ?? null}
-              onSelect={() => undefined}
-              loading={agentsQuery.isPending}
-              locked
-            />
-          }
-        />
+          <Composer
+            autoFocus={handover?.focus ?? false}
+            value={session.draft}
+            onChange={session.setDraft}
+            onSubmit={() => sendWithFiles()}
+            onSteer={() => sendWithFiles(true)}
+            onStop={() => void session.stop()}
+            tray={<AttachmentTray attachments={attachments} agent={agent} />}
+            attach={<AttachButton onFiles={attachments.add} disabled={!agent?.enabled} />}
+            onPasteFiles={agent?.enabled ? attachments.add : undefined}
+            hasExtra={attachments.ready.length > 0}
+            holdSend={attachments.busy ? 'Sending waits until the files are uploaded.' : null}
+            working={busy}
+            stopping={session.stopping}
+            disabled={agent ? !agent.enabled : false}
+            placeholder={
+              agent && !agent.enabled
+                ? `${agent.name} is disabled.`
+                : agent
+                  ? `Message ${agent.name}…`
+                  : undefined
+            }
+            options={
+              <AgentPicker
+                agents={agent ? [agent] : []}
+                selected={agent ?? null}
+                onSelect={() => undefined}
+                loading={agentsQuery.isPending}
+                locked
+              />
+            }
+          />
+        </div>
+        <DocumentsPanel agentId={agentId} threadId={threadId} documents={session.documents} />
       </div>
     </>
+  );
+}
+
+/**
+ * "Load earlier messages", above the first one shown: a click loads the page
+ * before it, and so does scrolling up to it (once the reader has scrolled
+ * away from the end; the conversation opens at its end). The page appears
+ * above what the reader sees without moving it.
+ */
+function EarlierMessages({
+  onLoad,
+  loading,
+  error,
+  auto,
+  scrollRef,
+}: {
+  onLoad: () => void;
+  loading: boolean;
+  error: string | null;
+  /** Load on reaching it, not only on a click. */
+  auto: boolean;
+  scrollRef: RefObject<HTMLElement | null>;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const load = useRef(onLoad);
+  load.current = onLoad;
+  useEffect(() => {
+    const node = ref.current;
+    const root = scrollRef.current;
+    if (!auto || loading || error || !node || !root || typeof IntersectionObserver === 'undefined')
+      return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) load.current();
+      },
+      { root, rootMargin: '400px 0px 0px 0px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [auto, loading, error, scrollRef]);
+  return (
+    <div ref={ref} className="mx-auto flex max-w-[42rem] flex-col items-center gap-1.5 px-4 pt-4">
+      <button
+        type="button"
+        onClick={onLoad}
+        disabled={loading}
+        className="flex items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-control)]/40 px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-70"
+      >
+        {loading ? (
+          <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+        ) : (
+          <ArrowUp className="size-4" aria-hidden="true" />
+        )}
+        {loading ? 'Loading earlier messages…' : 'Load earlier messages'}
+      </button>
+      {error && (
+        <p role="alert" className="text-xs text-[var(--danger-on-tint)]">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

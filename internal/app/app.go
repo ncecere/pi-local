@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -33,6 +34,8 @@ import (
 	"github.com/ncecere/pi-local/internal/gateway"
 	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/models"
+	"github.com/ncecere/pi-local/internal/schedules"
+	"github.com/ncecere/pi-local/internal/search"
 	"github.com/ncecere/pi-local/internal/secrets"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
@@ -68,6 +71,8 @@ type App struct {
 	Asks      *asks.Broker
 	Approvals *approvals.Store
 	MCP       *mcp.Catalog
+	Schedules *schedules.Store
+	Search    *search.Store
 	// DB is app.db (diagnostics and tests).
 	DB *sql.DB
 
@@ -179,8 +184,16 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return out
 	}
 	a.MCP.OnChange = a.mcpChanged
+	a.Search = search.New(db)
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
+		if c.Thread != nil && !c.Thread.Busy {
+			// A reply ended: its scheduled run (if any) is done, and its text is kept searchable.
+			if a.Schedules != nil {
+				a.Schedules.ThreadChanged(c.AgentID, c.Thread)
+			}
+			go a.indexThread(c.AgentID, c.ThreadID, c.Thread.Title)
+		}
 	})
 	a.Threads.NameOf = a.Agents.NameOf
 	a.Teams = teams.New(db, a.Agents)
@@ -216,24 +229,37 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		StopGrace:    cfg.StopGrace,
 	})
 	a.Asks = asks.New(db, a.Sup, a.Agents, permissions{a}, a.Threads)
+	a.Schedules = schedules.New(db, a.Sup, a.Agents, a.Threads)
+	a.Schedules.OnChange = func(id string, sc *schedules.Schedule) {
+		if sc == nil {
+			a.Hub.Publish("schedule", map[string]any{"scheduleId": id, "deleted": true})
+			return
+		}
+		a.Hub.Publish("schedule", map[string]any{"scheduleId": id, "deleted": false, "schedule": sc})
+	}
+	a.Schedules.OnRunEnd = func(sc *schedules.Schedule, run *schedules.Run) {
+		a.Hub.Publish("schedule_run", map[string]any{"scheduleId": sc.ID, "agentId": sc.AgentID, "name": sc.Name, "run": run})
+	}
 	a.Approvals = approvals.New(db, a.Sup, approvalAgents{a})
 	a.Approvals.Person = localPersonName()
 	a.Approvals.OnChange = func(ap *approvals.Approval) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
 			a.Approvals.ForgetAgent(context.Background(), c.AgentID)
+			a.Schedules.ForgetAgent(context.Background(), c.AgentID)
+			a.Search.Forget(context.Background(), c.AgentID, "")
 			if err := a.Teams.RemoveAgent(context.Background(), c.AgentID); err != nil {
 				slog.Warn("removing a deleted agent from its teams", "agent", c.AgentID, "err", err)
 			}
@@ -249,6 +275,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}()
 		}
 	})
+	a.Schedules.Start()
 	ok = true
 	return a, nil
 }
@@ -328,6 +355,10 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 			env["MCP_OAUTH_URL"] = a.gatewayURL + "/mcp/oauth"
 		}
 	}
+	// Its own schedules (the schedule tools), when its agent.yaml allows them.
+	if ag.Config.Schedules.AgentMade {
+		env["PLATFORM_SCHEDULES"] = "true"
+	}
 	// Asking other agents: the tools are there when it may ask someone (who exactly is decided at each ask).
 	if callees, err := a.Teams.Callable(ctx, id); err == nil && len(callees) > 0 {
 		env["AGENT_CALLS"] = "true"
@@ -377,6 +408,32 @@ func (a *App) teamChanged(teamID string, team *teams.Team) {
 			}
 		}()
 		a.publishAgent(id)
+	}
+}
+
+// indexThread keeps a conversation's text searchable after a reply, without waking a sleeping agent for it.
+func (a *App) indexThread(agentID, threadID, title string) {
+	if status, _ := a.Sup.Status(agentID); status != supervisor.Awake {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := a.Sup.Call(ctx, agentID, http.MethodGet, "/threads/"+threadID, nil, nil)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var wrapped struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&wrapped) != nil {
+		return
+	}
+	if err := a.Search.Put(ctx, agentID, threadID, title, search.Text(wrapped.Data)); err != nil {
+		slog.Warn("indexing a conversation", "agent", agentID, "err", err)
 	}
 }
 
@@ -603,6 +660,9 @@ func (a *App) Close() {
 	}
 	if a.Approvals != nil {
 		a.Approvals.Close()
+	}
+	if a.Schedules != nil {
+		a.Schedules.Close()
 	}
 	if a.Sup != nil {
 		a.Sup.Close()

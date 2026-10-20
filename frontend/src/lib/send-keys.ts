@@ -15,6 +15,7 @@ export interface SendKeyEvent {
   shiftKey: boolean;
   metaKey: boolean;
   ctrlKey: boolean;
+  altKey?: boolean;
   nativeEvent: { isComposing?: boolean; keyCode?: number };
 }
 
@@ -30,3 +31,16 @@ export function isSendKey(event: SendKeyEvent, options: { invert: boolean }): bo
 export function sendKeyShortcuts(invert: boolean): string {
   return invert ? 'Meta+Enter Control+Enter' : 'Enter';
 }
+
+/**
+ * Alt+Enter (Option+Enter on a Mac), while the agent works: steer, sending
+ * the message into the reply in progress instead of queueing it after.
+ */
+export function isSteerKey(event: SendKeyEvent): boolean {
+  if (event.key !== 'Enter' || !event.altKey) return false;
+  return !(event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229);
+}
+
+/** The steer shortcut as people read it, and for `aria-keyshortcuts`. */
+export const steerKeyLabel = (apple: boolean) => (apple ? '⌥ Return' : 'Alt+Enter');
+export const STEER_KEY_SHORTCUT = 'Alt+Enter';

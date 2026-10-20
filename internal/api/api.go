@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,6 +24,8 @@ import (
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/models"
+	"github.com/ncecere/pi-local/internal/schedules"
+	"github.com/ncecere/pi-local/internal/search"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
 	"github.com/ncecere/pi-local/internal/threads"
@@ -50,6 +54,10 @@ type API struct {
 	Manager   Manager
 	Approvals *approvals.Store
 	MCP       *mcp.Catalog
+	Schedules *schedules.Store
+	Search    *search.Store
+	// Desktop is the desktop app's own settings (nil in the headless server).
+	Desktop Desktop
 	// SaveDialog asks where to save a file (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
 	SaveDialog func(defaultName string) (string, error)
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
@@ -92,8 +100,10 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /api/agents/{agent}/threads", a.withAgent(a.listThreads))
 	m.HandleFunc("GET /api/agents/{agent}/threads/{thread}", a.withThread(a.getThread))
 	m.HandleFunc("GET /api/agents/{agent}/threads/{thread}/events", a.withThread(a.threadEvents))
+	m.HandleFunc("GET /api/agents/{agent}/threads/{thread}/documents/{kind}", a.withThread(a.threadDocument))
 	m.HandleFunc("POST /api/agents/{agent}/threads/{thread}/messages", a.withThread(a.sendMessage))
 	m.HandleFunc("POST /api/agents/{agent}/threads/{thread}/stop", a.withThread(a.stopThread))
+	m.HandleFunc("POST /api/agents/{agent}/threads/{thread}/fork", a.withThread(a.forkThread))
 	m.HandleFunc("PATCH /api/agents/{agent}/threads/{thread}", a.withThread(a.renameThread))
 	m.HandleFunc("DELETE /api/agents/{agent}/threads/{thread}", a.withThread(a.deleteThread))
 
@@ -102,6 +112,7 @@ func (a *API) Handler() http.Handler {
 	a.manageRoutes(m)
 	a.toolRoutes(m)
 	a.mcpRoutes(m)
+	a.alwaysRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
 	return m
@@ -195,7 +206,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{
 		"user":      map[string]string{"id": "local", "name": localName(), "email": "", "role": "admin"},
 		"csrfToken": "",
-		"features":  map[string]bool{},
+		"features":  map[string]bool{"messageSearch": a.Search != nil},
 		"platform":  map[string]any{"mode": "local", "account": nil},
 	})
 }
@@ -298,6 +309,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"approvals":        map[string]any{"tools": nonNil(ag.Config.Approvals.Tools), "timeoutSeconds": ag.Config.Approvals.Timeout()},
 		"pendingApprovals": a.pendingApprovals(ag.ID),
 		"mcp":              mcpChoices(ag.Config.MCP),
+		"schedules":        ag.Config.Schedules,
 	}
 }
 
@@ -386,16 +398,17 @@ func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
 }
 
 type agentInput struct {
-	Name         *string             `json:"name"`
-	Description  *string             `json:"description"`
-	TemplateID   *string             `json:"templateId"`
-	ModelID      *string             `json:"modelId"`
-	Instructions *string             `json:"instructions"`
-	KindSettings *map[string]any     `json:"kindSettings"`
-	CanCall      *[]string           `json:"canCall"`
-	Workspace    *agents.Workspace   `json:"workspace"`
-	Approvals    *agents.Approvals   `json:"approvals"`
-	MCP          *[]agents.MCPChoice `json:"mcp"`
+	Name         *string                `json:"name"`
+	Description  *string                `json:"description"`
+	TemplateID   *string                `json:"templateId"`
+	ModelID      *string                `json:"modelId"`
+	Instructions *string                `json:"instructions"`
+	KindSettings *map[string]any        `json:"kindSettings"`
+	CanCall      *[]string              `json:"canCall"`
+	Workspace    *agents.Workspace      `json:"workspace"`
+	Approvals    *agents.Approvals      `json:"approvals"`
+	MCP          *[]agents.MCPChoice    `json:"mcp"`
+	Schedules    *agents.AgentSchedules `json:"schedules"`
 }
 
 func (in agentInput) apply(c *agents.Config) error {
@@ -425,6 +438,9 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.MCP != nil {
 		c.MCP = *in.MCP
+	}
+	if in.Schedules != nil {
+		c.Schedules = *in.Schedules
 	}
 	if in.Approvals != nil {
 		c.Approvals = *in.Approvals
@@ -576,6 +592,10 @@ func (a *API) relay(w http.ResponseWriter, r *http.Request, ag *agents.Agent, me
 }
 
 func (a *API) getThread(w http.ResponseWriter, r *http.Request, ag *agents.Agent, t string) {
+	if r.URL.RawQuery == "" {
+		a.getThreadIndexed(w, r, ag, t)
+		return
+	}
 	path := "/threads/" + t
 	if q := r.URL.RawQuery; q != "" {
 		path += "?" + q
@@ -594,6 +614,18 @@ func (a *API) threadEvents(w http.ResponseWriter, r *http.Request, ag *agents.Ag
 	}
 	a.relay(w, r, ag, http.MethodGet, path, nil, header)
 }
+
+// threadDocument relays a document the agent exposes for a thread (a triage queue, a research plan …).
+func (a *API) threadDocument(w http.ResponseWriter, r *http.Request, ag *agents.Agent, t string) {
+	kind := r.PathValue("kind")
+	if !documentKind.MatchString(kind) {
+		fail(w, http.StatusNotFound, "document_not_found", "No such document")
+		return
+	}
+	a.relay(w, r, ag, http.MethodGet, "/threads/"+t+"/documents/"+kind, nil, nil)
+}
+
+var documentKind = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 
 func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Agent, t string) {
 	body, good := readBody(w, r)
@@ -635,6 +667,61 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(answer)
+}
+
+// forkThread makes a new thread from this one (edit a message: beforeMessageId; branch: afterMessageId).
+func (a *API) forkThread(w http.ResponseWriter, r *http.Request, ag *agents.Agent, t string) {
+	var in struct {
+		BeforeMessageID string `json:"beforeMessageId,omitempty"`
+		AfterMessageID  string `json:"afterMessageId,omitempty"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	source, err := a.Threads.Get(r.Context(), ag.ID, t)
+	if err != nil {
+		fail(w, http.StatusNotFound, "thread_not_found", "Conversation not found")
+		return
+	}
+	newID := newThreadID()
+	// The runtime wants exactly one of the two.
+	payload := map[string]string{"threadId": newID}
+	if in.BeforeMessageID != "" {
+		payload["beforeMessageId"] = in.BeforeMessageID
+	}
+	if in.AfterMessageID != "" {
+		payload["afterMessageId"] = in.AfterMessageID
+	}
+	body, _ := json.Marshal(payload)
+	resp, err := a.Runtimes.Call(r.Context(), ag.ID, http.MethodPost, "/threads/"+t+"/fork", body, http.Header{"Content-Type": {"application/json"}})
+	if err != nil {
+		runtimeFailure(w, r, ag, err)
+		return
+	}
+	defer resp.Body.Close()
+	answer, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != http.StatusCreated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		w.Write(answer)
+		return
+	}
+	if err := a.Threads.Adopt(r.Context(), ag.ID, newID, source.Title); err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "could not record the new conversation")
+		return
+	}
+	th, _ := a.Threads.Get(r.Context(), ag.ID, newID)
+	created(w, th)
+}
+
+// newThreadID makes a thread ID like the UI's (a UUID).
+func newThreadID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	h := hex.EncodeToString(b)
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }
 
 func (a *API) stopThread(w http.ResponseWriter, r *http.Request, ag *agents.Agent, t string) {
@@ -680,6 +767,9 @@ func (a *API) deleteThread(w http.ResponseWriter, r *http.Request, ag *agents.Ag
 	if err := a.Threads.Delete(r.Context(), ag.ID, t); err != nil {
 		fail(w, http.StatusInternalServerError, "internal", "could not delete the conversation")
 		return
+	}
+	if a.Search != nil {
+		a.Search.Forget(r.Context(), ag.ID, t)
 	}
 	ok(w, map[string]bool{"ok": true})
 }

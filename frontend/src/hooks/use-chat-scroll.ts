@@ -319,5 +319,70 @@ export function useChatScroll(
     scrollToBottom();
   }, [scrollToBottom]);
 
-  return { scrollRef, contentRef, spacerRef, onScroll, detached, jumpToLatest };
+  /**
+   * Earlier messages are about to be put before the transcript (a page
+   * loaded): call just before they are. The first row in sight is kept where
+   * it is (while following, the end stays in view instead). The browser's own
+   * scroll anchoring is held off meanwhile, so the two never both move the
+   * view; the windowed rows' anchoring (use-windowed-rows) does the same
+   * thing first, which leaves nothing for this one to move.
+   */
+  const prepending = useRef<{ key: string | null; top: number; anchoring: string } | null>(null);
+  const keepPlaceForPrepend = useCallback(() => {
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroller || !content) return;
+    const viewTop = scroller.getBoundingClientRect().top;
+    let key: string | null = null;
+    let top = 0;
+    if (!following.current) {
+      for (const row of content.querySelectorAll<HTMLElement>('[data-row-key]')) {
+        const box = row.getBoundingClientRect();
+        if (box.bottom > viewTop) {
+          key = row.dataset.rowKey ?? null;
+          top = box.top - viewTop;
+          break;
+        }
+      }
+    }
+    prepending.current = { key, top, anchoring: scroller.style.overflowAnchor };
+    scroller.style.overflowAnchor = 'none';
+  }, []);
+  // After the commit that put them there, before it is painted.
+  useLayoutEffect(() => {
+    const held = prepending.current;
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (!held || !scroller || !content) return;
+    prepending.current = null;
+    if (held.key === null) {
+      if (following.current) scrollToBottom();
+    } else {
+      for (const row of content.querySelectorAll<HTMLElement>('[data-row-key]')) {
+        if (row.dataset.rowKey !== held.key) continue;
+        const shift =
+          row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - held.top;
+        if (Math.abs(shift) > 0.5) scroller.scrollTop += shift;
+        lastScrollTop.current = scroller.scrollTop;
+        break;
+      }
+    }
+    // Windowed rows keep anchoring off themselves (they compensate instead).
+    const windowed = content.querySelector('[data-message-rows][data-windowed]') !== null;
+    scroller.style.overflowAnchor = windowed
+      ? 'none'
+      : held.anchoring === 'none'
+        ? ''
+        : held.anchoring;
+  });
+
+  return {
+    scrollRef,
+    contentRef,
+    spacerRef,
+    onScroll,
+    detached,
+    jumpToLatest,
+    keepPlaceForPrepend,
+  };
 }

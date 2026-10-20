@@ -67,6 +67,13 @@ type Config struct {
 	Approvals Approvals `yaml:"approvals,omitempty"`
 	// MCP: the MCP servers it uses (from the app's catalog), with all their tools or some.
 	MCP []MCPChoice `yaml:"mcp,omitempty"`
+	// Schedules: whether it may set its own reminders and recurring work (its schedule tools).
+	Schedules AgentSchedules `yaml:"schedules,omitempty"`
+}
+
+// AgentSchedules is what an agent may do with schedules.
+type AgentSchedules struct {
+	AgentMade bool `yaml:"agentMade,omitempty" json:"agentMade"`
 }
 
 // MCPChoice is one MCP server an agent uses; Tools nil means every tool it offers the model.

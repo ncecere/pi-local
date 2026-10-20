@@ -336,6 +336,99 @@ starts without it (its log says so).
 
 Live events: `event: mcp`, `data: {slug, deleted, server?: McpServer}`.
 
+## Chat features (Phase 6)
+
+All of these are the runtime's, passed through (`runtime/src/lib/server.ts`, `view.ts`, `delta.ts`):
+
+- **Delta stream.** `GET …/threads/{t}/events?format=delta&v=1[&limit=N]`: first a `snapshot` event (a whole ChatView,
+  with `earlierCursor` when `limit` cut it), then changes: `message.added`, `message.updated`, `partial.set`,
+  `partial.appended`, `partial.cleared`, `tools.set`, `tool.started`, `tool.updated`, `tool.removed`, `run` (`busy`),
+  `approvals.set`, `document.updated` (the exact shapes: `DeltaEvent` in `delta.ts`). Each has an `id` (its sequence); reconnect with `Last-Event-ID` to continue; a gap is answered
+  with a new `snapshot`. `applyDelta(view, event)` in `runtime/src/lib/delta.ts` is the reference for applying them.
+- **Paging.** `GET …/threads/{t}?limit=N&before=<earlierCursor>` returns the messages before the cursor (and its own
+  `earlierCursor` while there are more).
+- **Steer.** `POST …/messages` with `whenBusy: "steer"` joins the reply in progress after its current tool round
+  (default `followUp`: answered after the reply ends).
+- **Request IDs.** A user message in a view carries the `requestId` it was sent with, so a client matches what it sent
+  by ID (never by text).
+- **Documents.** `ChatView.documents` is `{kind: {revision}}` for the documents the agent exposes for the thread (the
+  triage kind: `triage.queue`; the researcher: `research.plan`, `research.sources`). `GET
+  /api/agents/{a}/threads/{t}/documents/{kind}` answers `{kind, version, revision, value}`; `document.updated` (delta)
+  or a new revision says it changed.
+- **Tool details.** A tool result message and a live tool carry `details` (any JSON, at most 16 KiB) or
+  `detailsOmitted: true`: what the tool reports for UIs beyond its text.
+
+## Always on: schedules, search, editing, the desktop (Phase 7)
+
+### Schedules
+
+A schedule sends an agent a message at set times: once (`at`) or recurring (`cron`, five fields or `@daily`/`@weekly`,
+in `timezone`). Each run is a conversation of its own (`threadMode: "new"`) or goes to one conversation
+(`threadMode: "this"` with `threadId`). The message comes from the schedule (the agent reads
+`[Message from trigger <name>]`). The app keeps running in the menu bar when its window is closed, so schedules fire;
+a fire missed while the app was quit is run once at the next start (`missedPolicy: "run_once"`, the default) or
+skipped (`"skip"`). After 5 failed runs in a row a schedule pauses (`pausedReason`). An agent with
+`schedules.agentMade` may also set its own (its `schedule`, `list_schedules`, `cancel_schedule` tools; at most 20,
+at most every 5 minutes, 300 runs a day): those are `madeBy: "agent"`.
+
+```ts
+type Schedule = {
+  id: string; agentId: string; agentName: string;
+  name: string;
+  once: boolean; at: number | null;         // Unix ms (once)
+  cron: string | null; timezone: string;    // IANA
+  message: string;
+  threadMode: "new" | "this"; threadId: string | null;
+  originThreadId: string | null;            // where an agent made it
+  madeBy: "user" | "agent";
+  missedPolicy: "skip" | "run_once";
+  paused: boolean; pausedReason: string | null;
+  nextFireAt: number | null;                // null: a reminder that fired
+  lastFireAt: number | null;
+  lastRun: Run | null;
+  createdAt: number;
+};
+type Run = { id: string; scheduleId: string; threadId: string; firedAt: number;
+  status: "running" | "done" | "failed"; error: string | null; finishedAt: number | null };
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/schedules` | `Schedule[]` of every agent, next to fire first. |
+| `GET /api/agents/{a}/schedules` | One agent's. |
+| `POST /api/agents/{a}/schedules` | Body `{name?, at? (ISO 8601; without an offset it is in timezone), cron?, timezone?, message, threadMode?, threadId?, missedPolicy?}`. `201 Schedule`. Errors: `invalid_when`, `invalid_time`, `invalid_cron`, `invalid_timezone`, `invalid_message`, `invalid_thread_mode`. |
+| `PATCH /api/schedules/{id}` | The same fields and `paused`. Resuming resets the failure count. |
+| `DELETE /api/schedules/{id}` | `{ok: true}` |
+| `POST /api/schedules/{id}/run` | Runs it now (its next time doesn't change): `Run`. |
+| `GET /api/schedules/{id}/runs?limit=` | `Run[]`, newest first. |
+
+`Agent` gains `schedules: {agentMade: boolean}` (`PATCH` it). Live events: `event: schedule`
+(`{scheduleId, deleted, schedule?}`) and `event: schedule_run` (`{scheduleId, agentId, name, run}`, when a run ends).
+
+### Search
+
+`GET /api/search?q=` (at most 200 characters; words of 2+ letters, each matching the start of a word, accents
+ignored): `{results: [{agentId, threadId, snippet, indexedAt}]}`, best first, at most 30. In `snippet` the matches are
+between `\u0001` and `\u0002`. Conversations are indexed when a reply ends and when they are opened (text of people's
+and agents' messages only). `GET /api/me` says `features.messageSearch: true`.
+
+### Editing and branching
+
+`POST /api/agents/{a}/threads/{t}/fork` with `{beforeMessageId}` (edit: the new conversation keeps everything before
+that user message; send the edited text to it next) or `{afterMessageId}` (branch: it keeps everything up to and with
+that message). `201 AgentThread` (a new thread, idle, titled like the source). The source is untouched. `400
+invalid_message_id`.
+
+### The desktop app
+
+| Route | Answer |
+|---|---|
+| `GET /api/settings/desktop` | `{available, launchAtLogin}` (`available`: false in a browser) |
+| `PUT /api/settings/desktop` | Body `{launchAtLogin}`: opens Pi Local (in the menu bar, window closed) when you log in. |
+
+The desktop app shows a notification (while its window isn't in front) when an agent asks for approval, a scheduled
+run ends, or an agent fails; the menu bar menu says how many agents are working and how many requests need you.
+
 ## Not yet (later phases)
 
-Message search (Phase 7), the delta stream in the UI (Phase 6), 
+Signing, notarizing and bundling Node into the app (Phase 8).

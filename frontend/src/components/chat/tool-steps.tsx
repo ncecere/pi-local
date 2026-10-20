@@ -22,10 +22,11 @@ import {
 } from 'lucide-react';
 import { useId, useState } from 'react';
 import { ApprovalOutcome } from '~/components/chat/approval-card';
+import { ToolDetailsView } from '~/components/chat/document-views';
 import { useAgents } from '~/hooks/use-agents';
 import { type AskStep, askStepOf, askSummary, type ListAgentsStep } from '~/lib/agent-asks';
 import { approvalOutcome } from '~/lib/approvals';
-import { approvalOf, toolOutputText } from '~/lib/chat-view';
+import { approvalOf, toolDetailsOf, toolDetailsOmittedOf, toolOutputText } from '~/lib/chat-view';
 import { formatDuration } from '~/lib/reply-meta';
 import { cn } from '~/lib/utils';
 import { isToolPart, summarizeToolPart, type ToolStepSummary } from '~/shared';
@@ -552,6 +553,55 @@ function ToolStepBody({
         </div>
         <ToolOutput part={part} step={step} />
       </div>
+      <ToolDetails part={part} />
     </>
+  );
+}
+
+/**
+ * What the tool reported for apps besides its text (`details`), behind a
+ * disclosure: drawn for the shapes the app knows (a research plan, a source,
+ * a triage item), JSON otherwise. Details too large for the view are left out
+ * by the runtime, and it says so.
+ */
+function ToolDetails({ part }: { part: ToolPart }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const meta = part as { toolMetadata?: unknown };
+  const details = toolDetailsOf(meta);
+  const omitted = toolDetailsOmittedOf(meta);
+  if (details === undefined && !omitted) return null;
+  if (details === undefined)
+    return (
+      <p className="text-[var(--text-muted)]" data-tool-details-omitted="">
+        The tool reported details too large to show here.
+      </p>
+    );
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1 font-medium text-[var(--text-primary)] hover:underline"
+      >
+        Details
+        <ChevronDown
+          className={cn('size-3.5 transition-transform', open && 'rotate-180')}
+          aria-hidden="true"
+        />
+      </button>
+      {open && (
+        <div id={id} className="mt-1.5">
+          <ToolDetailsView toolName={String(part.toolName ?? '')} details={details} />
+          {omitted && (
+            <p className="mt-1 text-[var(--text-muted)]">
+              Its latest details were too large to show.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
+	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
 )
@@ -75,6 +76,7 @@ type Handler struct {
 	Asks      Asks
 	Approvals Approvals
 	OAuth     OAuth
+	Schedules *schedules.Store
 	// AppKey authenticates the app's own MCP probe, for /mcp/oauth only.
 	AppKey string
 }
@@ -193,6 +195,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body.Approvals = body.Approvals[:1000]
 		}
 		ok(w, h.Approvals.Sync(r.Context(), agentID, body.Approvals, body.At))
+	case h.Schedules != nil && (r.URL.Path == "/schedules" || strings.HasPrefix(r.URL.Path, "/schedules/")):
+		h.serveSchedules(w, r, agentID)
 	case h.OAuth != nil && strings.HasPrefix(r.URL.Path, "/mcp/oauth/"):
 		h.serveOAuth(w, r, agentID)
 	case h.Asks != nil && strings.HasPrefix(r.URL.Path, "/a2a/"):
@@ -301,5 +305,107 @@ func (h *Handler) serveOAuth(w http.ResponseWriter, r *http.Request, agentID str
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		fail(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or PUT")
+	}
+}
+
+// agentSchedule is a schedule as an agent's schedule tools read it (runtime schedule.ts, AgentSchedule).
+func agentSchedule(s *schedules.Schedule) map[string]any {
+	var next any
+	if s.NextFireAt != nil {
+		next = time.UnixMilli(*s.NextFireAt).UTC().Format(time.RFC3339)
+	}
+	out := map[string]any{"id": s.ID, "name": s.Name, "once": s.Once, "timezone": s.Timezone, "message": s.Message,
+		"threadId": s.ThreadID, "originThreadId": s.OriginThreadID, "nextFireAt": next, "paused": s.Paused}
+	if s.Cron != nil {
+		out["cron"] = *s.Cron
+	}
+	if s.PausedReason != nil {
+		out["pausedReason"] = *s.PausedReason
+	}
+	return out
+}
+
+// serveSchedules: an agent's own schedules (its schedule, list_schedules and cancel_schedule tools).
+func (h *Handler) serveSchedules(w http.ResponseWriter, r *http.Request, agentID string) {
+	refusal := func(err error) {
+		var se *schedules.Error
+		if errors.As(err, &se) {
+			fail(w, se.Status, se.Code, se.Message)
+			return
+		}
+		fail(w, http.StatusInternalServerError, "internal", "the schedule could not be saved")
+	}
+	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/schedules":
+		var body struct {
+			At       string `json:"at"`
+			Cron     string `json:"cron"`
+			Timezone string `json:"timezone"`
+			Message  string `json:"message"`
+			Thread   string `json:"thread"`
+			ThreadID string `json:"threadId"`
+			Name     string `json:"name"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		in := schedules.Input{Message: &body.Message, Timezone: &body.Timezone}
+		if body.Name != "" {
+			in.Name = &body.Name
+		}
+		if body.At != "" {
+			in.At = &body.At
+		} else {
+			in.Cron = &body.Cron
+		}
+		where, why := "new", ""
+		mode := "new"
+		if body.Thread != "new" {
+			if body.ThreadID != "" {
+				mode, where = "this", "this"
+				in.ThreadID = &body.ThreadID
+			} else {
+				why = "this conversation isn't a thread of its own (a subagent's)"
+			}
+		}
+		in.ThreadMode = &mode
+		created, err := h.Schedules.Create(r.Context(), agentID, "agent", body.ThreadID, in)
+		if err != nil {
+			refusal(err)
+			return
+		}
+		answer := map[string]any{"schedule": agentSchedule(created), "where": where}
+		if why != "" {
+			answer["whyNotHere"] = why
+		}
+		ok(w, answer)
+	case r.Method == http.MethodGet && r.URL.Path == "/schedules":
+		list, err := h.Schedules.List(r.Context(), agentID)
+		if err != nil {
+			refusal(err)
+			return
+		}
+		out := []map[string]any{}
+		for _, s := range list {
+			if s.MadeBy == "agent" {
+				out = append(out, agentSchedule(s))
+			}
+		}
+		ok(w, out)
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/schedules/"):
+		id := strings.TrimPrefix(r.URL.Path, "/schedules/")
+		sc, err := h.Schedules.Get(r.Context(), id)
+		if err != nil || sc.AgentID != agentID || sc.MadeBy != "agent" {
+			fail(w, http.StatusNotFound, "not_found", "No schedule of yours has that ID (list_schedules shows them).")
+			return
+		}
+		deleted, err := h.Schedules.Delete(r.Context(), id, agentID)
+		if err != nil {
+			refusal(err)
+			return
+		}
+		ok(w, agentSchedule(deleted))
+	default:
+		fail(w, http.StatusNotFound, "not_found", "not offered")
 	}
 }
