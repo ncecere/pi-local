@@ -193,7 +193,7 @@ export function SettingsLayout() {
     <div className="h-dvh overflow-y-auto bg-[var(--bg-settings)] text-[var(--text-primary)]">
       <SkipLink />
       <div className="mx-auto w-full max-w-[75rem] px-4 py-6 sm:px-6">
-        <header className="flex items-center justify-between">
+        <header data-settings-titlebar className="flex items-center justify-between">
           <Button variant="ghost" size="sm" asChild>
             <Link to="/">
               <ArrowLeft />

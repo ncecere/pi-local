@@ -1,8 +1,10 @@
-node_modules/
-dist/
-*.log
+
+.cache/
 .DS_Store
+*.log
+bin/
+dist/
+node_modules/
 spikes/wails-sse/app/bin/
 spikes/wails-sse/app/build/bin/
 spikes/wails-sse/app/frontend/dist/
-bin/

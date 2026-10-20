@@ -562,8 +562,8 @@ func (g askGateway) Stop(ctx context.Context, caller, id string) error {
 	return g.a.Asks.Stop(ctx, caller, id)
 }
 
-// Version is Pi Local's version.
-const Version = "0.1.0-dev"
+// Version is Pi Local's version (set at build time: -ldflags "-X github.com/ncecere/pi-local/internal/app.Version=…").
+var Version = "0.1.0-dev"
 
 // About is what Settings → About shows.
 func (a *App) About() map[string]any {

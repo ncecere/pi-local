@@ -2,7 +2,7 @@
 export MACOSX_DEPLOYMENT_TARGET ?= 11.0
 export CGO_LDFLAGS ?= -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
 
-.PHONY: help deps runtime frontend build app server run-server dev-web test test-go test-runtime test-frontend lint check clean
+.PHONY: help deps runtime frontend build app server run-server dev-web test test-go test-runtime test-frontend lint check clean package
 
 help: ## This list
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -47,6 +47,9 @@ lint: ## go vet and gofmt
 	@test -z "$$(gofmt -l cmd internal frontend/embed.go runtime/embed.go)" || (gofmt -l cmd internal; exit 1)
 
 check: lint test ## lint and every test
+
+package: ## Pi Local.app with Node bundled (dist/macos; SIGN_IDENTITY for a Developer ID)
+	packaging/macos/package.sh
 
 clean:
 	rm -rf bin runtime/dist frontend/dist

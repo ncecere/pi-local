@@ -493,7 +493,22 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
 - **Edit and branch:** edit-and-resend as a fork at the entry (`conversation.fork(entryId)`) into a new thread
   linked to its parent.
 
-### Phase 8: Ship
+### Phase 8: Ship (in progress)
+- **Done:**
+  - `make package` (`packaging/macos/package.sh`) builds `dist/macos/Pi Local.app`: the desktop binary (runtime and
+    UI embedded, version stamped), and Node 22.23.0 downloaded from nodejs.org and **checked against its published
+    SHA-256**, in `Contents/Resources/node`; an icon and an Info.plist (`dev.bitop.pi-local`); an ad-hoc signature
+  - tested from Finder-style `open`: it uses its own Node, an agent was made and answered, quit was graceful
+  - hardened-runtime entitlements for Node's JIT are ready for Developer ID signing (`SIGN_IDENTITY=…`)
+  - Settings pages now clear the window's traffic lights
+- **Needs decisions:**
+  - a Developer ID Application certificate (signing and notarization, `notarytool` credentials)
+  - where releases live (GitHub Releases?) and the auto-update channel (Sparkle-style appcast, or Wails' updater)
+  - arm64 only, or universal (x64 too, a second Node)
+  - a DMG
+- **Then:** Windows and Linux.
+
+### (Original Phase 8 notes)
 - macOS signing and notarization, auto-update, the upgrade check across app versions, crash and log bundle export.
 - Bundle Node per architecture (arm64 and x64, or universal) and check its license notice.
 - Then Windows and Linux: pi-mcp uses `cross-spawn`, `node:sqlite` is cross-platform, and the keychain works on all three.

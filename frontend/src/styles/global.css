@@ -212,3 +212,12 @@ html[data-shell="desktop-mac"] [data-titlebar] {
 html[data-shell="desktop-mac"] [data-titlebar] :is(a, button) {
   --wails-draggable: no-drag;
 }
+
+/* Settings pages in the desktop app: the header clears the traffic lights (it starts below them) and drags the window. */
+html[data-shell="desktop-mac"] [data-settings-titlebar] {
+  padding-top: 18px;
+  --wails-draggable: drag;
+}
+html[data-shell="desktop-mac"] [data-settings-titlebar] :is(a, button) {
+  --wails-draggable: no-drag;
+}
