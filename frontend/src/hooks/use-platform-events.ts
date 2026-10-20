@@ -17,6 +17,7 @@ import type {
   ScheduleRunEvent,
   Team,
   TeamEvent,
+  UpdateStatus,
 } from '~/api/client';
 import { transport } from '~/api/transport';
 import { AGENTS_KEY, applyAgentEvent, threadsKey } from '~/hooks/use-agents';
@@ -25,6 +26,7 @@ import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
 import { MCP_SERVERS_KEY } from '~/hooks/use-mcp';
 import { SCHEDULES_KEY, scheduleRunsKey } from '~/hooks/use-schedules';
 import { TEAMS_KEY } from '~/hooks/use-teams';
+import { UPDATE_KEY } from '~/hooks/use-update';
 import { applyApprovalEvent } from '~/lib/approvals';
 import { setEventsLive } from '~/lib/events-live';
 import { threadKey } from '~/lib/inbox';
@@ -52,6 +54,8 @@ import { applyTeamEvent } from '~/lib/teams';
  *   It updates ['schedules'] in place.
  * - `schedule_run`: a scheduled run ended. Its schedule's last run (and its
  *   history, when open) change, and a quiet toast links to its conversation.
+ * - `update`: the update status changed (a check, or an install's stage). It
+ *   replaces ['update'] (Settings → About).
  * - `resync`, or a reconnect: events may have been missed; the lists are read
  *   again.
  * Mounted once, in the app shell.
@@ -93,6 +97,7 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({ queryKey: APPROVALS_KEY });
       void queryClient.invalidateQueries({ queryKey: MCP_SERVERS_KEY });
       void queryClient.invalidateQueries({ queryKey: SCHEDULES_KEY });
+      void queryClient.invalidateQueries({ queryKey: UPDATE_KEY });
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'agents' && query.queryKey[2] === 'threads',
       });
@@ -225,6 +230,15 @@ export function usePlatformEvents() {
             }),
         },
       });
+    });
+    source.on('update', (data) => {
+      let status: UpdateStatus;
+      try {
+        status = JSON.parse(data) as UpdateStatus;
+      } catch {
+        return;
+      }
+      if (status && typeof status === 'object') queryClient.setQueryData(UPDATE_KEY, status);
     });
     source.on('thread', (data) => {
       let event: ThreadEvent;

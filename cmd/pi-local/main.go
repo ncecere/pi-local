@@ -11,10 +11,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -125,11 +127,53 @@ func main() {
 	workingItem := menu.Add("Nothing working").SetEnabled(false)
 	needsItem := menu.Add("Nothing needs you").OnClick(func(*application.Context) { show() })
 	menu.AddSeparator()
+	updateItem := menu.Add("Check for updates…")
 	menu.Add("Quit Pi Local").OnClick(func(*application.Context) { wails.Quit() })
 	tray.SetMenu(menu)
 
 	if core != nil {
 		core.API.Desktop = desktop{dataDir: *dataDir}
+		// An installed update: wait for this process to have stopped (its agents included), then open the new app.
+		core.Updater.Relaunch = func(bundle string) {
+			script := fmt.Sprintf("while kill -0 %d 2>/dev/null; do sleep 0.2; done; /usr/bin/open -n %q", os.Getpid(), bundle)
+			cmd := exec.Command("/bin/sh", "-c", script)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			if err := cmd.Start(); err != nil {
+				slog.Error("relaunching after the update", "err", err)
+				return
+			}
+			wails.Quit()
+		}
+		updateItem.OnClick(func(*application.Context) {
+			if st := core.Updater.Status(); st.Available {
+				if err := core.Updater.Install(ctx); err != nil {
+					slog.Warn("installing the update", "err", err)
+				}
+				return
+			}
+			core.Updater.Check(ctx)
+			show()
+		})
+		core.Hub.Publish("update", core.Updater.Status())
+		go func() {
+			events, _ := core.Hub.Subscribe()
+			for ev := range events {
+				if ev.Name != "update" {
+					continue
+				}
+				st := core.Updater.Status()
+				switch {
+				case st.Stage != nil && *st.Stage != "failed":
+					updateItem.SetLabel("Updating… (" + *st.Stage + ")")
+				case st.Available && st.Latest != nil:
+					updateItem.SetLabel("Update to " + st.Latest.Version)
+				default:
+					updateItem.SetLabel("Check for updates…")
+				}
+				menu.Update()
+			}
+		}()
+		go core.Updater.AutoChecks(ctx, 30*time.Second, 12*time.Hour)
 		watch(core, window, note, func(working, needsYou int) {
 			workingItem.SetLabel(plural(working, "agent working", "agents working", "Nothing working"))
 			needsItem.SetLabel(plural(needsYou, "request needs you", "requests need you", "Nothing needs you"))
@@ -141,6 +185,9 @@ func main() {
 					note.native.RequestNotificationAuthorization()
 				}
 			}()
+		}
+		core.API.FolderDialog = func(title string) (string, error) {
+			return wails.Dialog.OpenFile().SetTitle(title).CanChooseDirectories(true).CanChooseFiles(false).CanCreateDirectories(true).AttachToWindow(window).PromptForSingleSelection()
 		}
 		core.API.SaveDialog = func(name string) (string, error) {
 			return wails.Dialog.SaveFile().SetFilename(name).AddFilter("Zip archive", "*.zip").CanCreateDirectories(true).AttachToWindow(window).PromptForSingleSelection()

@@ -19,7 +19,18 @@ import (
 var Kinds = []KindInfo{
 	{ID: "assistant", Name: "Assistant", Description: "A general assistant that answers in the conversation."},
 	{ID: "researcher", Name: "Researcher", Description: "Plans research, gathers sources, and writes up what it found."},
-	{ID: "triage", Name: "Triage", Description: "Works through a queue of items with the tools you give it, asking before it changes anything."},
+	{ID: "coding", Name: "Coding", Description: "Works in a project folder like the pi coding agent: reads, edits and writes files and runs commands."},
+}
+
+// retiredKinds still run (an agent made with one keeps working) but aren't offered for new agents.
+var retiredKinds = []string{"triage"}
+
+// KindDefaults is what a new agent of a kind starts with when the request doesn't say.
+func KindDefaults(kind string, c *Config) {
+	if kind == "coding" && c.Workspace.Tools == nil {
+		// pi's own tools; nothing asks first (pi doesn't), and a person can add approvals for bash.
+		c.Workspace.Tools = []string{"read", "write", "edit", "bash"}
+	}
 }
 
 // KindInfo describes a kind for the catalog.
@@ -35,7 +46,7 @@ func knownKind(kind string) bool {
 			return true
 		}
 	}
-	return false
+	return slices.Contains(retiredKinds, kind)
 }
 
 // ModelRef names a model: a provider configured in the app and the model's ID at that provider.
@@ -82,9 +93,11 @@ type MCPChoice struct {
 	Tools  []string `yaml:"tools,omitempty" json:"tools"`
 }
 
-// Workspace is an agent's workspace tools.
+// Workspace is an agent's workspace tools, and where they work.
 type Workspace struct {
 	Tools []string `yaml:"tools,omitempty" json:"tools"`
+	// Folder is a project folder on this computer the tools work in (absolute). Empty: the agent's own workspace/.
+	Folder string `yaml:"folder,omitempty" json:"folder"`
 }
 
 // Approvals says which tools ask first (names, or patterns with *) and how long a request waits.
@@ -158,7 +171,7 @@ func (c *Config) Validate() error {
 		return invalid("invalid_instructions", "Instructions are at most %d characters.", MaxInstructionsChars)
 	}
 	if !knownKind(c.Kind) {
-		return invalid("invalid_template", "Unknown kind %q: choose assistant, researcher or triage.", c.Kind)
+		return invalid("invalid_template", "Unknown kind %q: choose assistant, researcher or coding.", c.Kind)
 	}
 	if c.KindSettings != nil {
 		raw, err := json.Marshal(c.KindSettings)
@@ -178,6 +191,9 @@ func (c *Config) Validate() error {
 		}
 	}
 	c.Workspace.Tools = tools
+	if err := c.Workspace.checkFolder(); err != nil {
+		return err
+	}
 	if len(c.Approvals.Tools) > 100 {
 		return invalid("invalid_approval_tools", "At most 100 tools or patterns ask first.")
 	}
@@ -266,4 +282,31 @@ func writeConfig(dir string, c Config) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), filepath.Join(dir, configFile))
+}
+
+// checkFolder cleans the project folder and checks it is one: absolute, an existing directory, and not the whole disk
+// or the home folder itself (the file tools would reach everything).
+func (w *Workspace) checkFolder() error {
+	w.Folder = strings.TrimSpace(w.Folder)
+	if w.Folder == "" {
+		return nil
+	}
+	if strings.HasPrefix(w.Folder, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			w.Folder = filepath.Join(home, w.Folder[2:])
+		}
+	}
+	if !filepath.IsAbs(w.Folder) {
+		return invalid("invalid_workspace_folder", "Choose the project folder by its full path, like /Users/you/code/project.")
+	}
+	w.Folder = filepath.Clean(w.Folder)
+	info, err := os.Stat(w.Folder)
+	if err != nil || !info.IsDir() {
+		return invalid("invalid_workspace_folder", "%s isn't a folder on this computer.", w.Folder)
+	}
+	home, _ := os.UserHomeDir()
+	if w.Folder == "/" || w.Folder == filepath.Clean(home) || w.Folder == "/Users" || w.Folder == "/System" {
+		return invalid("invalid_workspace_folder", "Choose a project folder, not %s: the agent's tools would reach everything in it.", w.Folder)
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ import { type ReactNode, useId, useState } from 'react';
 import { toast } from 'sonner';
 import { type Agent, ApiError, errorMessage, type WorkspaceTool } from '~/api/client';
 import { Panel, SaveBar } from '~/components/agent-manager/panel';
+import { ProjectFolderInput } from '~/components/agent-manager/project-folder-field';
 import { ErrorNotice, FIELD } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
 import { useReveal } from '~/hooks/use-agent-manager';
@@ -53,6 +54,7 @@ const TOOL_TEXT: Record<WorkspaceTool, { label: string; hint: ReactNode }> = {
 
 /** Server errors that belong to one field. */
 const FIELD_ERRORS = {
+  folder: 'invalid_workspace_folder',
   tools: 'invalid_workspace_tools',
   patterns: 'invalid_approval_tools',
   timeout: 'invalid_approval_timeout',
@@ -71,7 +73,9 @@ function ToolsForm({ agent }: { agent: Agent }) {
   const id = useId();
   const saved = readToolSettings(agent);
   const initialChoice = timeoutChoiceOf(saved.approvals.timeoutSeconds);
+  const savedFolder = agent.workspace?.folder ?? '';
   const initial = {
+    folder: savedFolder,
     tools: saved.tools,
     patterns: formatToolList(saved.approvals.tools),
     timeoutChoice: initialChoice,
@@ -92,10 +96,12 @@ function ToolsForm({ agent }: { agent: Agent }) {
   const valid = patternsError === null && timeoutSeconds !== null;
 
   const next = {
-    workspace: { tools: normaliseTools(form.tools) },
+    // The whole workspace: a `workspace` without `tools` would leave it none.
+    workspace: { tools: normaliseTools(form.tools), folder: form.folder.trim() },
     approvals: { tools: patterns, timeoutSeconds: timeoutSeconds ?? 0 },
   };
   const dirty =
+    next.workspace.folder !== savedFolder ||
     JSON.stringify(next.workspace.tools) !== JSON.stringify(saved.tools) ||
     JSON.stringify(patterns) !== JSON.stringify(saved.approvals.tools) ||
     (timeoutSeconds !== null && timeoutSeconds !== saved.approvals.timeoutSeconds);
@@ -134,12 +140,11 @@ function ToolsForm({ agent }: { agent: Agent }) {
   return (
     <div className="flex flex-col gap-4">
       <Panel
-        title="Workspace tools"
+        title="Project folder"
         description={
-          <>
-            Its own folder for files. Read, write and edit can't reach outside it. With none, it has
-            no file tools.
-          </>
+          agent.agentKind === 'coding'
+            ? "The folder its tools work in. It also follows the folder's AGENTS.md or CLAUDE.md. Leave empty to give it a folder of its own."
+            : 'The folder its tools work in. Leave empty to give it a folder of its own.'
         }
         actions={
           <Button
@@ -159,6 +164,48 @@ function ToolsForm({ agent }: { agent: Agent }) {
             <FolderOpen />
             Open workspace
           </Button>
+        }
+      >
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={`${id}-folder`} className="sr-only">
+            Project folder
+          </label>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1">
+              <ProjectFolderInput
+                id={`${id}-folder`}
+                value={form.folder}
+                onChange={(folder) => setForm({ ...form, folder })}
+                placeholder="Its own folder"
+                invalid={Boolean(fieldError('folder'))}
+                describedBy={`${id}-folder-hint`}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-10 shrink-0 self-start sm:self-auto"
+              disabled={!form.folder.trim()}
+              onClick={() => setForm({ ...form, folder: '' })}
+            >
+              Use its own folder
+            </Button>
+          </div>
+          <p id={`${id}-folder-hint`} className="text-xs text-[var(--text-muted)]">
+            Works in{' '}
+            <code className="break-all font-mono text-[var(--text-secondary)]">
+              {agent.workspace?.dir || '—'}
+            </code>
+            {next.workspace.folder !== savedFolder && ' until you save.'}
+          </p>
+          {fieldError('folder') && <ErrorNotice>{fieldError('folder')}</ErrorNotice>}
+        </div>
+      </Panel>
+
+      <Panel
+        title="Workspace tools"
+        description={
+          <>Read, write and edit can't reach outside its folder. With none, it has no file tools.</>
         }
       >
         <fieldset className="m-0 flex flex-col gap-3 border-0 p-0">

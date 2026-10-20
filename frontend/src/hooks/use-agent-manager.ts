@@ -6,6 +6,7 @@ import {
   ApiError,
   agentPath,
   api,
+  type ChosenFolder,
   type RevealTarget,
 } from '~/api/client';
 import { AGENTS_KEY, applyAgentEvent, CATALOG_KEY, threadsKey } from '~/hooks/use-agents';
@@ -178,6 +179,16 @@ export function useDeleteAgent() {
 export function useReveal() {
   return useMutation({
     mutationFn: (target: RevealTarget) => api.post<{ ok: true }>('/api/reveal', target),
+  });
+}
+
+/**
+ * Opens the native folder dialog (`POST /api/choose-folder`, desktop app only:
+ * `features.folderDialog`): the folder picked, or `{cancelled: true}`.
+ */
+export function useChooseFolder() {
+  return useMutation({
+    mutationFn: () => api.post<ChosenFolder>('/api/choose-folder'),
   });
 }
 

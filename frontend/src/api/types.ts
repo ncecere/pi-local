@@ -15,8 +15,11 @@ export interface Agent {
   instructions: string;
   /** The chat UI's grouping: every local agent is the person's own. */
   kind: 'personal';
-  /** What it is (the runtime kind, also its catalog template ID). */
-  agentKind: 'assistant' | 'triage' | 'researcher';
+  /**
+   * What it is (the runtime kind, also its catalog template ID). Triage is retired: no
+   * longer offered for new agents, but agents made with it still run.
+   */
+  agentKind: 'assistant' | 'triage' | 'researcher' | 'coding';
   /** Its runtime process. */
   status: AgentStatus;
   /** `status` is "awake". */
@@ -35,7 +38,7 @@ export interface Agent {
   updatedAt: string;
   /**
    * The kind's settings (triage: listTools, readTools, writeTools, approveWrites;
-   * researcher: backgroundSubagents, maxPlanSteps); {} for none. Phase 3.
+   * researcher: backgroundSubagents, maxPlanSteps); {} for none (assistant, coding). Phase 3.
    */
   kindSettings: Record<string, unknown>;
   /** Agent IDs this agent may ask (ask_agent), besides what its teams allow. */
@@ -47,8 +50,8 @@ export interface Agent {
   /** The newest runtime that wrote its storage. */
   piDurableVersion: string | null;
   /**
-   * Its file tools, confined to its workspace folder (bash is not confined).
-   * Phase 4; absent from an older backend (read as no tools).
+   * Its file tools, confined to its workspace folder (bash is not confined), and
+   * that folder. Phase 4; absent from an older backend (read as no tools).
    */
   workspace?: AgentWorkspace;
   /** Which tools ask first, and how long a request waits. Phase 4. */
@@ -79,6 +82,16 @@ export type WorkspaceTool = 'read' | 'write' | 'edit' | 'bash';
 
 export interface AgentWorkspace {
   tools: WorkspaceTool[];
+  /** A project folder (absolute) the tools work in; "": the agent's own private workspace. */
+  folder?: string;
+  /** The folder it works in now: the project folder, or `…/agents/<id>/workspace`. Read-only. */
+  dir?: string;
+}
+
+/** What a create or update sends as `workspace`: `tools` is required (left out, it becomes none). */
+export interface AgentWorkspaceInput {
+  tools: WorkspaceTool[];
+  folder?: string;
 }
 
 export interface AgentApprovals {
@@ -538,6 +551,43 @@ export interface SearchResult {
   snippet: string;
   indexedAt: string;
 }
+
+/** A release on GitHub. */
+export interface UpdateRelease {
+  version: string;
+  /** Markdown release notes. */
+  notes: string;
+  /** The release page. */
+  url: string;
+  /** ISO 8601. */
+  published: string;
+}
+
+export type UpdateStage = 'downloading' | 'verifying' | 'installing' | 'restarting' | 'failed';
+
+/** `GET /api/update` (and the `update` event): the app's version, the latest release, an install in progress. */
+export interface UpdateStatus {
+  /** "0.1.0", or a development build like "6dc49f2-dirty". */
+  current: string;
+  latest: UpdateRelease | null;
+  /** `latest` is newer than `current`. */
+  available: boolean;
+  /** Unix ms of the last check. */
+  checkedAt: number | null;
+  /** The last check's or install's error ("no releases yet"). */
+  error: string | null;
+  /** False in a development build, the headless server, or when `installBlocked`: link to the release instead. */
+  canInstall: boolean;
+  /** Why this copy can't update itself where it is (run from the disk image, or a quarantined copy); null when it can. */
+  installBlocked?: string | null;
+  autoCheck: boolean;
+  stage: UpdateStage | null;
+}
+
+/** `POST /api/choose-folder`: the folder picked, or the dialog was cancelled. */
+export type ChosenFolder =
+  | { path: string; cancelled?: undefined }
+  | { cancelled: true; path?: undefined };
 
 /** `GET /api/settings/desktop`. */
 export interface DesktopSettings {

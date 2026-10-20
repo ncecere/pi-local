@@ -17,6 +17,7 @@ const KIND_LABELS: Record<Agent['agentKind'], string> = {
   assistant: 'Assistant',
   triage: 'Triage',
   researcher: 'Researcher',
+  coding: 'Coding',
 };
 
 /** What an agent is, for people (in place of the platform's template name). */

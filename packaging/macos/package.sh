@@ -4,6 +4,7 @@
 #
 #   packaging/macos/package.sh                 # ad-hoc signed, for this Mac
 #   SIGN_IDENTITY="Developer ID Application: …" packaging/macos/package.sh   # hardened runtime, for notarizing
+#   RELEASE=1 VERSION=0.1.0 RELEASE_SIGNING_KEY=… packaging/macos/package.sh  # + zip, .sig, DMG, SHA256SUMS
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -45,6 +46,8 @@ mv "$OUT/pi-local" "$APP/Contents/MacOS/pi-local"
 tar -xzf "$CACHE/$TARBALL" -C "$OUT" "node-v$NODE_VERSION-darwin-$NODE_ARCH/bin/node" "node-v$NODE_VERSION-darwin-$NODE_ARCH/LICENSE"
 mv "$OUT/node-v$NODE_VERSION-darwin-$NODE_ARCH/bin/node" "$APP/Contents/Resources/node"
 mv "$OUT/node-v$NODE_VERSION-darwin-$NODE_ARCH/LICENSE" "$APP/Contents/Resources/node-LICENSE"
+cp LICENSE "$APP/Contents/Resources/LICENSE"
+cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
 rm -rf "$OUT/node-v$NODE_VERSION-darwin-$NODE_ARCH"
 
 ICONSET="$OUT/icon.iconset"
@@ -87,3 +90,23 @@ else
 fi
 codesign --verify --deep --strict "$APP"
 echo "✓ $APP ($(du -sh "$APP" | cut -f1))"
+
+# 5. Release files: the zip updates install (and its signature), a DMG for a first install, and checksums.
+if [ "${RELEASE:-}" = "1" ]; then
+	NAME="Pi-Local-$VERSION-macos-arm64"
+	rm -f "$OUT/$NAME".*
+	ditto -c -k --keepParent "$APP" "$OUT/$NAME.zip"
+	if [ -n "${RELEASE_SIGNING_KEY:-}" ]; then
+		go run ./cmd/release-sign sign "$OUT/$NAME.zip"
+	else
+		echo "! RELEASE_SIGNING_KEY isn't set: the zip is unsigned and the app won't install it as an update"
+	fi
+	STAGE="$OUT/dmg"
+	rm -rf "$STAGE"; mkdir -p "$STAGE"
+	cp -R "$APP" "$STAGE/"
+	ln -s /Applications "$STAGE/Applications"
+	hdiutil create -quiet -volname "Pi Local" -srcfolder "$STAGE" -ov -format UDZO "$OUT/$NAME.dmg"
+	rm -rf "$STAGE"
+	(cd "$OUT" && shasum -a 256 "$NAME".zip "$NAME".dmg > SHA256SUMS)
+	echo "✓ release files in $OUT:"; ls -la "$OUT" | grep -E "$NAME|SHA256SUMS"
+fi

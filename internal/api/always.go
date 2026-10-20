@@ -22,6 +22,10 @@ func (a *API) alwaysRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/schedules/{id}/run", a.runSchedule)
 	m.HandleFunc("GET /api/schedules/{id}/runs", a.scheduleRuns)
 	m.HandleFunc("GET /api/search", a.searchMessages)
+	m.HandleFunc("GET /api/update", a.getUpdate)
+	m.HandleFunc("POST /api/update/check", a.checkUpdate)
+	m.HandleFunc("POST /api/update/install", a.installUpdate)
+	m.HandleFunc("PUT /api/update/settings", a.updateSettings)
 	m.HandleFunc("GET /api/settings/desktop", a.getDesktop)
 	m.HandleFunc("PUT /api/settings/desktop", a.putDesktop)
 }
@@ -195,4 +199,52 @@ func (a *API) putDesktop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, map[string]any{"available": true, "launchAtLogin": in.LaunchAtLogin})
+}
+
+// --- updates ------------------------------------------------------------------------------------------------------
+
+func (a *API) getUpdate(w http.ResponseWriter, r *http.Request) {
+	if a.Updater == nil {
+		fail(w, http.StatusNotImplemented, "not_supported", "Updates aren't available here.")
+		return
+	}
+	ok(w, a.Updater.Status())
+}
+
+func (a *API) checkUpdate(w http.ResponseWriter, r *http.Request) {
+	if a.Updater == nil {
+		fail(w, http.StatusNotImplemented, "not_supported", "Updates aren't available here.")
+		return
+	}
+	ok(w, a.Updater.Check(r.Context()))
+}
+
+func (a *API) installUpdate(w http.ResponseWriter, r *http.Request) {
+	if a.Updater == nil {
+		fail(w, http.StatusNotImplemented, "not_supported", "Updates aren't available here.")
+		return
+	}
+	if err := a.Updater.Install(r.Context()); err != nil {
+		fail(w, http.StatusConflict, "cannot_install", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"data": a.Updater.Status()})
+}
+
+func (a *API) updateSettings(w http.ResponseWriter, r *http.Request) {
+	if a.Updater == nil {
+		fail(w, http.StatusNotImplemented, "not_supported", "Updates aren't available here.")
+		return
+	}
+	var in struct {
+		AutoCheck bool `json:"autoCheck"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	if err := a.Updater.SaveAutoCheck(in.AutoCheck); err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "could not save the setting")
+		return
+	}
+	ok(w, a.Updater.Status())
 }

@@ -18,13 +18,14 @@ reply finishes the next time you open the app.
   - keys in the macOS keychain
   - usage and estimated cost
 - **Agents:**
-  - kinds: assistant, researcher, triage
+  - kinds: **assistant**, **researcher**, and **coding**, which works like the pi coding agent in a project folder you
+    choose: pi's coding prompt, `read`/`write`/`edit`/`bash`, and the project's `AGENTS.md` or `CLAUDE.md`
   - instructions and a raw `agent.yaml`, logs, wake and sleep
   - duplicate, export and import
 - **Teams, and agents asking agents.** An agent may ask the agents it is allowed to ask (its `canCall`, or its team);
   each answers in a conversation of its own that you can read.
-- **Workspace tools.** `read`, `write`, `edit` and `bash` in the agent's own folder, with **approvals**: chosen tools
-  wait for you to approve or deny, even while the agent sleeps or the app is closed.
+- **Workspace tools.** `read`, `write`, `edit` and `bash` in the agent's own folder or a project folder, with
+  **approvals**: chosen tools wait for you to approve or deny, even while the agent sleeps or the app is closed.
 - **MCP servers:**
   - local (stdio) or remote (Streamable HTTP, headers or OAuth sign-in)
   - each agent picks servers and tools
@@ -35,8 +36,51 @@ reply finishes the next time you open the app.
   - notifications when something needs you
   - launch at login
 
-Status: v1 feature-complete through Phase 7 of [PLAN.md](PLAN.md). Phase 8 (bundled Node, signing, notarization,
-auto-update) is next.
+- **Updates** itself from GitHub Releases, installing only archives signed with the project's release key.
+
+Status: v1. See [PLAN.md](PLAN.md).
+
+## Install
+
+Pi Local is for Macs with Apple Silicon (macOS 11 or later). It bundles its own Node, so it needs nothing else.
+
+1. Download `Pi-Local-<version>-macos-arm64.dmg` from the [latest release](https://github.com/ncecere/pi-local/releases/latest).
+2. Open it and drag **Pi Local** to **Applications**.
+3. Open Pi Local. Because it isn't signed by Apple, macOS says it "can't be opened" (or that Apple "could not verify"
+   it). Choose **Done**, not Move to Trash, then:
+   - open **System Settings → Privacy & Security**, scroll to *"Pi Local" was blocked…*, choose **Open Anyway**, and
+     confirm with your password; **or**
+   - in Terminal: `xattr -dr com.apple.quarantine "/Applications/Pi Local.app"`, then open it again.
+
+   You do this once. Updates install themselves without asking again.
+
+To check a download, compare it with the release's `SHA256SUMS` (`shasum -a 256 Pi-Local-*.dmg`).
+
+### Updates
+
+Pi Local checks GitHub for a new release shortly after it starts and every 12 hours (turn this off in **Settings →
+About**), and shows **Update to …** in its menu bar menu. Installing downloads the release's zip and checks its
+**ed25519 signature** against the public key built into the app. It installs the new app only if the signature is
+good, the archive holds exactly one Pi Local.app with the right bundle ID and version, and `codesign --verify` passes.
+Then it swaps the app in place, moves the old one to the Trash, and restarts. Your data
+(`~/Library/Application Support/Pi Local`) is not touched.
+
+## Releasing
+
+Push a version tag; [.github/workflows/release.yml](.github/workflows/release.yml) does the rest on an Apple Silicon
+runner: tests, `Pi Local.app` with Node, the signed update zip, a DMG, `SHA256SUMS`, and the GitHub release.
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The workflow needs the `RELEASE_SIGNING_KEY` secret: the private half of the key whose public half is
+`internal/update/key.go`. It is made once with `go run ./cmd/release-sign keygen <file>`, kept outside the
+repository, and never committed. `gh secret set RELEASE_SIGNING_KEY < <file>` stores it. Losing it means
+releases can't be signed for existing installs, which then need a manual download. Leaking it means someone could sign
+updates: make a new key, ship it in a release signed with the old one, and set the new secret.
+
+A local release build: `make release VERSION=0.2.0` (signs when `RELEASE_SIGNING_KEY` is set in the environment).
 
 ## Layout
 
@@ -88,3 +132,7 @@ make check           # go vet, gofmt and every test (Go, runtime, frontend)
 
 The Go tests run the real runtime against fake model providers (OpenAI and Anthropic wire formats), fake MCP servers
 (stdio and OAuth) and a scripted model that calls tools, and they never touch the real keychain.
+
+## License
+
+MIT: see [LICENSE](LICENSE), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for what it includes.

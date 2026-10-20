@@ -2,7 +2,7 @@
 export MACOSX_DEPLOYMENT_TARGET ?= 11.0
 export CGO_LDFLAGS ?= -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
 
-.PHONY: help deps runtime frontend build app server run-server dev-web test test-go test-runtime test-frontend lint check clean package
+.PHONY: help deps runtime frontend build app server run-server dev-web test test-go test-runtime test-frontend lint check clean package release
 
 help: ## This list
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -50,6 +50,9 @@ check: lint test ## lint and every test
 
 package: ## Pi Local.app with Node bundled (dist/macos; SIGN_IDENTITY for a Developer ID)
 	packaging/macos/package.sh
+
+release: ## package + the update zip (signed with RELEASE_SIGNING_KEY), DMG and SHA256SUMS; VERSION=x.y.z
+	RELEASE=1 packaging/macos/package.sh
 
 clean:
 	rm -rf bin runtime/dist frontend/dist

@@ -24,6 +24,7 @@ export function TopBar({ sidebarOpen, onOpenSidebar, onOpenCommandPalette }: Top
 
   return (
     <header
+      data-sidebar={sidebarOpen ? 'open' : 'closed'}
       className={cn(
         'relative z-30 shrink-0',
         // The band only bridges the gap beside the sidebar; collapsed, the
@@ -33,7 +34,7 @@ export function TopBar({ sidebarOpen, onOpenSidebar, onOpenCommandPalette }: Top
     >
       {!sidebarOpen && (
         <div
-          data-floating-controls
+          data-floating-controls="left"
           className="absolute left-2 top-6 flex items-center gap-0.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-pill)] p-1 shadow-sm"
         >
           <Button

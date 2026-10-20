@@ -32,6 +32,7 @@ type fakeRequest struct {
 	Model   string
 	Stream  bool
 	Message string // the last user message's text
+	Body    []byte // the whole request
 }
 
 func newFakeProvider(t *testing.T, kind, reply string) *fakeProvider {
@@ -99,7 +100,7 @@ func (f *fakeProvider) serve(w http.ResponseWriter, r *http.Request) {
 		auth = r.Header.Get("x-api-key")
 	}
 	f.mu.Lock()
-	f.requests = append(f.requests, fakeRequest{Path: r.URL.Path, Auth: auth, Header: r.Header.Clone(), Model: body.Model, Stream: body.Stream, Message: lastUserText(body.Messages)})
+	f.requests = append(f.requests, fakeRequest{Path: r.URL.Path, Auth: auth, Header: r.Header.Clone(), Model: body.Model, Stream: body.Stream, Message: lastUserText(body.Messages), Body: raw})
 	status, listed := f.status, f.models
 	f.mu.Unlock()
 	if status != 0 {

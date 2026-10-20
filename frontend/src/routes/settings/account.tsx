@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 import { errorMessage } from '~/api/client';
 import { SettingsRow, SettingsSection } from '~/components/settings/settings-layout';
+import { UpdatesSection } from '~/components/settings/updates-section';
 import { Button } from '~/components/ui/button';
 import { Switch } from '~/components/ui/switch';
 import { useAbout, useReveal } from '~/hooks/use-agent-manager';
@@ -120,6 +121,8 @@ export function SettingsAccountPage() {
           </div>
         </SettingsRow>
       </SettingsSection>
+
+      <UpdatesSection />
 
       <DesktopSection />
 

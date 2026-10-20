@@ -16,11 +16,20 @@ import {
 } from '~/lib/kind-settings';
 import { cn } from '~/lib/utils';
 
-/** The settings of the agent's kind: triage's tools, researcher's plan; an assistant has none. */
+/** The settings of the agent's kind: triage's tools, researcher's plan; an assistant or coding agent has none. */
 export function KindSettingsTab({ agent }: { agent: Agent }) {
   if (agent.agentKind === 'triage') return <TriageForm key={agent.revision} agent={agent} />;
   if (agent.agentKind === 'researcher')
     return <ResearcherForm key={agent.revision} agent={agent} />;
+  if (agent.agentKind === 'coding')
+    return (
+      <Panel>
+        <p className="text-sm text-[var(--text-muted)]">
+          A coding agent has no settings of its own. It uses the pi coding prompt and follows its
+          project folder's AGENTS.md or CLAUDE.md. Set the folder in the Tools tab.
+        </p>
+      </Panel>
+    );
   return (
     <Panel>
       <p className="text-sm text-[var(--text-muted)]">An assistant has no settings of its own.</p>

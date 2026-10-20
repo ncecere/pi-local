@@ -33,6 +33,7 @@ func (a *API) manageRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/agents/{agent}/logs", a.withAgent(a.agentLogs))
 	m.HandleFunc("GET /api/agents/{agent}/export", a.withAgent(a.exportAgent))
 	m.HandleFunc("POST /api/agents/{agent}/export-save", a.withAgent(a.exportSave))
+	m.HandleFunc("POST /api/choose-folder", a.chooseFolder)
 	m.HandleFunc("POST /api/agents/import", a.importAgent)
 	m.HandleFunc("GET /api/about", func(w http.ResponseWriter, r *http.Request) { ok(w, a.Manager.About()) })
 	m.HandleFunc("POST /api/reveal", a.reveal)
@@ -251,6 +252,25 @@ func (a *API) exportSave(w http.ResponseWriter, r *http.Request, ag *agents.Agen
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		fail(w, http.StatusInternalServerError, "internal", "Could not write "+path+": "+err.Error())
+		return
+	}
+	ok(w, map[string]any{"path": path})
+}
+
+// chooseFolder asks for a folder with the native dialog (a coding agent's project folder). 501 without one: the UI
+// asks for the path instead.
+func (a *API) chooseFolder(w http.ResponseWriter, r *http.Request) {
+	if a.FolderDialog == nil {
+		fail(w, http.StatusNotImplemented, "not_supported", "Choosing a folder needs the desktop app: type its path.")
+		return
+	}
+	path, err := a.FolderDialog("Choose the project folder")
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "The folder dialog failed: "+err.Error())
+		return
+	}
+	if path == "" {
+		ok(w, map[string]any{"cancelled": true})
 		return
 	}
 	ok(w, map[string]any{"path": path})

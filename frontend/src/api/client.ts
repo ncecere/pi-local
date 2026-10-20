@@ -18,6 +18,7 @@ export type {
   AgentThread,
   AgentThreadEvent,
   AgentWorkspace,
+  AgentWorkspaceInput,
   Approval,
   ApprovalEvent,
   ApprovalStatus,
@@ -34,6 +35,7 @@ export type {
   ChatToolMessage,
   ChatUserMessage,
   ChatView,
+  ChosenFolder,
   DesktopSettings,
   DiscoveredModel,
   McpEvent,
@@ -62,6 +64,9 @@ export type {
   Team,
   TeamEvent,
   ThreadDocument,
+  UpdateRelease,
+  UpdateStage,
+  UpdateStatus,
   UsageReport,
   UsageTotals,
   WorkspaceTool,
@@ -69,8 +74,18 @@ export type {
 
 export type Role = 'admin' | 'user';
 
-/** Optional features and whether each is on. Locally: `messageSearch` (Phase 7). */
-export type FeatureId = 'usage' | 'connectedUsage' | 'messageSearch' | 'myUsage';
+/**
+ * Optional features and whether each is on. Locally: `messageSearch` (Phase 7),
+ * `folderDialog` (the native folder dialog, desktop app only) and `updates`
+ * (this copy can install updates itself).
+ */
+export type FeatureId =
+  | 'usage'
+  | 'connectedUsage'
+  | 'messageSearch'
+  | 'myUsage'
+  | 'folderDialog'
+  | 'updates';
 
 /** `GET /api/me`: the one local user. */
 export interface Me {

@@ -5,6 +5,10 @@ import { toast } from 'sonner';
 import { type Agent, ApiError, type CatalogModel, errorMessage } from '~/api/client';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
 import { AgentStatus } from '~/components/agent-manager/agent-status';
+import {
+  PROJECT_FOLDER_HINT,
+  ProjectFolderInput,
+} from '~/components/agent-manager/project-folder-field';
 import { ErrorNotice } from '~/components/models/fields';
 import { SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
@@ -33,12 +37,15 @@ import { cn } from '~/lib/utils';
 const FIELD =
   'h-10 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-control)]/60 px-3 text-sm placeholder:text-[var(--text-muted)]';
 
+/** A coding agent's tools: pi's own. Sent with a project folder (a `workspace` without tools has none). */
+const CODING_TOOLS = ['read', 'write', 'edit', 'bash'] as const;
+
 /**
  * Making an agent, or changing one: its name, description, instructions and
  * (if allowed) its model; a new one also its template (the runtime kind).
  * Empty instructions mean the kind's default prompt.
  */
-function AgentDialog({
+export function AgentDialog({
   agent,
   catalog,
   onClose,
@@ -55,8 +62,12 @@ function AgentDialog({
   const [modelId, setModelId] = useState(agent?.model?.id ?? catalog.defaultModelId ?? '');
   const [description, setDescription] = useState(agent?.description ?? '');
   const [instructions, setInstructions] = useState(agent?.instructions ?? '');
+  const [folder, setFolder] = useState('');
   const busy = create.isPending || update.isPending;
   const error = create.error ?? update.error;
+  const coding = (agent ? agent.agentKind : templateId) === 'coding';
+  const folderError =
+    error instanceof ApiError && error.code === 'invalid_workspace_folder' ? error.message : null;
   // An agent whose model was removed or turned off keeps it until given another.
   const missingModel =
     agent?.model && !catalog.models.some((model) => model.id === agent.model?.id)
@@ -96,6 +107,9 @@ function AgentDialog({
           templateId,
           ...(catalog.allowModelChoice && modelId ? { modelId } : {}),
           ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
+          ...(coding && folder.trim()
+            ? { workspace: { tools: [...CODING_TOOLS], folder: folder.trim() } }
+            : {}),
         },
         {
           onSuccess: () => {
@@ -171,6 +185,33 @@ function AgentDialog({
               ))}
             </fieldset>
           )}
+          {!agent && coding && (
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={`${id}-folder`} className="text-sm font-medium">
+                Project folder{' '}
+                <span className="font-normal text-[var(--text-muted)]">(optional)</span>
+              </label>
+              <ProjectFolderInput
+                id={`${id}-folder`}
+                value={folder}
+                onChange={(path) => {
+                  setFolder(path);
+                  if (folderError) create.reset();
+                }}
+                invalid={Boolean(folderError)}
+                describedBy={`${id}-folder-hint`}
+              />
+              <span
+                id={`${id}-folder-hint`}
+                className={cn(
+                  'text-xs',
+                  folderError ? 'text-[var(--danger-on-tint)]' : 'text-[var(--text-muted)]',
+                )}
+              >
+                {folderError ?? PROJECT_FOLDER_HINT}
+              </span>
+            </div>
+          )}
           <label
             htmlFor={`${id}-instructions`}
             className="flex flex-col gap-1.5 text-sm font-medium"
@@ -183,7 +224,11 @@ function AgentDialog({
               rows={agent ? 8 : 4}
               value={instructions}
               onChange={(event) => setInstructions(event.target.value)}
-              placeholder="You help me keep track of research papers…"
+              placeholder={
+                coding
+                  ? 'Run the tests before you say you are done…'
+                  : 'You help me keep track of research papers…'
+              }
               aria-describedby={`${id}-instructions-hint`}
               className={cn(FIELD, 'h-auto min-h-24 resize-y py-2 font-normal')}
             />
@@ -191,7 +236,9 @@ function AgentDialog({
               id={`${id}-instructions-hint`}
               className="text-xs font-normal text-[var(--text-muted)]"
             >
-              Leave empty to use the default prompt for its kind.
+              {coding
+                ? 'Added to the coding prompt, like an AGENTS.md of its own.'
+                : 'Leave empty to use the default prompt for its kind.'}
             </span>
           </label>
           {catalog.allowModelChoice && (catalog.models.length > 1 || missingModel) && (
@@ -250,7 +297,7 @@ function AgentDialog({
               </span>
             </label>
           )}
-          {error && (
+          {error && !folderError && (
             <p role="alert" className="text-sm text-[var(--danger-on-tint)]">
               {errorMessage(error)}
             </p>

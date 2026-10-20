@@ -17,7 +17,7 @@ describe("agent kinds", () => {
 		expect(kinds.agentForKind("triage").name).toBe("triage");
 		expect(kinds.agentForKind("researcher").name).toBe("researcher");
 		expect(kinds.agentFromEnv({ AGENT_KIND: "researcher", AGENT_KIND_SETTINGS: '{"backgroundSubagents":false}' }).name).toBe("researcher");
-		expect([...kinds.AGENT_KINDS]).toEqual(["assistant", "triage", "researcher"]);
+		expect([...kinds.AGENT_KINDS]).toEqual(["assistant", "triage", "researcher", "coding"]);
 	});
 
 	it("refuses an unknown kind and settings the kind doesn't take", () => {
@@ -83,5 +83,55 @@ describe("agent kinds", () => {
 		} finally {
 			await agent.close();
 		}
+	});
+});
+
+describe("the coding kind", () => {
+	it("prompts like the pi coding agent, with the project's own instructions read fresh each turn", async () => {
+		const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+		const { homedir } = await import("node:os");
+		const { join } = await import("node:path");
+		const repo = mkdtempSync(join(homedir(), ".pi-local-kinds-test-"));
+		try {
+			mkdirSync(join(repo, ".git"));
+			mkdirSync(join(repo, "app"));
+			writeFileSync(join(repo, "AGENTS.md"), "ROOT RULES");
+			writeFileSync(join(repo, "app", "CLAUDE.md"), "APP RULES");
+			const prompts: string[] = [];
+			const model = fakeModel();
+			const capture = (text: string) => (context: unknown) => {
+				prompts.push(JSON.stringify(context));
+				return { role: "assistant", content: [{ type: "text", text }], api: "faux", provider: "fake", model: "fake-1", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() } as never;
+			};
+			model.reply(capture("one"), capture("two"));
+			const agent = await startTestAgent(kinds.agentForKind("coding"), {
+				model,
+				instructions: "Prefer small diffs.",
+				env: { WORKSPACE_DIR: join(repo, "app"), WORKSPACE_TOOLS: "read,edit,bash" },
+			});
+			try {
+				await agent.send("t", "first");
+				await agent.settled("t");
+				writeFileSync(join(repo, "app", "CLAUDE.md"), "APP RULES, CHANGED");
+				await agent.send("t", "second");
+				await agent.settled("t");
+			} finally {
+				await agent.close();
+			}
+			const [first, second] = prompts;
+			for (const want of ["expert coding assistant", "- read: Read file contents", "- bash: Execute bash commands", "Prefer small diffs.", "ROOT RULES", "APP RULES", "<cwd>"]) {
+				expect(first, want).toContain(want);
+			}
+			expect(first).not.toContain("- write:");
+			expect(first!.indexOf("ROOT RULES")).toBeLessThan(first!.indexOf("APP RULES"));
+			expect(second).toContain("APP RULES, CHANGED");
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("stops at the repository's root and takes no settings", () => {
+		expect(() => kinds.agentForKind("coding", '{"x":1}')).toThrow(/unknown field/);
+		expect(kinds.agentForKind("coding", "{}").name).toBe("coding");
 	});
 });

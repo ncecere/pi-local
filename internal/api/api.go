@@ -29,6 +29,7 @@ import (
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
 	"github.com/ncecere/pi-local/internal/threads"
+	"github.com/ncecere/pi-local/internal/update"
 	"github.com/ncecere/pi-local/internal/usage"
 )
 
@@ -58,8 +59,11 @@ type API struct {
 	Search    *search.Store
 	// Desktop is the desktop app's own settings (nil in the headless server).
 	Desktop Desktop
+	Updater *update.Updater
 	// SaveDialog asks where to save a file (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
 	SaveDialog func(defaultName string) (string, error)
+	// FolderDialog asks for a folder (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
+	FolderDialog func(title string) (string, error)
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
 	KeepAlive time.Duration
 
@@ -206,7 +210,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{
 		"user":      map[string]string{"id": "local", "name": localName(), "email": "", "role": "admin"},
 		"csrfToken": "",
-		"features":  map[string]bool{"messageSearch": a.Search != nil},
+		"features":  map[string]bool{"messageSearch": a.Search != nil, "folderDialog": a.FolderDialog != nil, "updates": a.Updater != nil && a.Updater.Status().CanInstall},
 		"platform":  map[string]any{"mode": "local", "account": nil},
 	})
 }
@@ -305,7 +309,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"callable":         a.callable(ag.ID),
 		"dir":              ag.Dir,
 		"piDurableVersion": nullIfEmpty(ag.PiDurableVersion),
-		"workspace":        map[string]any{"tools": nonNil(ag.Config.Workspace.Tools)},
+		"workspace":        map[string]any{"tools": nonNil(ag.Config.Workspace.Tools), "folder": ag.Config.Workspace.Folder, "dir": ag.WorkspaceDir()},
 		"approvals":        map[string]any{"tools": nonNil(ag.Config.Approvals.Tools), "timeoutSeconds": ag.Config.Approvals.Timeout()},
 		"pendingApprovals": a.pendingApprovals(ag.ID),
 		"mcp":              mcpChoices(ag.Config.MCP),
@@ -485,6 +489,7 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 		agentFailure(w, err)
 		return
 	}
+	agents.KindDefaults(cfg.Kind, &cfg)
 	ag, err := a.Agents.Create(r.Context(), cfg)
 	if err != nil {
 		agentFailure(w, err)

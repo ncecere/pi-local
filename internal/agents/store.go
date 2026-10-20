@@ -38,7 +38,25 @@ type Agent struct {
 func (a *Agent) StoragePath() string { return filepath.Join(a.Dir, "state.sqlite") }
 
 // WorkspaceDir is the folder the agent's tools work in.
-func (a *Agent) WorkspaceDir() string { return filepath.Join(a.Dir, "workspace") }
+func (a *Agent) WorkspaceDir() string {
+	if a.Config.Workspace.Folder != "" {
+		return a.Config.Workspace.Folder
+	}
+	return a.OwnWorkspaceDir()
+}
+
+// OwnWorkspaceDir is the workspace/ folder inside the agent's folder (its workspace when it has no project folder).
+func (a *Agent) OwnWorkspaceDir() string { return filepath.Join(a.Dir, "workspace") }
+
+// AttachmentsDir is where files a person attaches are saved, and how the agent's tools name it: inside the
+// workspace, except for a project folder, which they'd clutter (then the agent's temporary folder, which its tools
+// can also open).
+func (a *Agent) AttachmentsDir() (dir string, relative bool) {
+	if a.Config.Workspace.Folder != "" {
+		return filepath.Join(a.TempDir(), "attachments"), false
+	}
+	return filepath.Join(a.OwnWorkspaceDir(), "attachments"), true
+}
 
 // TempDir is the agent's private temporary directory.
 func (a *Agent) TempDir() string { return filepath.Join(a.Dir, "tmp") }
@@ -548,6 +566,12 @@ func (s *Store) Import(ctx context.Context, cfg Config, storage map[string][]byt
 		}
 	}
 	cfg.MCP = kept
+	// A project folder this computer doesn't have: the agent works in its own workspace until it is given one.
+	if cfg.Workspace.Folder != "" {
+		if info, err := os.Stat(cfg.Workspace.Folder); err != nil || !info.IsDir() {
+			cfg.Workspace.Folder = ""
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

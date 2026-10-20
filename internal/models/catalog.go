@@ -70,6 +70,7 @@ var Presets = []Preset{
 	{ID: "ollama", Name: "Ollama", Kind: "openai-compatible", BaseURL: "http://localhost:11434/v1", NeedsKey: false, Note: "Models running on this computer with Ollama. Pull a model first (ollama pull …)."},
 	{ID: "lm-studio", Name: "LM Studio", Kind: "openai-compatible", BaseURL: "http://localhost:1234/v1", NeedsKey: false, Note: "LM Studio's local server (Developer → Start server)."},
 	{ID: "openrouter", Name: "OpenRouter", Kind: "openai-compatible", BaseURL: "https://openrouter.ai/api/v1", NeedsKey: true, Note: "Many providers' models through one key from openrouter.ai."},
+	{ID: "cliproxyapi", Name: "CLIProxyAPI", Kind: "anthropic-compatible", BaseURL: "http://127.0.0.1:8317", NeedsKey: true, Note: "CLIProxyAPI on this computer: Claude (and other CLI subscriptions) through one local endpoint. The key is one of the api-keys in its config.yaml."},
 	{ID: "litellm", Name: "LiteLLM", Kind: "openai-compatible", BaseURL: "http://localhost:4000/v1", NeedsKey: true, Note: "A LiteLLM proxy: its URL and a virtual key."},
 	{ID: "other", Name: "Other", Kind: "openai-compatible", BaseURL: "", NeedsKey: true, Note: "Any server with an OpenAI- or Anthropic-compatible API (vLLM, Together, Groq …)."},
 }

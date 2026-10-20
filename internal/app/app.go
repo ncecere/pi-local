@@ -40,6 +40,7 @@ import (
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
 	"github.com/ncecere/pi-local/internal/threads"
+	"github.com/ncecere/pi-local/internal/update"
 	"github.com/ncecere/pi-local/internal/usage"
 )
 
@@ -73,6 +74,7 @@ type App struct {
 	MCP       *mcp.Catalog
 	Schedules *schedules.Store
 	Search    *search.Store
+	Updater   *update.Updater
 	// DB is app.db (diagnostics and tests).
 	DB *sql.DB
 
@@ -275,6 +277,25 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}()
 		}
 	})
+	// Updates from GitHub releases: checking works anywhere; installing needs the installed app (the desktop sets how
+	// it relaunches).
+	exe, _ := os.Executable()
+	a.Updater = update.New(Version, update.BundleOf(exe))
+	a.Updater.LoadAutoCheck = func() bool {
+		var v string
+		db.QueryRow(`SELECT value FROM settings WHERE key = 'update_auto_check'`).Scan(&v)
+		return v != "off"
+	}
+	a.Updater.SaveAutoCheck = func(on bool) error {
+		v := "on"
+		if !on {
+			v = "off"
+		}
+		_, err := db.Exec(`INSERT INTO settings (key, value) VALUES ('update_auto_check', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, v)
+		return err
+	}
+	a.Updater.OnChange = func(st update.Status) { a.Hub.Publish("update", st) }
+	a.API.Updater = a.Updater
 	a.Schedules.Start()
 	ok = true
 	return a, nil

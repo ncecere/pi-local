@@ -494,18 +494,45 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
   linked to its parent.
 
 ### Phase 8: Ship (in progress)
+- **Decided:** no Apple Developer ID for now (ad-hoc signing, and the README explains "Open Anyway"); releases on
+  GitHub Releases with auto-update; Apple Silicon only; Windows and Linux after macOS.
 - **Done:**
-  - `make package` (`packaging/macos/package.sh`) builds `dist/macos/Pi Local.app`: the desktop binary (runtime and
-    UI embedded, version stamped), and Node 22.23.0 downloaded from nodejs.org and **checked against its published
-    SHA-256**, in `Contents/Resources/node`; an icon and an Info.plist (`dev.bitop.pi-local`); an ad-hoc signature
+  - `make package` (`packaging/macos/package.sh`) builds `dist/macos/Pi Local.app`:
+    - the desktop binary (runtime and UI embedded, version stamped)
+    - Node 22.23.0 downloaded from nodejs.org and **checked against its published SHA-256**, in
+      `Contents/Resources/node`
+    - an icon, an Info.plist (`dev.bitop.pi-local`) and an ad-hoc signature
+  - `make release VERSION=x.y.z` also makes `Pi-Local-x.y.z-macos-arm64.zip` (the update archive), its `.sig`, a
+    DMG and `SHA256SUMS`
   - tested from Finder-style `open`: it uses its own Node, an agent was made and answered, quit was graceful
   - hardened-runtime entitlements for Node's JIT are ready for Developer ID signing (`SIGN_IDENTITY=…`)
-  - Settings pages now clear the window's traffic lights
-- **Needs decisions:**
-  - a Developer ID Application certificate (signing and notarization, `notarytool` credentials)
-  - where releases live (GitHub Releases?) and the auto-update channel (Sparkle-style appcast, or Wails' updater)
-  - arm64 only, or universal (x64 too, a second Node)
-  - a DMG
+  - **Auto-update** (`internal/update`):
+    - GitHub's latest release; the archive must carry an **ed25519 signature** over its name and SHA-256 from the
+      release key (public half in `internal/update/key.go`; the private half is the `RELEASE_SIGNING_KEY` secret;
+      `cmd/release-sign` makes, signs and verifies)
+    - before swapping, the unpacked app must be exactly one Pi Local.app with the bundle ID and the release's
+      version, and `codesign --verify` must pass
+    - the old app goes to the Trash and the new one is opened after this process exits
+    - an app on a disk image or a translocated copy says to move it to Applications
+    - checks 30 s after start and every 12 h (a setting), from the menu bar menu, and in Settings → About
+    - `/api/update` (status, check, install, settings) and an `update` live event
+    - tested: version order, signatures (tampered, renamed, another key), a full install from a fake GitHub with a
+      real ad-hoc-signed app, and refusals (another key, another bundle ID, a version mismatch) leaving the app untouched
+  - CI (`.github/workflows/ci.yml`: `make check` on macOS arm64) and the release workflow (`release.yml`): a `v*` tag
+    → test, package, sign, publish
+  - README: install (including Gatekeeper's Open Anyway and `xattr`), updates, releasing and the signing key
+  - **Agent kinds:** **Coding** replaces Triage in the new-agent choices (Triage agents keep working):
+    - pi's coding prompt: preamble, tool list, rules, the person's instructions as an addendum, the project's
+      `AGENTS.md`/`CLAUDE.md` from the repository root down (read fresh each turn, capped), and the working folder
+    - `read`/`write`/`edit`/`bash` by default
+    - works in a **project folder** (`workspace.folder`, chosen with the native folder dialog); attachments go to the
+      agent's temp folder, not the project; an import drops a folder that doesn't exist here
+  - Settings: the header and section tabs stay put while the page scrolls, and the profile column stays put on wide
+    windows; the collapsed sidebar's controls sit beside the traffic lights
+  - the CLIProxyAPI provider preset (Anthropic-compatible, `127.0.0.1:8317`)
+- **Left:**
+  - create the GitHub repository, set `RELEASE_SIGNING_KEY`, push, and tag the first release
+  - later: Developer ID signing and notarization (`SIGN_IDENTITY`, `notarytool`), a crash and log bundle export
 - **Then:** Windows and Linux.
 
 ### (Original Phase 8 notes)

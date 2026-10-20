@@ -19,7 +19,7 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-const defaultResultsDir = "/Users/nicholascecere/projects/pai-local/spikes/wails-sse"
+const defaultResultsDir = "spikes/wails-sse" // relative to the repository root
 
 var resultsMu sync.Mutex
 

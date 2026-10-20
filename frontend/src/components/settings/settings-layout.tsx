@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import type { FeatureId } from '~/api/client';
 import { SkipLink } from '~/components/layout/skip-link';
 import { ThemeMenu } from '~/components/layout/theme-menu';
@@ -149,9 +149,19 @@ function SectionNav({ pathname }: { pathname: string }) {
   const features = useCurrentUser().features ?? {};
   const TABS = ALL_TABS.filter((tab) => !tab.feature || features[tab.feature]);
   const current = TABS.find((tab) => isActive(tab, pathname)) ?? ALL_TABS[0]!;
+  // A window too narrow for every tab scrolls the row: keep the current one in view.
+  const track = useRef<HTMLDivElement>(null);
+  const currentTo = current.to;
+  useEffect(() => {
+    const active = track.current?.querySelector<HTMLElement>(`[href="${currentTo}"]`);
+    active?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [currentTo]);
   return (
     <nav aria-label="Settings sections">
-      <div className="hidden flex-nowrap gap-1 rounded-xl bg-[var(--bg-segment-track)] p-1 sm:inline-flex">
+      <div
+        ref={track}
+        className="hidden max-w-full flex-nowrap gap-1 overflow-x-auto rounded-xl bg-[var(--bg-segment-track)] p-1 [scrollbar-width:none] sm:inline-flex"
+      >
         {TABS.map((tab) => {
           const active = isActive(tab, pathname);
           return (
@@ -190,10 +200,12 @@ function SectionNav({ pathname }: { pathname: string }) {
 export function SettingsLayout() {
   const { pathname } = useLocation();
   return (
-    <div className="h-dvh overflow-y-auto bg-[var(--bg-settings)] text-[var(--text-primary)]">
+    // The header stays put (in the desktop app it is also the window's title bar: it drags the window and clears the
+    // traffic lights); everything under it scrolls, with the section tabs stuck to the top.
+    <div className="flex h-dvh flex-col overflow-hidden bg-[var(--bg-settings)] text-[var(--text-primary)]">
       <SkipLink />
-      <div className="mx-auto w-full max-w-[75rem] px-4 py-6 sm:px-6">
-        <header data-settings-titlebar className="flex items-center justify-between">
+      <header data-settings-titlebar className="shrink-0">
+        <div className="mx-auto flex w-full max-w-[75rem] items-center justify-between px-4 py-3 sm:px-6">
           <Button variant="ghost" size="sm" asChild>
             <Link to="/">
               <ArrowLeft />
@@ -203,32 +215,42 @@ export function SettingsLayout() {
           <div className="flex items-center gap-1">
             <ThemeMenu />
           </div>
-        </header>
+        </div>
+      </header>
 
-        <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[15rem_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-x-10">
-          <section aria-label="Your profile" className="lg:col-start-1 lg:row-start-1">
-            <Identity />
-          </section>
+      {/* One scroll area. On wide windows the profile column beside it stays put (it scrolls on its own only when
+          the window is too short for it); on narrow ones it splits around the page: profile above, help below. */}
+      <div data-settings-scroll className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto grid w-full max-w-[75rem] grid-cols-1 gap-8 px-4 pt-4 sm:px-6 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-x-10">
+          <div
+            data-settings-sidebar
+            className="contents lg:sticky lg:top-0 lg:col-start-1 lg:row-start-1 lg:flex lg:max-h-[calc(100dvh-5rem)] lg:flex-col lg:gap-8 lg:self-start lg:overflow-y-auto lg:pb-6 lg:pt-1"
+          >
+            <section aria-label="Your profile" className="order-1">
+              <Identity />
+            </section>
+            <aside
+              aria-label="Shortcuts and help"
+              className="order-3 flex flex-col gap-6 pb-16 lg:pb-0"
+            >
+              <ShortcutsCard />
+              <Card title="Need help?">
+                <p className="text-sm text-[var(--text-muted)]">
+                  Pi Local runs your agents on this computer. Their conversations and memory stay
+                  here, in each agent's own folder.
+                </p>
+              </Card>
+            </aside>
+          </div>
 
-          <div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
-            <SectionNav pathname={pathname} />
-            <main id="main-content" tabIndex={-1} className="mt-8 outline-none lg:pb-16">
+          <div className="order-2 min-w-0 lg:col-start-2 lg:row-start-1">
+            <div className="sticky top-0 z-20 -mx-1 bg-[var(--bg-settings)] px-1 pb-3 pt-1">
+              <SectionNav pathname={pathname} />
+            </div>
+            <main id="main-content" tabIndex={-1} className="mt-5 pb-16 outline-none">
               <Outlet />
             </main>
           </div>
-
-          <aside
-            aria-label="Shortcuts and help"
-            className="flex flex-col gap-6 pb-16 lg:col-start-1 lg:row-start-2 lg:self-start"
-          >
-            <ShortcutsCard />
-            <Card title="Need help?">
-              <p className="text-sm text-[var(--text-muted)]">
-                Pi Local runs your agents on this computer. Their conversations and memory stay
-                here, in each agent's own folder.
-              </p>
-            </Card>
-          </aside>
         </div>
       </div>
     </div>

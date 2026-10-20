@@ -17,7 +17,7 @@ ported frontend changes as little as possible.
 
 | Route | Answer |
 |---|---|
-| `GET /api/me` | `{user: {id: "local", name, email: "", role: "admin"}, csrfToken: "", features: {}, platform: {mode: "local", account: null}}`. `name` is the OS user's full name. |
+| `GET /api/me` | `{user: {id: "local", name, email: "", role: "admin"}, csrfToken: "", features: {messageSearch, folderDialog, updates}, platform: {mode: "local", account: null}}`. `name` is the OS user's full name. `features.folderDialog`: `POST /api/choose-folder` opens a native dialog (the desktop app only). `features.updates`: this copy can install updates itself (`canInstall`, see [Updates](#updates)). |
 | `GET /api/auth/config` | `{oidcEnabled: false, devAuthEnabled: false, devAccounts: [], instance: {name: "Pi Local", logoUrl: null, colorTheme: "neutral", defaultTheme: "system", orgName: "", supportUrl: null}}` |
 | `GET /api/me/prefs` | `Record<key, object>`: every saved preference. |
 | `PUT /api/me/prefs/{key}` | Body `{value: object}`. Keys: `inbox` (≤ 512 KiB), `appearance` (≤ 16 KiB); any other key is `404 unknown_pref`. Answers `{ok: true}`. |
@@ -31,7 +31,7 @@ type Agent = {
   description: string;        // ≤ 500 chars
   instructions: string;       // ≤ 20,000 chars; empty: the kind's default prompt
   kind: "personal";           // the chat UI's grouping; every local agent is the person's own
-  agentKind: "assistant" | "triage" | "researcher";   // what it is (runtime kind)
+  agentKind: "assistant" | "triage" | "researcher" | "coding";   // what it is (runtime kind); triage is retired
   status: "asleep" | "starting" | "awake" | "error";  // its runtime process
   running: boolean;           // status is "awake"
   lastError?: string | null;  // why it last failed to start (status "error")
@@ -47,8 +47,8 @@ type Agent = {
 | Route | Answer |
 |---|---|
 | `GET /api/agents` | `Agent[]`, newest first. Never starts a runtime. |
-| `GET /api/agents/catalog` | `{templates: [{id, name, description}], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. Templates are the kinds (`assistant`, `triage`, `researcher`). Models are `demo/demo-1` in Phase 1. |
-| `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?}`. `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`. |
+| `GET /api/agents/catalog` | `{templates: [{id, name, description}], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. Templates are the kinds offered for new agents: `assistant`, `researcher` and `coding` (`{id: "coding", name: "Coding", description: "Works in a project folder like the pi coding agent: reads, edits and writes files and runs commands."}`). `triage` is retired: no longer a template, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
+| `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?}` (`workspace`: see [Workspace tools](#workspace-tools-approvals-and-attachments-phase-4)). `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`, `invalid_workspace_folder`. A `coding` agent made without `workspace.tools` gets `["read", "write", "edit", "bash"]`. |
 | `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?}`. Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
 | `DELETE /api/agents/{id}` | Stops its runtime and moves its folder to the OS trash (or deletes it). Answers `{ok: true}`. |
 
@@ -87,6 +87,8 @@ type AgentThread = {
   thread (created, renamed, started, finished, failed, deleted). `busy` changes come from the message being sent and
   from the runtime's reports (end of a reply, and every thread at each runtime start).
 - `event: agent`, `data: {agentId, deleted: boolean, agent?: Agent}` when an agent changes (created, renamed, status)
+- `event: update`, `data: UpdateStatus` when the update status changes: a check, or an install's stage (see
+  [Updates](#updates))
 - `event: resync`, `data: {}` when events may have been missed; the lists should be read again
 - `: keep-alive` every 15 s
 
@@ -181,7 +183,8 @@ type UsageReport = { from: string; to: string; days: number;               // da
 | `GET /api/agents/{id}/export?conversations=true\|false` | A zip of the agent's folder (`agent.yaml`, and with conversations `state.sqlite`; never logs or tmp). With conversations the agent is put to sleep first. `Content-Disposition: attachment`. |
 | `POST /api/agents/import` | Body: the zip's bytes (`Content-Type: application/zip`, at most 1 GiB; send an ArrayBuffer, not a Blob: Wails drops Blob bodies). A new agent (a new ID) from it, with its conversations when the zip has them. `canCall` is cleared (IDs are local to one computer). `201 Agent`. `400 invalid_archive` with a message. |
 | `GET /api/about` | `{version, dataDir, runtime: {node, nodeVersion, piDurableVersion, contractVersion}, agents: number}` |
-| `POST /api/reveal` | Body `{target: "data"}` or `{target: "agent", agentId}` or `{target: "workspace", agentId}`: opens the folder in Finder. `{ok: true}`. |
+| `POST /api/reveal` | Body `{target: "data"}` or `{target: "agent", agentId}` or `{target: "workspace", agentId}`: opens the folder in Finder (`workspace`: the effective one, `workspace.dir`). `{ok: true}`. |
+| `POST /api/choose-folder` | Opens the native folder dialog (a coding agent's project folder). `{path}` (absolute), or `{cancelled: true}`. `501 not_supported` without a dialog (the headless server): ask for the path instead. `GET /api/me` says `features.folderDialog`. |
 
 ## Teams and agents asking agents (Phase 3)
 
@@ -225,20 +228,28 @@ In a conversation, an `ask_agent` tool call's `details` (ChatMessage tool result
 
 ## Workspace tools, approvals and attachments (Phase 4)
 
-Each agent has a **workspace** folder (`<agent>/workspace`). Its file tools (`read`, `write`, `edit`) can't reach
-outside it; `bash` runs in it with a minimal environment, but a shell can reach anything you can, so it asks first by
+Each agent has a **workspace** folder: its own private `<agent>/workspace`, or a **project folder** on this computer
+(`workspace.folder`, as a coding agent has; a coding agent also follows that folder's AGENTS.md or CLAUDE.md). Its
+file tools (`read`, `write`, `edit`) can't reach outside it; `bash` runs in it with a minimal environment, but a shell can reach anything you can, so it asks first by
 default. **Approvals** make an agent ask before chosen tools run: the call waits (also while the agent sleeps, and
 across restarts of the app) until you approve or deny it, or it times out (denied).
 
 `Agent` gains:
 
 ```ts
-  workspace: { tools: ("read" | "write" | "edit" | "bash")[] };   // none: no file tools
+  workspace: {
+    tools: ("read" | "write" | "edit" | "bash")[];   // none: no file tools
+    folder: string;   // a project folder (absolute); "": its own private workspace
+    dir: string;      // read-only: the folder it works in (the project folder, or …/agents/<id>/workspace)
+  };
   approvals: { tools: string[]; timeoutSeconds: number };          // tool names or patterns with *; 60 s – 30 days
   pendingApprovals: number;                                        // waiting for you now
 ```
 
-`PATCH /api/agents/{id}` takes `workspace?` and `approvals?` (the same shapes). Errors: `invalid_workspace_tools`,
+`PATCH /api/agents/{id}` takes `workspace?` (`{tools, folder?}`; `dir` is ignored) and `approvals?`. Send the whole
+workspace: `tools` left out is no tools, `folder` left out is its own folder. `folder` must be an absolute path (a
+leading `~/` is expanded) to an existing folder, and not `/`, `/Users`, `/System` or the home folder itself; otherwise
+`400 invalid_workspace_folder` with a message to show. Errors: `invalid_workspace_tools`,
 `invalid_approval_tools` (at most 100 patterns of 1–200 of `[A-Za-z0-9_.*-]`), `invalid_approval_timeout`.
 
 The UI offers three presets for an agent with tools (it may also edit the list):
@@ -425,6 +436,36 @@ invalid_message_id`.
 |---|---|
 | `GET /api/settings/desktop` | `{available, launchAtLogin}` (`available`: false in a browser) |
 | `PUT /api/settings/desktop` | Body `{launchAtLogin}`: opens Pi Local (in the menu bar, window closed) when you log in. |
+
+### Updates
+
+Pi Local updates itself from its GitHub releases (signed archives; the signature is checked before installing). Every
+route answers `501 not_supported` where there are no updates at all: hide the UI then.
+
+```ts
+type UpdateStatus = {
+  current: string;            // this version: "0.1.0", or a development build like "6dc49f2-dirty"
+  latest: { version: string; notes: string /* Markdown */; url: string /* release page */; published: string } | null;
+  available: boolean;         // latest is newer than current
+  checkedAt: number | null;   // Unix ms of the last check
+  error: string | null;       // the last check's or install's error ("no releases have been published yet")
+  canInstall: boolean;        // false in a development build, the headless server, or with installBlocked:
+                              // link to latest.url ("Download from GitHub") instead
+  installBlocked: string | null;   // why this copy can't update itself where it is (run from the disk image, or a
+                                   // quarantined copy), a message to show; null when it can, or isn't an installed app
+  autoCheck: boolean;         // checks 30 s after start and every 12 hours
+  stage: null | "downloading" | "verifying" | "installing" | "restarting" | "failed";
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/update` | `UpdateStatus` |
+| `POST /api/update/check` | Checks GitHub now. `UpdateStatus`. |
+| `POST /api/update/install` | `202 UpdateStatus`: downloads, verifies, installs and restarts in the background; the stages arrive as `update` events (`failed` with `error`; it may be tried again). `409 cannot_install` with a message when it can't (no newer version, already installing, not an installed app, no archive for this Mac). |
+| `PUT /api/update/settings` | Body `{autoCheck: boolean}`. `UpdateStatus`. |
+
+Live events: `event: update`, `data: UpdateStatus`.
 
 The desktop app shows a notification (while its window isn't in front) when an agent asks for approval, a scheduled
 run ends, or an agent fails; the menu bar menu says how many agents are working and how many requests need you.

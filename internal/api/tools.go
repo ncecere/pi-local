@@ -99,8 +99,9 @@ func (a *API) uploadAttachment(w http.ResponseWriter, r *http.Request, ag *agent
 		return
 	}
 	name := cleanFileName(r.URL.Query().Get("name"))
-	dayDir := filepath.Join("attachments", time.Now().Format(time.DateOnly))
-	dir := filepath.Join(ag.WorkspaceDir(), dayDir)
+	day := time.Now().Format(time.DateOnly)
+	base, relative := ag.AttachmentsDir()
+	dir := filepath.Join(base, day)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		fail(w, http.StatusInternalServerError, "internal", "could not make the attachments folder")
 		return
@@ -148,5 +149,10 @@ func (a *API) uploadAttachment(w http.ResponseWriter, r *http.Request, ag *agent
 	if mediaType == "" {
 		mediaType = "application/octet-stream"
 	}
-	created(w, map[string]any{"path": filepath.ToSlash(filepath.Join(dayDir, final)), "name": final, "size": n, "mediaType": mediaType})
+	// The path the agent's read tool takes: relative to its own workspace, or absolute in its temporary folder.
+	shown := filepath.Join(dir, final)
+	if relative {
+		shown = filepath.Join("attachments", day, final)
+	}
+	created(w, map[string]any{"path": filepath.ToSlash(shown), "name": final, "size": n, "mediaType": mediaType})
 }

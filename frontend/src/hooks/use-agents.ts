@@ -4,7 +4,7 @@ import {
   type AgentApprovals,
   type AgentMcpServer,
   type AgentThread,
-  type AgentWorkspace,
+  type AgentWorkspaceInput,
   agentPath,
   api,
   type CatalogModel,
@@ -220,6 +220,8 @@ export function useCreateAgent() {
       templateId: string;
       modelId?: string;
       instructions?: string;
+      /** Left out: the kind's default tools (coding: read, write, edit, bash) in its own folder. */
+      workspace?: AgentWorkspaceInput;
     }) => api.post<Agent>('/api/agents', body),
     onSuccess: (agent) =>
       queryClient.setQueryData<Agent[]>(AGENTS_KEY, (list) =>
@@ -246,7 +248,7 @@ export function useUpdateAgent() {
       instructions?: string;
       kindSettings?: Record<string, unknown>;
       canCall?: string[];
-      workspace?: AgentWorkspace;
+      workspace?: AgentWorkspaceInput;
       approvals?: AgentApprovals;
       mcp?: AgentMcpServer[];
       schedules?: { agentMade: boolean };

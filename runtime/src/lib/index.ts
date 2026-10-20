@@ -30,6 +30,7 @@ export {
 export { type AgentChoice, READY_PREFIX, runAgentProcess } from "./process.ts";
 export { type Author, runAuthor } from "./author.ts";
 export { assistantAgent, assistantExtension, DEFAULT_INSTRUCTIONS } from "./assistant.ts";
+export { projectContextFiles } from "./project-context.ts";
 export { defineSubagent, SUBAGENT_REPORT, type SubagentDetails, type SubagentOptions, type SubagentReport } from "./subagent.ts";
 export {
 	type ApprovalDecision,

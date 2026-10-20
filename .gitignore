@@ -8,3 +8,6 @@ node_modules/
 spikes/wails-sse/app/bin/
 spikes/wails-sse/app/build/bin/
 spikes/wails-sse/app/frontend/dist/
+
+# Screenshots dropped in the repository root
+/*.png

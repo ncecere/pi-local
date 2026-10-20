@@ -1,0 +1,48 @@
+name: Release
+# Push a tag like v0.1.0: builds Pi Local.app (with Node), signs the update archive with the release key, and
+# publishes a GitHub release with the zip (what the app's updater installs), its .sig, a DMG and SHA256SUMS.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.0
+      - run: corepack enable
+      - run: make deps
+      - name: Test
+        run: make runtime frontend && make check
+      - name: Package
+        env:
+          RELEASE: "1"
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          test -n "$RELEASE_SIGNING_KEY" || { echo "RELEASE_SIGNING_KEY secret is missing"; exit 1; }
+          VERSION="${GITHUB_REF_NAME#v}" packaging/macos/package.sh
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="Pi-Local-$VERSION-macos-arm64"
+          cat > notes.md <<NOTES
+          Pi Local $VERSION for Macs with Apple Silicon.
+
+          **Install:** open \`$NAME.dmg\` and drag Pi Local to Applications. Pi Local isn't signed by Apple, so the first
+          time macOS will refuse to open it: open System Settings → Privacy & Security, scroll to "Pi Local was blocked",
+          and choose **Open Anyway**. After that it opens normally, and updates itself from here.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" --title "Pi Local $VERSION" --notes-file notes.md \
+            "dist/macos/$NAME.zip" "dist/macos/$NAME.zip.sig" "dist/macos/$NAME.dmg" dist/macos/SHA256SUMS

@@ -213,9 +213,27 @@ html[data-shell="desktop-mac"] [data-titlebar] :is(a, button) {
   --wails-draggable: no-drag;
 }
 
+/* The sidebar collapsed, in the desktop app: its controls move into the title bar row, right of the traffic lights
+   and level with them (as Safari's do), and the strip above the page drags the window. */
+html[data-shell="desktop-mac"] [data-floating-controls] {
+  --wails-draggable: no-drag;
+}
+html[data-shell="desktop-mac"] [data-sidebar="closed"] [data-floating-controls] {
+  top: 4px;
+}
+html[data-shell="desktop-mac"] [data-floating-controls="left"] {
+  left: 80px;
+}
+html[data-shell="desktop-mac"] [data-banners] {
+  --wails-draggable: drag;
+}
+html[data-shell="desktop-mac"] [data-banners] :is(a, button, input) {
+  --wails-draggable: no-drag;
+}
+
 /* Settings pages in the desktop app: the header clears the traffic lights (it starts below them) and drags the window. */
 html[data-shell="desktop-mac"] [data-settings-titlebar] {
-  padding-top: 18px;
+  padding-top: 14px;
   --wails-draggable: drag;
 }
 html[data-shell="desktop-mac"] [data-settings-titlebar] :is(a, button) {

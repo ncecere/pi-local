@@ -294,6 +294,16 @@ function RuntimePanel({ agent }: { agent: Agent }) {
             </Button>
           </div>
         </Fact>
+        {agent.workspace?.folder && agent.workspace.dir && (
+          <Fact label="Project folder">
+            <code className="block break-all font-mono text-xs text-[var(--text-secondary)]">
+              {agent.workspace.dir}
+            </code>
+            <p className="mt-1.5 text-xs text-[var(--text-muted)]">
+              Its tools work here. Open workspace shows this folder.
+            </p>
+          </Fact>
+        )}
         {agent.piDurableVersion && (
           <Fact label="Storage">
             <span className="text-[var(--text-secondary)]">

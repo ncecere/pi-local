@@ -5,15 +5,17 @@
  */
 import { type AgentDefinition, AgentDefinitionError, assistantAgent } from "@pdp/runtime";
 import { parseObject } from "./settings.ts";
+import { codingAgent, parseCodingSettings } from "./coding.ts";
 import { parseResearcherSettings, researcherAgent } from "./researcher.ts";
 import { parseTriageSettings, triageAgent } from "./triage.ts";
 
+export * from "./coding.ts";
 export * from "./researcher.ts";
 export * from "./triage.ts";
 export { matches as toolMatchesAny } from "./settings.ts";
 
 /** The kinds a template version may have; `assistant` is the default (the platform's own agent). */
-export const AGENT_KINDS = ["assistant", "triage", "researcher"] as const;
+export const AGENT_KINDS = ["assistant", "triage", "researcher", "coding"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
 /**
@@ -31,6 +33,8 @@ export function agentForKind(kind: string | undefined, settings?: string): Agent
 			return triageAgent(parseTriageSettings(settings));
 		case "researcher":
 			return researcherAgent(parseResearcherSettings(settings));
+		case "coding":
+			return codingAgent(parseCodingSettings(settings));
 		default:
 			throw new AgentDefinitionError(`unknown AGENT_KIND ${JSON.stringify(String(kind).slice(0, 64))} (one of ${AGENT_KINDS.join(", ")})`);
 	}
