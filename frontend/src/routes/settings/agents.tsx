@@ -1,9 +1,11 @@
-import { Link } from '@tanstack/react-router';
-import { MessageSquarePlus, Pencil, Plus, Trash2 } from 'lucide-react';
-import { useId, useState } from 'react';
+import { Link, useNavigate } from '@tanstack/react-router';
+import { ChevronRight, MessageSquarePlus, Plus, Upload } from 'lucide-react';
+import { useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { type Agent, type CatalogModel, errorMessage } from '~/api/client';
+import { type Agent, ApiError, type CatalogModel, errorMessage } from '~/api/client';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
+import { AgentStatus } from '~/components/agent-manager/agent-status';
+import { ErrorNotice } from '~/components/models/fields';
 import { SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
 import {
@@ -15,12 +17,12 @@ import {
   DialogTitle,
 } from '~/components/ui/dialog';
 import { Spinner } from '~/components/ui/spinner';
+import { useImportAgent } from '~/hooks/use-agent-manager';
 import {
   type AgentCatalog,
   useAgentCatalog,
   useAgents,
   useCreateAgent,
-  useRemoveAgent,
   useUpdateAgent,
 } from '~/hooks/use-agents';
 import { agentKindLabel } from '~/lib/agent-groups';
@@ -281,56 +283,21 @@ function ModelOption({ model, catalog }: { model: CatalogModel; catalog: AgentCa
   );
 }
 
-const STATUS_LABEL: Record<Agent['status'], string> = {
-  asleep: 'asleep',
-  starting: 'waking',
-  awake: 'awake',
-  error: 'error',
-};
-
-/** The agent's runtime process, subtly: asleep, waking, awake, or why it failed to start. */
-export function AgentStatus({ agent }: { agent: Pick<Agent, 'status' | 'lastError'> }) {
-  const label = STATUS_LABEL[agent.status] ?? agent.status;
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1',
-        agent.status === 'error' && 'text-[var(--danger-on-tint)]',
-      )}
-      title={agent.status === 'error' && agent.lastError ? agent.lastError : undefined}
-    >
-      <span
-        aria-hidden="true"
-        className={cn(
-          'size-1.5 rounded-full',
-          agent.status === 'awake' && 'bg-[var(--success,#22c55e)]',
-          agent.status === 'starting' && 'bg-[var(--warning)]',
-          agent.status === 'error' && 'bg-[var(--danger)]',
-          agent.status === 'asleep' && 'bg-[var(--text-muted)] opacity-60',
-        )}
-      />
-      {label}
-    </span>
-  );
-}
-
-function AgentRow({
-  agent,
-  onEdit,
-  onDelete,
-}: {
-  agent: Agent;
-  onEdit?: () => void;
-  onDelete?: () => void;
-}) {
+function AgentRow({ agent }: { agent: Agent }) {
   const about = [agent.description || agentKindLabel(agent), agent.model?.name]
     .filter(Boolean)
     .join(' · ');
   return (
-    <li className="flex items-center gap-3 px-4 py-3">
+    <li className="group relative flex items-center gap-3 px-4 py-3 transition-colors hover:bg-[var(--bg-control)]/50">
       <AgentAvatar agent={agent} size={32} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{agent.name}</span>
+        <Link
+          to="/settings/agents/$agentId"
+          params={{ agentId: agent.id }}
+          className="block truncate text-sm font-medium outline-none after:absolute after:inset-0 after:content-[''] focus-visible:underline"
+        >
+          {agent.name}
+        </Link>
         <span className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--text-muted)]">
           <span className="truncate">{about}</span>
           <span aria-hidden="true">·</span>
@@ -351,34 +318,58 @@ function AgentRow({
         asChild
         aria-label={`New chat with ${agent.name}`}
         title="New chat"
+        className="relative z-10"
       >
         <Link to="/" search={{ agent: agent.id }}>
           <MessageSquarePlus />
         </Link>
       </Button>
-      {onEdit && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Edit ${agent.name}`}
-          title="Edit"
-          onClick={onEdit}
-        >
-          <Pencil />
-        </Button>
-      )}
-      {onDelete && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Delete ${agent.name}`}
-          title="Delete"
-          onClick={onDelete}
-        >
-          <Trash2 />
-        </Button>
-      )}
+      <ChevronRight className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden="true" />
     </li>
+  );
+}
+
+/**
+ * Import agent: a zip an export made. Read into an ArrayBuffer and sent as the
+ * raw body (Wails drops Blob bodies); the new agent opens.
+ */
+function ImportAgentButton({ onError }: { onError: (error: unknown) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const importAgent = useImportAgent();
+  const navigate = useNavigate();
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        accept=".zip,application/zip"
+        className="hidden"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          // The same file can be picked again after a failure.
+          event.target.value = '';
+          if (!file) return;
+          onError(null);
+          importAgent.mutate(file, {
+            onSuccess: (agent) => {
+              toast(`${agent.name} imported.`);
+              void navigate({ to: '/settings/agents/$agentId', params: { agentId: agent.id } });
+            },
+            onError,
+          });
+        }}
+      />
+      <Button
+        variant="secondary"
+        disabled={importAgent.isPending}
+        onClick={() => input.current?.click()}
+      >
+        {importAgent.isPending ? <Spinner className="size-4 text-current" /> : <Upload />}
+        Import agent
+      </Button>
+    </>
   );
 }
 
@@ -386,9 +377,8 @@ export function SettingsAgentsPage() {
   usePageTitle('Agents · Settings');
   const agents = useAgents();
   const catalog = useAgentCatalog();
-  const remove = useRemoveAgent();
-  const [editing, setEditing] = useState<Agent | 'new' | null>(null);
-  const [deleting, setDeleting] = useState<Agent | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [importError, setImportError] = useState<unknown>(null);
 
   if (!agents.data || !catalog.data)
     return (
@@ -406,22 +396,24 @@ export function SettingsAgentsPage() {
         <p className="-mt-2 text-sm text-[var(--text-muted)]">
           {limit === 0
             ? 'Making agents is turned off for now.'
-            : 'Agents that run on this computer, each with its own memory and conversations.'}
+            : 'Agents that run on this computer, each with its own memory and conversations. Open one to change it, see its logs, or export it.'}
         </p>
         {mine.length > 0 && (
-          <ul className="divide-y divide-[var(--border-subtle)] rounded-xl border border-[var(--border-subtle)]">
+          <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)]">
             {mine.map((agent) => (
-              <AgentRow
-                key={agent.id}
-                agent={agent}
-                onEdit={() => setEditing(agent)}
-                onDelete={() => setDeleting(agent)}
-              />
+              <AgentRow key={agent.id} agent={agent} />
             ))}
           </ul>
         )}
+        {importError ? (
+          <ErrorNotice>
+            {importError instanceof ApiError && importError.code === 'invalid_archive'
+              ? `That file can't be imported: ${importError.message}`
+              : errorMessage(importError, 'Not imported.')}
+          </ErrorNotice>
+        ) : null}
         {limit > 0 && (
-          <div>
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="primary"
               disabled={full || catalog.data.templates.length === 0}
@@ -430,56 +422,19 @@ export function SettingsAgentsPage() {
                   ? `You have ${limit}, the most allowed. Delete one to make another.`
                   : undefined
               }
-              onClick={() => setEditing('new')}
+              onClick={() => setCreating(true)}
             >
               <Plus />
               New agent
             </Button>
+            <ImportAgentButton onError={setImportError} />
           </div>
         )}
       </SettingsSection>
 
-      {editing && (
-        <AgentDialog
-          agent={editing === 'new' ? null : editing}
-          catalog={catalog.data}
-          onClose={() => setEditing(null)}
-        />
+      {creating && (
+        <AgentDialog agent={null} catalog={catalog.data} onClose={() => setCreating(false)} />
       )}
-
-      <Dialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {deleting?.name}?</DialogTitle>
-            <DialogDescription>
-              The agent stops, and its folder (its memory and all its conversations) moves to the
-              Trash.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setDeleting(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={remove.isPending}
-              onClick={() =>
-                deleting &&
-                remove.mutate(deleting.id, {
-                  onSuccess: () => {
-                    toast(`${deleting.name} deleted.`);
-                    setDeleting(null);
-                  },
-                  onError: (error) => toast.error(errorMessage(error, 'Not deleted.')),
-                })
-              }
-            >
-              {remove.isPending ? <Spinner className="size-4" /> : <Trash2 />}
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

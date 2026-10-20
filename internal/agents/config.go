@@ -57,6 +57,8 @@ type Config struct {
 	KindSettings map[string]any `yaml:"kindSettings,omitempty"`
 	Model        ModelRef       `yaml:"model"`
 	Instructions string         `yaml:"instructions,omitempty"`
+	// CanCall lists the agents (by ID) this agent may ask with ask_agent, besides what its teams allow.
+	CanCall []string `yaml:"canCall,omitempty"`
 }
 
 // Limits on what a config may hold.
@@ -129,11 +131,23 @@ func readConfig(dir string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", filepath.Join(dir, configFile), err)
+	}
+	return c, nil
+}
+
+// ParseConfig reads agent.yaml text: unknown fields are errors (a typo shouldn't be silently ignored).
+func ParseConfig(raw []byte) (Config, error) {
+	if len(raw) > 256<<10 {
+		return Config{}, invalid("invalid_yaml", "agent.yaml is at most 256 KiB.")
+	}
 	var c Config
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
-		return Config{}, fmt.Errorf("%s: %w", filepath.Join(dir, configFile), err)
+		return Config{}, &InvalidError{Code: "invalid_yaml", Message: "agent.yaml: " + strings.TrimPrefix(err.Error(), "yaml: ")}
 	}
 	c.Normalize()
 	return c, nil

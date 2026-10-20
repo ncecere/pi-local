@@ -5,11 +5,15 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
 )
@@ -30,11 +34,29 @@ type Usage interface {
 	RecordUsage(ctx context.Context, agentID, model string, c usage.Counts) error
 }
 
+// Asks is one agent asking another (internal/asks).
+type Asks interface {
+	Peers(ctx context.Context, caller string) []Peer
+	Start(ctx context.Context, caller string, req asks.Request) (*asks.Started, error)
+	Wait(ctx context.Context, caller, id string, wait time.Duration) (*asks.State, error)
+	Stop(ctx context.Context, caller, id string) error
+}
+
+// Peer is an agent another may ask (list_agents).
+type Peer struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	Via         string `json:"via"`
+}
+
 // Handler is the gateway's routes.
 type Handler struct {
 	Keys    Keys
 	Threads Threads
 	Usage   Usage
+	Asks    Asks
 }
 
 const maxBody = 4 << 20
@@ -119,9 +141,73 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case h.Asks != nil && strings.HasPrefix(r.URL.Path, "/a2a/"):
+		h.serveAsks(w, r, agentID)
 	default:
 		// Approvals, schedules and MCP sign-in state come in later phases. A runtime treats 404 as "the host doesn't
 		// offer this" (docs/runtime-contract.md).
+		fail(w, http.StatusNotFound, "not_found", "not offered")
+	}
+}
+
+func (h *Handler) serveAsks(w http.ResponseWriter, r *http.Request, caller string) {
+	refused := func(err error) bool {
+		var refusal *asks.Error
+		if errors.As(err, &refusal) {
+			fail(w, http.StatusForbidden, "refused", refusal.Message)
+			return true
+		}
+		if errors.Is(err, asks.ErrNotFound) {
+			fail(w, http.StatusNotFound, "not_found", "no such ask")
+			return true
+		}
+		return false
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/a2a/")
+	switch {
+	case r.Method == http.MethodGet && path == "agents":
+		ok(w, h.Asks.Peers(r.Context(), caller))
+	case r.Method == http.MethodPost && path == "asks":
+		var req asks.Request
+		if !decode(w, r, &req) {
+			return
+		}
+		started, err := h.Asks.Start(r.Context(), caller, req)
+		if err != nil {
+			if !refused(err) {
+				slog.Error("starting an ask", "agent", caller, "err", err)
+				fail(w, http.StatusInternalServerError, "internal", "the ask could not be started")
+			}
+			return
+		}
+		ok(w, started)
+	case strings.HasPrefix(path, "asks/"):
+		rest := strings.TrimPrefix(path, "asks/")
+		id, action, _ := strings.Cut(rest, "/")
+		switch {
+		case r.Method == http.MethodGet && action == "":
+			wait, _ := strconv.Atoi(r.URL.Query().Get("waitMs"))
+			if wait <= 0 || wait > 30_000 {
+				wait = 25_000
+			}
+			state, err := h.Asks.Wait(r.Context(), caller, id, time.Duration(wait)*time.Millisecond)
+			if err != nil {
+				if r.Context().Err() == nil && !refused(err) {
+					fail(w, http.StatusInternalServerError, "internal", "could not read the ask")
+				}
+				return
+			}
+			ok(w, state)
+		case r.Method == http.MethodPost && action == "stop":
+			if err := h.Asks.Stop(r.Context(), caller, id); err != nil && !refused(err) {
+				fail(w, http.StatusInternalServerError, "internal", "could not stop the ask")
+				return
+			}
+			ok(w, map[string]bool{"ok": true})
+		default:
+			fail(w, http.StatusNotFound, "not_found", "not offered")
+		}
+	default:
 		fail(w, http.StatusNotFound, "not_found", "not offered")
 	}
 }

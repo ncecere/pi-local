@@ -21,6 +21,7 @@ import (
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/supervisor"
+	"github.com/ncecere/pi-local/internal/teams"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
 )
@@ -30,6 +31,8 @@ type Runtimes interface {
 	Call(ctx context.Context, id, method, pathAndQuery string, body []byte, header http.Header) (*http.Response, error)
 	Status(id string) (supervisor.Status, string)
 	Forget(id string)
+	Wake(ctx context.Context, id string) error
+	Stop(id string)
 }
 
 // API serves /api.
@@ -41,6 +44,10 @@ type API struct {
 	Hub      *events.Hub
 	Catalog  *models.Catalog
 	Usage    *usage.Store
+	Teams    *teams.Store
+	Manager  Manager
+	// SaveDialog asks where to save a file (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
+	SaveDialog func(defaultName string) (string, error)
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
 	KeepAlive time.Duration
 
@@ -88,6 +95,7 @@ func (a *API) Handler() http.Handler {
 
 	m.HandleFunc("GET /api/events", a.events)
 	a.modelRoutes(m)
+	a.manageRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
 	return m
@@ -260,22 +268,64 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		lastError = lastErr
 	}
 	return map[string]any{
-		"id":           ag.ID,
-		"name":         ag.Config.Name,
-		"description":  ag.Config.Description,
-		"instructions": ag.Config.Instructions,
-		"kind":         "personal",
-		"agentKind":    ag.Config.Kind,
-		"status":       string(status),
-		"running":      status == supervisor.Awake,
-		"lastError":    lastError,
-		"model":        a.modelJSON(ag.Config.Model),
-		"enabled":      true,
-		"lastUsedAt":   lastUsed,
-		"revision":     ag.Revision,
-		"createdAt":    ag.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updatedAt":    ag.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"id":               ag.ID,
+		"name":             ag.Config.Name,
+		"description":      ag.Config.Description,
+		"instructions":     ag.Config.Instructions,
+		"kind":             "personal",
+		"agentKind":        ag.Config.Kind,
+		"status":           string(status),
+		"running":          status == supervisor.Awake,
+		"lastError":        lastError,
+		"model":            a.modelJSON(ag.Config.Model),
+		"enabled":          true,
+		"lastUsedAt":       lastUsed,
+		"revision":         ag.Revision,
+		"createdAt":        ag.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updatedAt":        ag.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"kindSettings":     kindSettings(ag.Config.KindSettings),
+		"canCall":          nonNil(ag.Config.CanCall),
+		"callable":         a.callable(ag.ID),
+		"dir":              ag.Dir,
+		"piDurableVersion": nullIfEmpty(ag.PiDurableVersion),
 	}
+}
+
+func kindSettings(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
+	}
+	return m
+}
+
+func nonNil(ids []string) []string {
+	if ids == nil {
+		return []string{}
+	}
+	return ids
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// callable is everyone an agent may ask, with names.
+func (a *API) callable(id string) []map[string]string {
+	out := []map[string]string{}
+	if a.Teams == nil {
+		return out
+	}
+	list, err := a.Teams.Callable(context.Background(), id)
+	if err != nil {
+		return out
+	}
+	for _, c := range list {
+		out = append(out, map[string]string{"id": c.ID, "name": a.Agents.NameOf(c.ID), "via": c.Via})
+	}
+	return out
 }
 
 func (a *API) modelJSON(m agents.ModelRef) map[string]string {
@@ -307,11 +357,13 @@ func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
 }
 
 type agentInput struct {
-	Name         *string `json:"name"`
-	Description  *string `json:"description"`
-	TemplateID   *string `json:"templateId"`
-	ModelID      *string `json:"modelId"`
-	Instructions *string `json:"instructions"`
+	Name         *string         `json:"name"`
+	Description  *string         `json:"description"`
+	TemplateID   *string         `json:"templateId"`
+	ModelID      *string         `json:"modelId"`
+	Instructions *string         `json:"instructions"`
+	KindSettings *map[string]any `json:"kindSettings"`
+	CanCall      *[]string       `json:"canCall"`
 }
 
 func (in agentInput) apply(c *agents.Config) error {
@@ -326,6 +378,15 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.TemplateID != nil && *in.TemplateID != "" {
 		c.Kind = *in.TemplateID
+	}
+	if in.KindSettings != nil {
+		c.KindSettings = *in.KindSettings
+		if len(c.KindSettings) == 0 {
+			c.KindSettings = nil
+		}
+	}
+	if in.CanCall != nil {
+		c.CanCall = *in.CanCall
 	}
 	if in.ModelID != nil && *in.ModelID != "" {
 		m, good := modelRef(*in.ModelID)
@@ -508,7 +569,7 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	}
 	// Recorded before relaying, so the thread is listed (and busy) from the first instant, even if the runtime is
 	// still starting; taken away again if the runtime refuses the first message.
-	createdNow, err := a.Threads.Sending(r.Context(), ag.ID, t, msg.Text)
+	createdNow, err := a.Threads.Sending(r.Context(), ag.ID, t, msg.Text, nil)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "internal", "could not record the conversation")
 		return

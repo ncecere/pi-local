@@ -11,12 +11,19 @@ import { NotFoundPage } from '~/components/ui/not-found-page';
 import { RouteLoadError } from '~/components/ui/route-load-error';
 import { FullPageSpinner } from '~/components/ui/spinner';
 import { useNewChatKey } from '~/hooks/use-new-chat-key';
+import { usePlatformEvents } from '~/hooks/use-platform-events';
 import { ChatHomePage } from '~/routes/chat/home';
 import { ChatThreadPage } from '~/routes/chat/thread';
 
 /** Pi Local has one local user: no sign-in, no session guard. */
+/** Live events (/api/events) for every page: the chat and Settings alike follow agents, threads and teams. */
+function Root() {
+  usePlatformEvents();
+  return <Outlet />;
+}
+
 const rootRoute = createRootRoute({
-  component: Outlet,
+  component: Root,
   notFoundComponent: () => (
     <main className="h-dvh">
       <NotFoundPage />
@@ -50,13 +57,15 @@ const appRoute = createRoute({
 const chatHomeRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/',
-  validateSearch: (search: Record<string, unknown>): { agent?: string } =>
-    typeof search.agent === 'string' && search.agent ? { agent: search.agent } : {},
+  validateSearch: (search: Record<string, unknown>): { agent?: string; team?: string } => ({
+    ...(typeof search.agent === 'string' && search.agent ? { agent: search.agent } : {}),
+    ...(typeof search.team === 'string' && search.team ? { team: search.team } : {}),
+  }),
   component: function ChatHomeRoute() {
-    const { agent } = chatHomeRoute.useSearch();
+    const { agent, team } = chatHomeRoute.useSearch();
     // A fresh page for each New Chat.
     const fresh = useNewChatKey();
-    return <ChatHomePage key={fresh} agentId={agent} />;
+    return <ChatHomePage key={fresh} agentId={agent} teamId={team} />;
   },
 });
 
@@ -107,6 +116,10 @@ const settingsChildren = [
     lazyRouteComponent(() => import('~/routes/settings/agents'), 'SettingsAgentsPage'),
   ),
   settingsPage(
+    '/settings/teams',
+    lazyRouteComponent(() => import('~/routes/settings/teams'), 'SettingsTeamsPage'),
+  ),
+  settingsPage(
     '/settings/models',
     lazyRouteComponent(() => import('~/routes/settings/models'), 'SettingsModelsPage'),
   ),
@@ -123,6 +136,21 @@ const settingsChildren = [
   ),
 ];
 
+const AgentDetailPage = lazyRouteComponent(
+  () => import('~/routes/settings/agent-detail'),
+  'SettingsAgentDetailPage',
+);
+
+/** One agent in the manager: Settings → Agents → its name. */
+const agentDetailRoute = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/settings/agents/$agentId',
+  component: function AgentDetailRoute() {
+    const { agentId } = agentDetailRoute.useParams();
+    return <AgentDetailPage key={agentId} agentId={agentId} />;
+  },
+});
+
 const SettingsLayout = lazyRouteComponent(
   () => import('~/components/settings/settings-layout'),
   'SettingsLayout',
@@ -131,7 +159,7 @@ const SettingsLayout = lazyRouteComponent(
 const routeTree = rootRoute.addChildren([
   avatarsRoute,
   appRoute.addChildren([chatHomeRoute, agentRoute, threadRoute]),
-  settingsRoute.addChildren(settingsChildren),
+  settingsRoute.addChildren([...settingsChildren, agentDetailRoute]),
 ]);
 
 export const router = createRouter({

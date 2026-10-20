@@ -1,11 +1,20 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import type { Agent, AgentEvent, AgentThread, AgentThreadEvent } from '~/api/client';
+import type {
+  Agent,
+  AgentEvent,
+  AgentThread,
+  AgentThreadEvent,
+  Team,
+  TeamEvent,
+} from '~/api/client';
 import { transport } from '~/api/transport';
 import { AGENTS_KEY, applyAgentEvent, threadsKey } from '~/hooks/use-agents';
 import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
+import { TEAMS_KEY } from '~/hooks/use-teams';
 import { setEventsLive } from '~/lib/events-live';
 import { threadKey } from '~/lib/inbox';
+import { applyTeamEvent } from '~/lib/teams';
 
 /**
  * Follows the agents and their conversations as they change, through one
@@ -16,6 +25,7 @@ import { threadKey } from '~/lib/inbox';
  *   without anyone polling.
  * - `agent`: an agent created, renamed, deleted, or its runtime's status
  *   (asleep, awake, error) changed. It updates the ['agents'] list in place.
+ * - `team`: a team created, changed or deleted. It updates ['teams'] in place.
  * - `resync`, or a reconnect: events may have been missed; the lists are read
  *   again.
  * Mounted once, in the app shell.
@@ -52,6 +62,7 @@ export function usePlatformEvents() {
     let connectedBefore = false;
     const readListsAgain = () => {
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY, exact: true });
+      void queryClient.invalidateQueries({ queryKey: TEAMS_KEY });
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'agents' && query.queryKey[2] === 'threads',
       });
@@ -80,6 +91,21 @@ export function usePlatformEvents() {
         applyAgentEvent(list, event.agentId, event.deleted ? null : event.agent),
       );
       if (event.deleted) queryClient.removeQueries({ queryKey: threadsKey(event.agentId) });
+    });
+    source.on('team', (data) => {
+      let event: TeamEvent;
+      try {
+        event = JSON.parse(data) as TeamEvent;
+      } catch {
+        return;
+      }
+      if (queryClient.getQueryData(TEAMS_KEY) === undefined || (!event.deleted && !event.team)) {
+        void queryClient.invalidateQueries({ queryKey: TEAMS_KEY });
+        return;
+      }
+      queryClient.setQueryData<Team[]>(TEAMS_KEY, (list) =>
+        applyTeamEvent(list, event.teamId, event.deleted ? null : event.team),
+      );
     });
     source.on('thread', (data) => {
       let event: ThreadEvent;

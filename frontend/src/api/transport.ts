@@ -39,6 +39,19 @@ export interface Transport {
   ): Promise<void>;
   /** A self-reconnecting event channel (EventSource), or null where there is none. */
   channel(path: string): EventChannel | null;
+  /**
+   * A POST whose body is raw bytes (an agent's zip). Always an ArrayBuffer,
+   * never a Blob or File: the Wails asset server drops Blob bodies.
+   */
+  upload<T>(path: string, bytes: ArrayBuffer, contentType: string): Promise<T>;
+  /** A GET answered with a file: its bytes and the Content-Disposition header. */
+  download(path: string): Promise<DownloadedFile>;
+}
+
+export interface DownloadedFile {
+  blob: Blob;
+  /** The raw Content-Disposition header, or null. */
+  contentDisposition: string | null;
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -74,6 +87,27 @@ export const httpTransport: Transport = {
     await readEvents(response.body, onEvent);
   },
 
+  async upload<T>(path: string, bytes: ArrayBuffer, contentType: string): Promise<T> {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': contentType },
+      credentials: 'same-origin',
+      body: bytes,
+    });
+    const parsed = await readJson(response);
+    if (!response.ok) throw apiErrorFrom(response, parsed);
+    return (parsed as { data: T } | null)?.data as T;
+  },
+
+  async download(path) {
+    const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+    if (!response.ok) throw apiErrorFrom(response, await readJson(response));
+    return {
+      blob: await response.blob(),
+      contentDisposition: response.headers.get('Content-Disposition'),
+    };
+  },
+
   channel(path) {
     if (typeof EventSource === 'undefined') return null;
     const source = new EventSource(path);
@@ -102,4 +136,6 @@ export const transport: Transport = {
   request: (method, path, body) => current.request(method, path, body),
   stream: (path, onEvent, signal, headers) => current.stream(path, onEvent, signal, headers),
   channel: (path) => current.channel(path),
+  upload: (path, bytes, contentType) => current.upload(path, bytes, contentType),
+  download: (path) => current.download(path),
 };

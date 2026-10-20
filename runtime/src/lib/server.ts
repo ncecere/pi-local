@@ -518,6 +518,7 @@ export function speakerLine(author: Author): string {
 	const name = author.name === "" ? "someone" : author.name;
 	// A trigger's run (a schedule or a webhook): no person is speaking.
 	if (author.kind === "trigger") return `[Message from trigger ${name}]`;
+	if (author.kind === "agent") return `[Message from agent ${name}, who is asking you for help]`;
 	return `[Message from ${name}${author.via === undefined ? "" : ` via ${author.via}`}]`;
 }
 

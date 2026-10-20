@@ -5,10 +5,10 @@ import type { EntryRecord, LiveState } from "@earendil-works/pi-durable";
  * Who sent a user message, as the platform says (never as its client says): a person, a service account, or a trigger
  * (an unattended run the platform started). `via`: the app a person used.
  */
-export type Author = { kind: "user" | "service_account" | "trigger"; id: string; name: string; via?: string };
+export type Author = { kind: "user" | "service_account" | "trigger" | "agent"; id: string; name: string; via?: string };
 
 /** The author kinds the platform sends. */
-export const AUTHOR_KINDS: ReadonlySet<string> = new Set(["user", "service_account", "trigger"]);
+export const AUTHOR_KINDS: ReadonlySet<string> = new Set(["user", "service_account", "trigger", "agent"]);
 
 /**
  * The entry a user message is placed as: pi's user message (what the model sees, which may start with a line naming

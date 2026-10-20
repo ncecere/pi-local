@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, CornerUpLeft } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import { publishAgentLive } from '~/components/agent/avatar/agent-live';
@@ -12,7 +12,7 @@ import { Button } from '~/components/ui/button';
 import { FullPageSpinner } from '~/components/ui/spinner';
 import { UnavailableState } from '~/components/ui/unavailable-state';
 import { type Connection, peekHandover, useAgentThread } from '~/hooks/use-agent-thread';
-import { useAgent, useAgents, useThreadTitle } from '~/hooks/use-agents';
+import { useAgent, useAgents, useThreadInfo } from '~/hooks/use-agents';
 import { useChatScroll } from '~/hooks/use-chat-scroll';
 import { isPendingMessage } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
@@ -40,7 +40,9 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
   const agentsQuery = useAgents();
   const agent = useAgent(agentId);
   const session = useAgentThread({ agentId, threadId, handover });
-  const title = useThreadTitle(agentId, threadId);
+  const info = useThreadInfo(agentId, threadId);
+  const title = info?.title;
+  const calledBy = info?.calledBy ?? null;
   usePageTitle(title ?? (agent ? `Chat with ${agent.name}` : 'Conversation'));
 
   useEffect(() => rememberAgent(agentId), [agentId]);
@@ -170,6 +172,30 @@ function ThreadConversation({ agentId, threadId }: { agentId: string; threadId: 
             className="relative flex-1 overflow-y-auto"
           >
             <div ref={scroll.contentRef}>
+              {calledBy && (
+                <div className="mx-auto max-w-[42rem] px-4 pt-4">
+                  <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-control)]/40 px-3.5 py-2 text-sm text-[var(--text-secondary)]">
+                    <CornerUpLeft
+                      className="size-4 shrink-0 text-[var(--text-muted)]"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      Asked by{' '}
+                      <span className="font-medium text-[var(--text-primary)]">
+                        {calledBy.name}
+                      </span>
+                    </span>
+                    <span aria-hidden="true">—</span>
+                    <Link
+                      to="/agents/$agentId/threads/$threadId"
+                      params={{ agentId: calledBy.agentId, threadId: calledBy.threadId }}
+                      className="text-[var(--text-primary)] underline decoration-[var(--border-strong)] underline-offset-4 hover:decoration-current"
+                    >
+                      open their conversation
+                    </Link>
+                  </p>
+                </div>
+              )}
               <MessageList
                 messages={messages}
                 liveReplyId={liveReplyId}

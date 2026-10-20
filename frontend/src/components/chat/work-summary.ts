@@ -51,7 +51,9 @@ function activityPhrases(steps: readonly WorkStep[]): string[] {
                   step.toolId === 'create_artifact' ||
                   step.toolId === 'update_artifact' ||
                   step.toolId === 'remember' ||
-                  step.toolId === 'forget'
+                  step.toolId === 'forget' ||
+                  step.toolId === 'ask_agent' ||
+                  step.toolId === 'list_agents'
                 ? step.toolId
                 : `tool:${step.label}`;
     kinds.set(kind, [...(kinds.get(kind) ?? []), step]);
@@ -82,6 +84,10 @@ function activityPhrases(steps: readonly WorkStep[]): string[] {
         return `saved ${counted(count, 'a memory', 'memories')}`;
       case 'forget':
         return `removed ${counted(count, 'a memory', 'memories')}`;
+      case 'ask_agent':
+        return count === 1 ? 'asked an agent' : `asked agents ${count} times`;
+      case 'list_agents':
+        return 'looked up agents to ask';
       default:
         return `used ${group[0]?.label ?? 'a tool'}${times(count)}`;
     }

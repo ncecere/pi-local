@@ -24,6 +24,7 @@ interface Tab {
     | '/settings'
     | '/settings/customization'
     | '/settings/agents'
+    | '/settings/teams'
     | '/settings/models'
     | '/settings/conversations'
     | '/settings/usage';
@@ -37,6 +38,7 @@ const ALL_TABS: Tab[] = [
   { to: '/settings', label: 'About', exact: true },
   { to: '/settings/customization', label: 'Customization', exact: false },
   { to: '/settings/agents', label: 'Agents', exact: false },
+  { to: '/settings/teams', label: 'Teams', exact: false },
   { to: '/settings/models', label: 'Models', exact: false },
   { to: '/settings/conversations', label: 'Conversations', exact: false },
   { to: '/settings/usage', label: 'Usage', exact: false },

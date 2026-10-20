@@ -315,7 +315,35 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
 - **Carried forward:** a model per thread (chat-level picker) instead of per agent; prices for known models
   (manual for now).
 
-### Phase 3: Agent manager
+### Phase 3: Agent manager, teams and agents asking agents ✅ done 2026-10-20
+- **Agent manager:**
+  - an agent page with tabs: overview, kind settings, can ask, raw `agent.yaml`, logs
+  - wake/sleep, duplicate, delete, Show in Finder
+  - export (a native Save dialog in the desktop app, a download in a browser) and import (a new ID, conversations
+    kept, `canCall` cleared)
+  - an About page
+- **Teams:**
+  - a lead plus 1–20 members; with `membersTalk`, members may ask each other
+  - chatting with a team means chatting with its lead (teams appear in the agent picker)
+- **Agents asking agents:**
+  - `list_agents` and `ask_agent` (runtime `agent-calls.ts`), carried out by `internal/asks`
+  - who may ask whom: `canCall`, team lead → members, `membersTalk`
+  - limits: never itself, no cycles along the chain of asks, at most 3 deep, 20 asks per conversation per 10 minutes,
+    30 minutes to answer
+  - each asked agent answers in its own conversation, listed with "asked by" and linked both ways
+  - asks are kept in `app.db` and are replay-safe (keyed by the caller's conversation and tool call), so one in
+    flight survives the app quitting (tested)
+- **Found and fixed:**
+  - Hibernation aborts running tools, and `ask_agent` read that as "stopped by the caller" and cancelled the ask. It
+    now tells hibernation and a person's Stop apart.
+  - A team deleted through a foreign-key cascade published no event. It is now deleted explicitly, with its event.
+  - Live events moved to the router root, so Settings pages update too.
+- **Observed once, not reproduced:** on the very first ask in a fresh data folder, the lead's sidebar row stayed on
+  "Working" until a reload, though the index and events were right. Reproduction under the same conditions fails;
+  watch for it.
+- **Carried forward:** an asynchronous `tell_agent` (fire-and-forget); a team view in the sidebar.
+
+### (Original Phase 3 notes)
 - Create (from starter templates), edit `agent.yaml` in a form, raw YAML view, duplicate, delete, import/export folder.
 - Kinds: assistant, triage, researcher, with `kindSettings` forms (borrow `web/src/pages/templates/kind-fields`).
 - A config save restarts the agent if it is awake, and realigns its threads.

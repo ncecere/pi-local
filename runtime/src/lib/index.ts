@@ -68,3 +68,4 @@ export { Approvals, ApprovalsDoc, approvalId, parseApprovalPolicy, runStarter, t
 export { isSecretKey, isSecretValue, redactArguments } from "./redact.ts";
 export { applyDelta, type DeltaEvent, DELTA_VERSION } from "./delta.ts";
 export { createWorkspaceEnv, parseWorkspaceTools, WORKSPACE_TOOL_NAMES, type WorkspaceToolName, workspaceExtension } from "./workspace.ts";
+export { AGENT_CALLS_EXTENSION, agentCallsExtension, type AgentCallsOptions } from "./agent-calls.ts";

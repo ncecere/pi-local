@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -22,11 +23,13 @@ import (
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/api"
 	"github.com/ncecere/pi-local/internal/appdb"
+	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/secrets"
 	"github.com/ncecere/pi-local/internal/supervisor"
+	"github.com/ncecere/pi-local/internal/teams"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
 )
@@ -55,12 +58,16 @@ type App struct {
 	API     *api.API
 	Catalog *models.Catalog
 	Usage   *usage.Store
+	Teams   *teams.Store
+	Asks    *asks.Broker
 
-	runtimeVersion string
-	gatewayURL     string
-	lock           *os.File
-	gateway        *http.Server
-	closeDB        func() error
+	runtimeVersion  string
+	contractVersion int
+	nodeVersion     string
+	gatewayURL      string
+	lock            *os.File
+	gateway         *http.Server
+	closeDB         func() error
 }
 
 // ErrAlreadyRunning: another Pi Local uses the data directory.
@@ -122,6 +129,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return nil, err
 	}
 	a.runtimeVersion = versions.PiDurableVersion
+	a.contractVersion = versions.ContractVersion
+	if out, err := exec.CommandContext(ctx, cfg.Runtime.Node, "--version").Output(); err == nil {
+		a.nodeVersion = strings.TrimSpace(string(out))
+	}
 
 	db, err := appdb.Open(ctx, filepath.Join(cfg.DataDir, "app.db"))
 	if err != nil {
@@ -149,6 +160,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
 	})
+	a.Threads.NameOf = a.Agents.NameOf
+	a.Teams = teams.New(db, a.Agents)
+	a.Teams.OnChange = a.teamChanged
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -169,17 +183,21 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		ReapInterval: cfg.ReapInterval,
 		StopGrace:    cfg.StopGrace,
 	})
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a}, ReadHeaderTimeout: 10 * time.Second}
+	a.Asks = asks.New(db, a.Sup, a.Agents, permissions{a}, a.Threads)
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
+			if err := a.Teams.RemoveAgent(context.Background(), c.AgentID); err != nil {
+				slog.Warn("removing a deleted agent from its teams", "agent", c.AgentID, "err", err)
+			}
 			return
 		}
 		a.publishAgent(c.AgentID)
@@ -199,6 +217,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 // ResumeUnfinished wakes every agent the index shows with a reply in progress: the app was quit (or crashed) while
 // it was answering, and its runtime picks the work up from storage.
 func (a *App) ResumeUnfinished(ctx context.Context) {
+	a.Asks.Resume(ctx)
 	ids, err := a.Threads.AgentsWithBusyThreads(ctx)
 	if err != nil {
 		slog.Warn("finding unfinished replies", "err", err)
@@ -243,6 +262,10 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	if ag.Config.Kind != "" && ag.Config.Kind != "assistant" {
 		env["AGENT_KIND"] = ag.Config.Kind
 	}
+	// Asking other agents: the tools are there when it may ask someone (who exactly is decided at each ask).
+	if callees, err := a.Teams.Callable(ctx, id); err == nil && len(callees) > 0 {
+		env["AGENT_CALLS"] = "true"
+	}
 	if len(ag.Config.KindSettings) > 0 {
 		raw, err := json.Marshal(ag.Config.KindSettings)
 		if err != nil {
@@ -271,6 +294,95 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 		env["MODEL_USAGE_URL"] = a.gatewayURL + "/usage?model=" + url.QueryEscape(model)
 	}
 	return supervisor.Spec{AgentID: id, Revision: ag.Revision, LogDir: ag.LogDir(), Env: env}, nil
+}
+
+// teamChanged: who may ask whom changed. Awake agents of the team pick up (or lose) the ask tools; everyone hears
+// of the change.
+func (a *App) teamChanged(teamID string, team *teams.Team) {
+	if team == nil {
+		a.Hub.Publish("team", map[string]any{"teamId": teamID, "deleted": true})
+	} else {
+		a.Hub.Publish("team", map[string]any{"teamId": teamID, "deleted": false, "team": team})
+	}
+	for _, id := range a.Sup.Awake() {
+		go func() {
+			if err := a.Sup.Wake(context.Background(), id); err != nil {
+				slog.Info("an agent's team changed", "agent", id, "err", err)
+			}
+		}()
+		a.publishAgent(id)
+	}
+}
+
+// permissions answers the asks broker from the teams and the agents' own canCall.
+type permissions struct{ a *App }
+
+func (p permissions) MayCall(ctx context.Context, caller, target string) bool {
+	return p.a.Teams.MayCall(ctx, caller, target)
+}
+
+func (p permissions) CallableIDs(ctx context.Context, caller string) []string {
+	list, _ := p.a.Teams.Callable(ctx, caller)
+	ids := make([]string, 0, len(list))
+	for _, c := range list {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
+// askGateway is what the gateway serves runtimes for asks.
+type askGateway struct{ a *App }
+
+func (g askGateway) Peers(ctx context.Context, caller string) []gateway.Peer {
+	list, _ := g.a.Teams.Callable(ctx, caller)
+	out := []gateway.Peer{}
+	for _, c := range list {
+		ag, err := g.a.Agents.Get(c.ID)
+		if err != nil {
+			continue
+		}
+		out = append(out, gateway.Peer{ID: ag.ID, Name: ag.Config.Name, Description: ag.Config.Description, Kind: ag.Config.Kind, Via: c.Via})
+	}
+	return out
+}
+
+func (g askGateway) Start(ctx context.Context, caller string, req asks.Request) (*asks.Started, error) {
+	return g.a.Asks.Start(ctx, caller, req)
+}
+
+func (g askGateway) Wait(ctx context.Context, caller, id string, wait time.Duration) (*asks.State, error) {
+	return g.a.Asks.Wait(ctx, caller, id, wait)
+}
+
+func (g askGateway) Stop(ctx context.Context, caller, id string) error {
+	return g.a.Asks.Stop(ctx, caller, id)
+}
+
+// Version is Pi Local's version.
+const Version = "0.1.0-dev"
+
+// About is what Settings → About shows.
+func (a *App) About() map[string]any {
+	return map[string]any{
+		"version": Version,
+		"dataDir": a.cfg.DataDir,
+		"runtime": map[string]any{
+			"node":             a.cfg.Runtime.Node,
+			"nodeVersion":      a.nodeVersion,
+			"piDurableVersion": a.runtimeVersion,
+			"contractVersion":  a.contractVersion,
+		},
+		"agents": len(a.Agents.List()),
+	}
+}
+
+// Reveal opens a folder in the Finder (or the system's file manager).
+func (a *App) Reveal(path string) error {
+	opener := "open"
+	if goruntime.GOOS == "linux" {
+		opener = "xdg-open"
+	}
+	return exec.Command(opener, path).Start()
 }
 
 // catalogChanged: a provider or one of its models changed. Awake agents on it restart with the change (their
@@ -339,6 +451,9 @@ func baseEnv(dataDir string) map[string]string {
 
 // Close stops every agent gracefully (work in flight stays pending in its storage) and closes everything.
 func (a *App) Close() {
+	if a.Asks != nil {
+		a.Asks.Close()
+	}
 	if a.Sup != nil {
 		a.Sup.Close()
 	}

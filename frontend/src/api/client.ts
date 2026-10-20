@@ -7,12 +7,16 @@ export { ApiError, apiErrorFrom } from './errors';
  * origin. There is one local user: no sign-in, no session, no CSRF token.
  */
 export type {
+  About,
   Agent,
   AgentEvent,
+  AgentLogs,
   AgentRef,
   AgentStatus,
   AgentThread,
   AgentThreadEvent,
+  CallableAgent,
+  CalledBy,
   CatalogModel,
   ChatAssistantMessage,
   ChatMessage,
@@ -27,6 +31,9 @@ export type {
   ProviderKindId,
   ProviderPreset,
   ProvidersResponse,
+  RevealTarget,
+  Team,
+  TeamEvent,
   UsageReport,
   UsageTotals,
 } from './types';
@@ -70,6 +77,10 @@ export const api = {
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   delete: <T>(path: string) => request<T>('DELETE', path),
+  /** POSTs raw bytes (an ArrayBuffer, never a Blob: Wails drops those). */
+  upload: <T>(path: string, bytes: ArrayBuffer, contentType: string) =>
+    transport.upload<T>(path, bytes, contentType),
+  download: (path: string) => transport.download(path),
 };
 
 /** `/api/agents/{agentId}…`, with each part encoded. */

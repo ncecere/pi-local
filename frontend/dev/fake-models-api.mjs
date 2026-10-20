@@ -174,6 +174,10 @@ const agent = (id, name, modelRef, extra = {}) => ({
   revision: 1,
   createdAt: now(),
   updatedAt: now(),
+  kindSettings: {},
+  canCall: [],
+  dir: `/Users/test/Library/Application Support/Pi Local/agents/${id}`,
+  piDurableVersion: '0.14.2',
   ...extra,
 });
 const agents = [
@@ -192,7 +196,198 @@ const agents = [
         'The model gone/old-model is no longer available. Give this agent another model in Settings → Agents.',
     },
   ),
+  agent(
+    'ag_cccccccccccccccc',
+    'Scout',
+    { id: 'demo/demo-1', name: 'Demo (echo)', provider: 'demo' },
+    {
+      agentKind: 'researcher',
+      description: 'Digs up sources and summarises them',
+      kindSettings: { backgroundSubagents: true, maxPlanSteps: 6 },
+      status: 'awake',
+      running: true,
+      lastUsedAt: now(),
+    },
+  ),
+  agent(
+    'ag_dddddddddddddddd',
+    'Issue triage',
+    { id: 'demo/demo-1', name: 'Demo (echo)', provider: 'demo' },
+    {
+      agentKind: 'triage',
+      kindSettings: {
+        listTools: ['github_list_issues'],
+        readTools: ['github_get_issue', 'github_list_comments'],
+        writeTools: ['github_add_comment', 'github_*_label'],
+        approveWrites: true,
+      },
+      canCall: ['ag_cccccccccccccccc'],
+    },
+  ),
 ];
+agents[0].description = 'Helps with research questions';
+agents[0].lastUsedAt = new Date(Date.now() - 3 * 3600_000).toISOString();
+
+const LEAD = 'ag_aaaaaaaaaaaaaaaa';
+const SCOUT = 'ag_cccccccccccccccc';
+const teams = [
+  {
+    id: 'tm_aaaaaaaaaaaaaaaa',
+    name: 'Research team',
+    description: 'Finds sources and writes them up',
+    leadId: LEAD,
+    memberIds: [SCOUT, 'ag_dddddddddddddddd'],
+    membersTalk: false,
+    createdAt: now(),
+    updatedAt: now(),
+  },
+];
+
+/** Everyone an agent may ask: its canCall, and its teams. */
+function callableOf(a) {
+  const out = new Map();
+  for (const id of a.canCall) out.set(id, 'direct');
+  for (const t of teams) {
+    const ids = [];
+    if (t.leadId === a.id) ids.push(...t.memberIds);
+    else if (t.membersTalk && t.memberIds.includes(a.id))
+      ids.push(t.leadId, ...t.memberIds.filter((m) => m !== a.id));
+    for (const id of ids) if (!out.has(id)) out.set(id, 'team');
+  }
+  return [...out].flatMap(([id, via]) => {
+    const other = agents.find((x) => x.id === id);
+    return other ? [{ id, name: other.name, via }] : [];
+  });
+}
+const view = (a) => ({ ...a, running: a.status === 'awake', callable: callableOf(a) });
+
+const t0 = Date.now() - 20 * 60_000;
+const thread = (threadId, title, extra = {}) => ({
+  threadId,
+  title,
+  createdAt: t0,
+  updatedAt: t0 + 60_000,
+  busy: false,
+  lastReplyAt: t0 + 60_000,
+  lastError: null,
+  visibility: 'private',
+  createdBy: null,
+  participants: [],
+  calledBy: null,
+  ...extra,
+});
+const threads = {
+  [LEAD]: [thread('th-lead-1', 'Papers on durable agents')],
+  [SCOUT]: [
+    thread('th-scout-1', 'Search arXiv for durable agent runtimes', {
+      calledBy: { agentId: LEAD, name: 'Research helper', threadId: 'th-lead-1' },
+    }),
+  ],
+};
+const chatViews = {
+  'th-lead-1': {
+    busy: false,
+    tools: [],
+    messages: [
+      { id: 'u1', role: 'user', text: 'Find me papers on durable agent runtimes.', at: t0 },
+      {
+        id: 'a1',
+        role: 'assistant',
+        text: '',
+        at: t0 + 1000,
+        toolCalls: [
+          {
+            id: 'c0',
+            name: 'list_agents',
+            arguments: {},
+            startedAt: t0 + 1000,
+            endedAt: t0 + 1200,
+          },
+          {
+            id: 'c1',
+            name: 'ask_agent',
+            arguments: {
+              agent: SCOUT,
+              message:
+                'Search arXiv for papers on durable execution for LLM agents (2024-2026). List the 3 most relevant with one line each.',
+            },
+            startedAt: t0 + 1300,
+            endedAt: t0 + 41_300,
+          },
+          {
+            id: 'c2',
+            name: 'bash',
+            arguments: { command: 'ls -la' },
+            startedAt: t0 + 41_400,
+            endedAt: t0 + 41_500,
+          },
+        ],
+      },
+      {
+        id: 't0',
+        role: 'tool',
+        toolCallId: 'c0',
+        name: 'list_agents',
+        text: 'Agents you may ask:\n- Scout (id: ag_cccccccccccccccc, researcher): Digs up sources',
+        isError: false,
+        details: { agents: [{ id: SCOUT, name: 'Scout' }] },
+      },
+      {
+        id: 't1',
+        role: 'tool',
+        toolCallId: 'c1',
+        name: 'ask_agent',
+        text: '1. Durable Agents (2025): checkpoints every tool call.\n2. Resumable LLM Workflows (2024): replay-safe tools.\n3. Agent Journals (2026): event-sourced transcripts.',
+        isError: false,
+        details: { agentId: SCOUT, agentName: 'Scout', threadId: 'th-scout-1' },
+      },
+      { id: 't2', role: 'tool', toolCallId: 'c2', name: 'bash', text: 'total 0', isError: false },
+      {
+        id: 'a2',
+        role: 'assistant',
+        text: 'Scout found three papers: **Durable Agents**, **Resumable LLM Workflows** and **Agent Journals**.',
+        at: t0 + 42_000,
+      },
+    ],
+  },
+  'th-scout-1': {
+    busy: false,
+    tools: [],
+    messages: [
+      {
+        id: 'u1',
+        role: 'user',
+        text: 'Search arXiv for papers on durable execution for LLM agents (2024-2026).',
+        author: { kind: 'service_account', id: LEAD, name: 'Research helper' },
+        at: t0 + 1300,
+      },
+      { id: 'a1', role: 'assistant', text: '1. Durable Agents (2025) …', at: t0 + 2000 },
+    ],
+  },
+};
+
+const clients = new Set();
+const broadcast = (event, data) => {
+  for (const res of clients) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+};
+const noteAgent = (a) => broadcast('agent', { agentId: a.id, deleted: false, agent: view(a) });
+const logLines = (a) =>
+  Array.from({ length: 40 }, (_, i) => {
+    const at = new Date(Date.now() - (40 - i) * 1500).toISOString();
+    return `${at} INFO  [${a.name}] ${i % 7 === 0 ? `runtime ready on port 41${i}` : i % 5 === 0 ? 'thread th-1: reply finished in 812ms' : 'heartbeat ok'}`;
+  });
+const yamlOf = (a) =>
+  [
+    `name: ${a.name}`,
+    `description: ${a.description}`,
+    `kind: ${a.agentKind}`,
+    `model: ${a.model?.id ?? ''}`,
+    'instructions: |',
+    ...(a.instructions || '(default)').split('\n').map((l) => `  ${l}`),
+    `canCall: [${a.canCall.join(', ')}]`,
+  ].join('\n');
+let nextId = 0;
+const newAgentId = () => `ag_${String(++nextId).padStart(16, 'e')}`;
 
 function catalog() {
   const models = [
@@ -279,13 +474,15 @@ const fail = (res, status, code, message, details) =>
   send(res, status, { error: { code, message, details } });
 const readBody = (req) =>
   new Promise((resolve) => {
-    let raw = '';
+    const chunks = [];
     req.on('data', (chunk) => {
-      raw += chunk;
+      chunks.push(chunk);
     });
     req.on('end', () => {
+      const raw = Buffer.concat(chunks);
+      if (!String(req.headers['content-type'] ?? '').includes('json')) return resolve(raw);
       try {
-        resolve(raw ? JSON.parse(raw) : {});
+        resolve(raw.length ? JSON.parse(raw.toString('utf8')) : {});
       } catch {
         resolve({});
       }
@@ -306,6 +503,8 @@ createServer(async (req, res) => {
   if (path === '/api/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     res.write('event: ready\ndata: {}\n\n');
+    clients.add(res);
+    req.on('close', () => clients.delete(res));
     return;
   }
   if (path === '/api/me')
@@ -332,11 +531,174 @@ createServer(async (req, res) => {
   if (path === '/api/me/prefs') return ok(res, {});
   if (path.startsWith('/api/me/prefs/')) return ok(res, { ok: true });
   if (path === '/api/me/usage') return ok(res, usage(Number(url.searchParams.get('days') ?? 30)));
-  if (path === '/api/agents' && m === 'GET') return ok(res, agents);
+  if (path === '/api/agents' && m === 'GET') return ok(res, agents.map(view));
   if (path === '/api/agents/catalog') return ok(res, catalog());
+  if (path === '/api/about')
+    return ok(res, {
+      version: '0.3.0-dev',
+      dataDir: '/Users/test/Library/Application Support/Pi Local',
+      runtime: {
+        node: '/Users/test/.local/share/pi-node/bin/node',
+        nodeVersion: 'v22.23.0',
+        piDurableVersion: '0.14.2',
+        contractVersion: 3,
+      },
+      agents: agents.length,
+    });
+  if (path === '/api/reveal' && m === 'POST') {
+    console.log('reveal', body);
+    return ok(res, { ok: true });
+  }
+  if (path === '/api/agents/import' && m === 'POST') {
+    await new Promise((r) => setTimeout(r, 300));
+    if (!Buffer.isBuffer(body) || body.subarray(0, 2).toString() !== 'PK')
+      return fail(
+        res,
+        400,
+        'invalid_archive',
+        'This is not a zip file an export made (no agent.yaml in it).',
+      );
+    const a = { ...agent(newAgentId(), 'Imported agent', agents[0].model), canCall: [] };
+    agents.unshift(a);
+    noteAgent(a);
+    return ok(res, view(a), 201);
+  }
+  if (path === '/api/teams' && m === 'GET') return ok(res, teams);
+  if (path === '/api/teams' && m === 'POST') {
+    if (!body.name?.trim()) return fail(res, 400, 'invalid_name', 'A team needs a name.');
+    const t = {
+      id: `tm_${String(teams.length + 1).padStart(16, 'b')}`,
+      name: body.name,
+      description: body.description ?? '',
+      leadId: body.leadId,
+      memberIds: body.memberIds ?? [],
+      membersTalk: Boolean(body.membersTalk),
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    teams.push(t);
+    broadcast('team', { teamId: t.id, deleted: false, team: t });
+    return ok(res, t, 201);
+  }
+  if (parts[1] === 'teams' && parts[2]) {
+    const t = teams.find((x) => x.id === parts[2]);
+    if (!t) return fail(res, 404, 'not_found', 'No such team.');
+    if (m === 'PATCH') {
+      Object.assign(t, body, { updatedAt: now() });
+      broadcast('team', { teamId: t.id, deleted: false, team: t });
+      return ok(res, t);
+    }
+    if (m === 'DELETE') {
+      teams.splice(teams.indexOf(t), 1);
+      broadcast('team', { teamId: t.id, deleted: true });
+      return ok(res, { ok: true });
+    }
+  }
+  if (parts[1] === 'agents' && parts[2] && parts[3] === 'threads') {
+    const list = threads[parts[2]] ?? [];
+    if (parts.length === 4) return ok(res, list);
+    const v = chatViews[parts[4]];
+    if (!v) return fail(res, 404, 'not_found', 'No such conversation.');
+    if (parts[5] === 'events') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+      res.write(`event: view\ndata: ${JSON.stringify(v)}\n\n`);
+      return;
+    }
+    if (parts.length === 5 && m === 'GET') return ok(res, v);
+  }
+  if (parts[1] === 'agents' && parts[2] && parts[3]) {
+    const a = agents.find((x) => x.id === parts[2]);
+    if (!a) return fail(res, 404, 'not_found', 'No such agent.');
+    if (parts[3] === 'config' && m === 'GET') return ok(res, { yaml: yamlOf(a) });
+    if (parts[3] === 'config' && m === 'PUT') {
+      const lines = String(body.yaml ?? '').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim() || line.trim().startsWith('#') || /^\s/.test(line)) continue;
+        if (!line.includes(':'))
+          return fail(res, 400, 'invalid_yaml', `line ${i + 1}: could not find expected ':'`);
+      }
+      const name = lines
+        .find((l) => l.startsWith('name:'))
+        ?.slice(5)
+        .trim();
+      if (name) a.name = name;
+      a.revision++;
+      noteAgent(a);
+      return ok(res, view(a));
+    }
+    if (parts[3] === 'logs')
+      return ok(res, { path: `${a.dir}/logs/runtime.log`, lines: logLines(a) });
+    if (parts[3] === 'wake' || parts[3] === 'sleep') {
+      if (parts[3] === 'wake' && a.status === 'error') return ok(res, view(a));
+      a.status = parts[3] === 'wake' ? 'starting' : 'asleep';
+      noteAgent(a);
+      if (parts[3] === 'wake')
+        await new Promise((r) => setTimeout(r, 700)).then(() => {
+          a.status = 'awake';
+          noteAgent(a);
+        });
+      return ok(res, view(a));
+    }
+    if (parts[3] === 'duplicate') {
+      const copy = {
+        ...structuredClone(a),
+        id: newAgentId(),
+        name: body.name ?? `${a.name} copy`,
+        status: 'asleep',
+        lastUsedAt: null,
+        createdAt: now(),
+      };
+      copy.dir = copy.dir.replace(a.id, copy.id);
+      agents.unshift(copy);
+      noteAgent(copy);
+      return ok(res, view(copy), 201);
+    }
+    if (parts[3] === 'export') {
+      const withConversations = url.searchParams.get('conversations') === 'true';
+      const name = `${a.name}${withConversations ? ' with conversations' : ''}.zip`;
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="agent.zip"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      });
+      res.end(Buffer.from('PK\u0003\u0004fake zip'));
+      return;
+    }
+  }
+  if (parts[1] === 'agents' && parts[2] && parts.length === 3 && m === 'DELETE') {
+    const a = agents.find((x) => x.id === parts[2]);
+    if (!a) return fail(res, 404, 'not_found', 'No such agent.');
+    agents.splice(agents.indexOf(a), 1);
+    for (const t of [...teams]) {
+      if (t.leadId === a.id) {
+        teams.splice(teams.indexOf(t), 1);
+        broadcast('team', { teamId: t.id, deleted: true });
+      } else t.memberIds = t.memberIds.filter((x) => x !== a.id);
+    }
+    for (const other of agents) other.canCall = other.canCall.filter((x) => x !== a.id);
+    broadcast('agent', { agentId: a.id, deleted: true });
+    return ok(res, { ok: true });
+  }
   if (parts[1] === 'agents' && parts[2] && m === 'PATCH') {
     const a = agents.find((x) => x.id === parts[2]);
     if (!a) return fail(res, 404, 'not_found', 'No such agent.');
+    if (body.canCall !== undefined) {
+      if (
+        body.canCall.includes(a.id) ||
+        body.canCall.some((id) => !agents.some((x) => x.id === id))
+      )
+        return fail(
+          res,
+          400,
+          'invalid_can_call',
+          'An agent cannot ask itself or an unknown agent.',
+        );
+      a.canCall = body.canCall;
+    }
+    if (body.kindSettings !== undefined) a.kindSettings = body.kindSettings;
+    if (body.description !== undefined) a.description = body.description;
+    if (body.instructions !== undefined) a.instructions = body.instructions;
+    a.revision++;
     if (body.modelId) {
       const c = catalog().models.find((x) => x.id === body.modelId);
       if (!c) return fail(res, 400, 'invalid_model', 'No such model.');
@@ -345,7 +707,8 @@ createServer(async (req, res) => {
       a.lastError = null;
     }
     Object.assign(a, body.name ? { name: body.name } : {});
-    return ok(res, a);
+    noteAgent(a);
+    return ok(res, view(a));
   }
   if (path === '/api/settings/default-model' && m === 'PUT') {
     defaultModelId = body.modelId;

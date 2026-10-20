@@ -33,6 +33,26 @@ export interface Agent {
   createdAt: string;
   /** ISO 8601. */
   updatedAt: string;
+  /**
+   * The kind's settings (triage: listTools, readTools, writeTools, approveWrites;
+   * researcher: backgroundSubagents, maxPlanSteps); {} for none. Phase 3.
+   */
+  kindSettings: Record<string, unknown>;
+  /** Agent IDs this agent may ask (ask_agent), besides what its teams allow. */
+  canCall: string[];
+  /** Everyone it may ask, all rules applied. */
+  callable: CallableAgent[];
+  /** Its folder on disk. */
+  dir: string;
+  /** The newest runtime that wrote its storage. */
+  piDurableVersion: string | null;
+}
+
+/** One agent another may ask, and why: in its `canCall`, or through a team. */
+export interface CallableAgent {
+  id: string;
+  name: string;
+  via: 'direct' | 'team';
 }
 
 export type AgentStatus = 'asleep' | 'starting' | 'awake' | 'error';
@@ -53,6 +73,15 @@ export interface AgentThread {
   visibility: 'private' | 'shared';
   createdBy?: null;
   participants: unknown[];
+  /** The agent (and its conversation) that asked in this thread; null when a person started it. */
+  calledBy?: CalledBy | null;
+}
+
+/** Who asked in a conversation: another agent, from one of its own conversations. */
+export interface CalledBy {
+  agentId: string;
+  name: string;
+  threadId: string;
 }
 
 /** `GET /api/events` `thread` event. */
@@ -69,6 +98,58 @@ export interface AgentEvent {
   deleted: boolean;
   agent?: Agent | null;
 }
+
+// ── Agent manager and teams (docs/api.md, Phase 3) ───────────────────────────────────────────
+
+/** A group of agents people chat with through its lead. */
+export interface Team {
+  /** "tm_…". */
+  id: string;
+  /** 1–60 characters. */
+  name: string;
+  /** ≤ 500 characters. */
+  description: string;
+  /** The agent people chat with for the team. */
+  leadId: string;
+  /** Other agents (not the lead), 1–20. */
+  memberIds: string[];
+  /** Members may ask each other and the lead. */
+  membersTalk: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /api/events` `team` event. */
+export interface TeamEvent {
+  teamId: string;
+  deleted: boolean;
+  team?: Team | null;
+}
+
+/** `GET /api/about`. */
+export interface About {
+  version: string;
+  dataDir: string;
+  runtime: {
+    node: string;
+    nodeVersion: string;
+    piDurableVersion: string;
+    contractVersion: string | number;
+  };
+  agents: number;
+}
+
+/** `GET /api/agents/{id}/logs`. */
+export interface AgentLogs {
+  path: string;
+  lines: string[];
+}
+
+/** `POST /api/reveal`: which folder to open in Finder. */
+export type RevealTarget =
+  | { target: 'data' }
+  | { target: 'agent'; agentId: string }
+  | { target: 'workspace'; agentId: string };
 
 // ── Models and providers (docs/api.md, Phase 2) ─────────────────────────────────────────────
 

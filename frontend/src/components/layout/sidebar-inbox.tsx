@@ -46,6 +46,7 @@ import { Spinner } from '~/components/ui/spinner';
 import { useDeleteThread, useRenameThread } from '~/hooks/use-agents';
 import { type InboxActions, useInbox, useInboxActions } from '~/hooks/use-inbox';
 import { searchable, useMessageSearch } from '~/hooks/use-message-search';
+import { calledByLabel } from '~/lib/agent-asks';
 import { keepFocusWhenRemoved } from '~/lib/focus-return';
 import {
   activityAt,
@@ -767,6 +768,7 @@ function InboxRow({
   }, [confirming]);
 
   const { key, title, bucket, status, meta } = entry;
+  const asked = calledByLabel(entry.calledBy);
   const working = status === 'working';
   const pinned = bucket === 'pinned';
   const away = bucket === 'done' || bucket === 'snoozed' || bucket === 'archived';
@@ -836,7 +838,7 @@ function InboxRow({
         to="/agents/$agentId/threads/$threadId"
         params={{ agentId: entry.agentId, threadId: entry.threadId }}
         aria-current={active ? 'page' : undefined}
-        title={title}
+        title={asked ? `${title} (${asked})` : title}
         className={cn(
           'flex min-w-0 flex-1 rounded-md px-2.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-bright)]',
           away ? 'h-9 items-center gap-2.5' : 'h-[4.875rem] flex-col justify-center gap-0.5 py-2',
@@ -882,9 +884,16 @@ function InboxRow({
             >
               {title}
             </span>
-            {/* Line 3: when. */}
+            {/* Line 3: when, and who asked when another agent did. */}
             <span className="truncate text-xs text-[var(--text-muted)] tabular-nums">
               {compactAgo(activityAt(meta, entry), now)}
+              {asked && (
+                <>
+                  <span aria-hidden="true"> · </span>
+                  <span className="sr-only">, </span>
+                  {asked}
+                </>
+              )}
             </span>
           </>
         )}

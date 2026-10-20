@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Agent } from '~/api/client';
+import type { Agent, Team } from '~/api/client';
 import { AgentAvatar, agentStatusLabel } from '~/components/agent/agent-avatar';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import { Composer } from '~/components/chat/composer';
@@ -15,10 +15,12 @@ import {
   useAgentThreads,
 } from '~/hooks/use-agents';
 import { useCurrentUser } from '~/hooks/use-session';
+import { useTeams } from '~/hooks/use-teams';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { usePageTitle } from '~/lib/document-title';
 import { focusComposerOnArrival } from '~/lib/focus-after-navigation';
 import { greetingName } from '~/lib/greeting-name';
+import { chattableTeams } from '~/lib/teams';
 import { cn } from '~/lib/utils';
 
 const LAST_AGENT_KEY = 'pai.lastAgent';
@@ -48,25 +50,45 @@ function ago(ms: number): string {
  * conversation at once with the message handed over; the conversation page
  * sends it, so a slow agent start shows there, not as a frozen home page.
  */
-export function ChatHomePage({ agentId }: { agentId?: string }) {
+export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: string }) {
   const me = useCurrentUser();
   const agentsQuery = useAgents();
   const agents = useMemo(() => chattable(agentsQuery.data), [agentsQuery.data]);
+  const teamsQuery = useTeams();
+  const teams = useMemo(() => chattableTeams(teamsQuery.data, agents), [teamsQuery.data, agents]);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   usePageTitle(null);
 
   const [chosenId, setChosenId] = useState<string | undefined>(agentId);
   useEffect(() => setChosenId(agentId), [agentId]);
-  const agent = useMemo(() => startingAgent(agents, chosenId), [agents, chosenId]);
+  const [chosenTeamId, setChosenTeamId] = useState<string | undefined>(teamId);
+  useEffect(() => setChosenTeamId(teamId), [teamId]);
+  // A chat with a team is a chat with its lead.
+  const team = teams.find((candidate) => candidate.id === chosenTeamId) ?? null;
+  const agent = useMemo(
+    () => startingAgent(agents, team?.leadId ?? chosenId),
+    [agents, chosenId, team],
+  );
   const selectAgent = useCallback(
     (next: Agent) => {
       setChosenId(next.id);
+      setChosenTeamId(undefined);
       rememberAgent(next.id);
       void navigate({ to: '/', search: { agent: next.id }, replace: true });
     },
     [navigate],
   );
+  const selectTeam = useCallback(
+    (next: Team) => {
+      setChosenId(next.leadId);
+      setChosenTeamId(next.id);
+      rememberAgent(next.leadId);
+      void navigate({ to: '/', search: { agent: next.leadId, team: next.id }, replace: true });
+    },
+    [navigate],
+  );
+  const talkingTo = team ? team.name : agent?.name;
 
   const [draft, setDraft] = useState('');
   const started = useRef(false);
@@ -117,7 +139,7 @@ export function ChatHomePage({ agentId }: { agentId?: string }) {
             <span className={cn(!agent && !loading && 'text-[var(--text-secondary)]')}>
               {agent ? (
                 <>
-                  What should {agent.name} work on
+                  What should {talkingTo} work on
                   {firstName ? (
                     // The comma stays on the first line; on a phone the name is the second.
                     <>
@@ -139,7 +161,9 @@ export function ChatHomePage({ agentId }: { agentId?: string }) {
           </h1>
           {agent && (
             <p className="mt-3 text-center text-sm text-[var(--text-muted)] md:text-left">
-              {agent.description || agentKindLabel(agent)}
+              {team
+                ? `${team.description || 'A team'} · led by ${agent.name}`
+                : agent.description || agentKindLabel(agent)}
               <span className="mx-1.5" aria-hidden="true">
                 ·
               </span>
@@ -151,7 +175,7 @@ export function ChatHomePage({ agentId }: { agentId?: string }) {
             <fieldset className="mt-7 hidden flex-wrap gap-2.5 border-0 p-0 md:flex">
               <legend className="sr-only">Agents</legend>
               {agents.slice(0, 8).map((candidate) => {
-                const active = candidate.id === agent?.id;
+                const active = !team && candidate.id === agent?.id;
                 return (
                   <button
                     key={candidate.id}
@@ -242,9 +266,23 @@ export function ChatHomePage({ agentId }: { agentId?: string }) {
         onSubmit={() => void start(draft)}
         submitting={submitting}
         disabled={!agent}
-        placeholder={agent ? `Message ${agent.name}…` : 'No agent to message'}
+        placeholder={
+          agent
+            ? team
+              ? `Message ${team.name} (${agent.name})…`
+              : `Message ${agent.name}…`
+            : 'No agent to message'
+        }
         options={
-          <AgentPicker agents={agents} selected={agent} onSelect={selectAgent} loading={loading} />
+          <AgentPicker
+            agents={agents}
+            selected={agent}
+            onSelect={selectAgent}
+            teams={teams}
+            selectedTeam={team}
+            onSelectTeam={selectTeam}
+            loading={loading}
+          />
         }
       />
     </div>

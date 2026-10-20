@@ -115,6 +115,9 @@ func main() {
 	tray.SetMenu(menu)
 
 	if core != nil {
+		core.API.SaveDialog = func(name string) (string, error) {
+			return wails.Dialog.SaveFile().SetFilename(name).AddFilter("Zip archive", "*.zip").CanCreateDirectories(true).AttachToWindow(window).PromptForSingleSelection()
+		}
 		core.ResumeUnfinished(ctx)
 	}
 	// A signal (logout, `kill`) quits like the tray's Quit, so agents stop gracefully.

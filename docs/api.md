@@ -156,7 +156,73 @@ type UsageReport = { from: string; to: string; days: number;               // da
   byDay: (UsageTotals & { day: string })[] };                              // every day of the range, zeros included
 ```
 
+## Agent manager (Phase 3)
+
+`Agent` gains:
+
+```ts
+  kindSettings: Record<string, unknown>;   // the kind's settings (triage: listTools, readTools, writeTools, approveWrites;
+                                           // researcher: backgroundSubagents, maxPlanSteps); {} for none
+  canCall: string[];                       // agent IDs this agent may ask (ask_agent), besides what its teams allow
+  callable: { id: string; name: string; via: "direct" | "team" }[];   // everyone it may ask, all rules applied
+  dir: string;                             // its folder on disk
+  piDurableVersion: string | null;         // the newest runtime that wrote its storage
+```
+
+| Route | Answer |
+|---|---|
+| `PATCH /api/agents/{id}` | Also takes `kindSettings?` (object, ≤ 16 KiB of JSON) and `canCall?` (agent IDs; unknown IDs and the agent itself are refused with `400 invalid_can_call`). |
+| `GET /api/agents/{id}/config` | `{yaml}`: its `agent.yaml` as text. |
+| `PUT /api/agents/{id}/config` | Body `{yaml}`. Replaces the configuration. `400 invalid_yaml` (message says where), or the same validation codes as PATCH. Answers `Agent`. |
+| `POST /api/agents/{id}/duplicate` | Body `{name?}` (default "<name> copy"). A new agent with the same configuration and no conversations. `201 Agent`. |
+| `POST /api/agents/{id}/wake` | Starts its runtime now. Answers `Agent`, or `503 agent_unavailable`. |
+| `POST /api/agents/{id}/sleep` | Hibernates it now (work in flight stays pending and resumes on its next start). Answers `Agent`. |
+| `GET /api/agents/{id}/logs?lines=N` | `{path, lines: string[]}`: the last N lines of its runtime log (default 300, at most 2000). |
+| `GET /api/agents/{id}/export?conversations=true\|false` | A zip of the agent's folder (`agent.yaml`, and with conversations `state.sqlite`; never logs or tmp). With conversations the agent is put to sleep first. `Content-Disposition: attachment`. |
+| `POST /api/agents/import` | Body: the zip's bytes (`Content-Type: application/zip`, at most 1 GiB; send an ArrayBuffer, not a Blob: Wails drops Blob bodies). A new agent (a new ID) from it, with its conversations when the zip has them. `canCall` is cleared (IDs are local to one computer). `201 Agent`. `400 invalid_archive` with a message. |
+| `GET /api/about` | `{version, dataDir, runtime: {node, nodeVersion, piDurableVersion, contractVersion}, agents: number}` |
+| `POST /api/reveal` | Body `{target: "data"}` or `{target: "agent", agentId}` or `{target: "workspace", agentId}`: opens the folder in Finder. `{ok: true}`. |
+
+## Teams and agents asking agents (Phase 3)
+
+An agent may **ask** another agent: its model gets the tools `list_agents` (who it may ask) and
+`ask_agent({agent, message, conversation?: "continue" | "new"})`, which sends the message to that agent and returns
+its reply. Each asked agent answers in its own conversation, listed under it like any other (`AgentThread.calledBy`
+says who asked), so what agents say to each other can always be read. Who may ask whom:
+
+- the agents in an agent's `canCall`;
+- a team's **lead** may ask every member; with `membersTalk`, members may ask each other (and the lead).
+
+Asks are limited: never itself, no cycles (an agent already in the chain of asks can't be asked again), at most 3
+agents deep, and at most 20 asks per reply.
+
+```ts
+type Team = {
+  id: string;              // "tm_…"
+  name: string;            // 1–60 chars
+  description: string;     // ≤ 500 chars
+  leadId: string;          // the agent people chat with for the team
+  memberIds: string[];     // other agents (not the lead), 1–20
+  membersTalk: boolean;    // members may ask each other and the lead
+  createdAt: string; updatedAt: string;
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/teams` | `Team[]` |
+| `POST /api/teams` | Body `{name, description?, leadId, memberIds, membersTalk?}`. `201 Team`. Errors: `invalid_name`, `invalid_lead`, `invalid_members`. |
+| `PATCH /api/teams/{id}` | Any of those fields. Answers `Team`. |
+| `DELETE /api/teams/{id}` | `{ok: true}`. Its agents stay. |
+
+Deleting an agent removes it from teams (a team whose lead is deleted is deleted) and from every `canCall`.
+
+`AgentThread` gains `calledBy: {agentId, name, threadId} | null`: the agent (and its conversation) that asked in this
+thread. Live events: `event: team`, `data: {teamId, deleted, team?}`.
+
+In a conversation, an `ask_agent` tool call's `details` (ChatMessage tool results / ChatTool) are
+`{agentId, agentName, threadId}`, so the UI can link to the asked agent's conversation.
+
 ## Not yet (later phases)
 
-Message search (Phase 7), approvals (Phase 4), the delta stream in the UI (Phase 6), wake/hibernate controls and the
-data folder's location for an About page (Phase 3).
+Message search (Phase 7), approvals (Phase 4), the delta stream in the UI (Phase 6), 

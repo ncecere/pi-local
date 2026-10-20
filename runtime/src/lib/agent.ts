@@ -16,6 +16,7 @@ import {
 	resolveExtensions,
 	resolveSettings,
 } from "./define.ts";
+import { agentCallsExtension } from "./agent-calls.ts";
 import { AgentMcp } from "./mcp.ts";
 import { scheduleExtension } from "./schedule.ts";
 import { createAgentModels } from "./models.ts";
@@ -113,9 +114,21 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const workspaceTools = parseWorkspaceTools(config.modelEnv.WORKSPACE_TOOLS);
 	if (workspaceTools.length > 0 && !workspaceDir) throw new AgentDefinitionError("WORKSPACE_TOOLS needs WORKSPACE_DIR");
 	const workspace = workspaceExtension(workspaceTools);
+	// Asking other agents (AGENT_CALLS, with the gateway): the app decides who may be asked (agent-calls.ts).
+	const calling = config.modelEnv.AGENT_CALLS === "true" && !!config.modelEnv.PLATFORM_GATEWAY_URL && !!config.modelEnv.PLATFORM_KEY;
 	const extensions = [
 		...resolveExtensions(definition, context),
 		...(workspace ? [workspace] : []),
+		...(calling
+			? [
+					agentCallsExtension({
+						gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL!,
+						key: config.modelEnv.PLATFORM_KEY!,
+						threadOf: async (conversationId) => threadStore?.threadOf(conversationId),
+						stopping: () => closing,
+					}),
+				]
+			: []),
 		...(scheduling
 			? [
 					scheduleExtension({

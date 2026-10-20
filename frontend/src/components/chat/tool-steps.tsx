@@ -1,5 +1,7 @@
+import { Link } from '@tanstack/react-router';
 import type { UIMessage } from 'ai';
 import {
+  ArrowUpRight,
   Brain,
   Check,
   ChevronDown,
@@ -11,11 +13,15 @@ import {
   Globe,
   LoaderCircle,
   type LucideIcon,
+  MessagesSquare,
   Search,
   SquareTerminal,
+  Users,
   Wrench,
 } from 'lucide-react';
 import { useId, useState } from 'react';
+import { useAgents } from '~/hooks/use-agents';
+import { type AskStep, askStepOf, askSummary, type ListAgentsStep } from '~/lib/agent-asks';
 import { toolOutputText } from '~/lib/chat-view';
 import { formatDuration } from '~/lib/reply-meta';
 import { cn } from '~/lib/utils';
@@ -72,6 +78,10 @@ const clip = (text: string, max = 80) => (text.length > max ? `${text.slice(0, m
  */
 export function agentToolStep(part: ToolPart): ToolStepSummary {
   const step = summarizeToolPart(part);
+  // Asking another agent reads as what it is: "Asked Ada", "Asking Ada".
+  const ask = askStepOf(part);
+  if (ask && (step.state === 'running' || step.state === 'done' || step.state === 'error'))
+    return { ...step, summary: askSummary(ask, step.state) };
   const hint = inputHint(part.input);
   const target = hint ? ` · ${clip(hint)}` : '';
   const summary =
@@ -261,8 +271,144 @@ function StepIcon({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
   );
 }
 
+/**
+ * The ask a part is, with the asked agent named: the model may pass an ID
+ * ("ag_…"), which the agent list turns into a name until the result says it.
+ */
+function useAskStep(part: ToolPart): AskStep | ListAgentsStep | null {
+  const agents = useAgents().data;
+  const ask = askStepOf(part);
+  if (ask?.kind !== 'ask' || ask.target || !ask.agentName) return ask;
+  const named = agents?.find((agent) => agent.id === ask.agentName)?.name;
+  return named ? { ...ask, agentName: named } : ask;
+}
+
+/** An ask's line: who was asked, and the start of the message. */
+function AskLine({
+  part,
+  step,
+  ask,
+}: {
+  part: ToolPart;
+  step: ToolStepSummary;
+  ask: AskStep | ListAgentsStep;
+}) {
+  const took = toolDuration(part);
+  const Icon = ask.kind === 'ask' ? MessagesSquare : Users;
+  return (
+    <>
+      {step.state === 'running' ? (
+        <LoaderCircle
+          className="size-4 shrink-0 text-[var(--text-secondary)] motion-safe:animate-spin"
+          aria-hidden="true"
+        />
+      ) : (
+        <Icon
+          className={cn(
+            'size-4 shrink-0',
+            step.state === 'error' && 'text-[var(--danger-on-tint)]',
+          )}
+          aria-hidden="true"
+        />
+      )}
+      <span className="shrink-0 font-medium text-[var(--text-secondary)]">
+        {askSummary(ask, step.state === 'error' ? 'done' : step.state)}
+      </span>
+      {ask.kind === 'ask' && ask.message && (
+        <span className="min-w-0 truncate" title={ask.message}>
+          {clip(ask.message.replace(/\s+/g, ' '), 100)}
+        </span>
+      )}
+      {step.state === 'error' && (
+        <span className="shrink-0 text-[var(--danger-on-tint)]">failed</span>
+      )}
+      {took !== null && (
+        <span className="shrink-0 text-[0.75rem] tabular-nums opacity-70" title="How long it ran">
+          {formatDuration(took)}
+        </span>
+      )}
+      {step.state === 'denied' && <span className="shrink-0">not run</span>}
+    </>
+  );
+}
+
+/** An ask, expanded: the message sent, the reply, and the asked agent's conversation. */
+function AskDetails({ ask, step }: { ask: AskStep; step: ToolStepSummary }) {
+  const [all, setAll] = useState(false);
+  const reply = ask.reply ?? '';
+  const long = reply.length > OUTPUT_PREVIEW_CHARS;
+  return (
+    <>
+      <div>
+        <p className="mb-1.5 font-medium text-[var(--text-primary)]">
+          Message{ask.agentName ? ` to ${ask.agentName}` : ''}
+          {ask.conversation === 'new' && (
+            <span className="font-normal text-[var(--text-muted)]"> (a new conversation)</span>
+          )}
+        </p>
+        <p className="whitespace-pre-wrap break-words text-[0.8125rem] leading-relaxed text-[var(--text-primary)]">
+          {ask.message ?? '—'}
+        </p>
+      </div>
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <p className="font-medium text-[var(--text-primary)]">
+            {step.state === 'error' ? 'What went wrong' : 'Reply'}
+          </p>
+          {reply && <CopyButton text={reply} label="Copy reply" />}
+        </div>
+        {step.state === 'running' ? (
+          <p className="text-[var(--text-muted)]">Waiting for {ask.agentName ?? 'the agent'}…</p>
+        ) : step.state === 'denied' ? (
+          <p className="text-[var(--text-muted)]">
+            Not asked{step.reason ? `: ${step.reason}` : ''}.
+          </p>
+        ) : reply ? (
+          <>
+            <p
+              className={cn(
+                'max-h-96 overflow-auto whitespace-pre-wrap break-words border-l-2 border-[var(--border-strong)] py-0.5 pl-3 text-[0.8125rem] leading-relaxed',
+                step.state === 'error'
+                  ? 'text-[var(--danger-on-tint)]'
+                  : 'text-[var(--text-primary)]',
+              )}
+            >
+              {long && !all ? `${reply.slice(0, OUTPUT_PREVIEW_CHARS)}…` : reply}
+            </p>
+            {long && (
+              <button
+                type="button"
+                className="mt-1 text-[var(--text-muted)] underline hover:text-[var(--text-primary)]"
+                onClick={() => setAll(!all)}
+              >
+                {all
+                  ? 'Show less'
+                  : `Show all (${reply.length.toLocaleString('en-US')} characters)`}
+              </button>
+            )}
+          </>
+        ) : (
+          <p className="text-[var(--text-muted)]">No reply.</p>
+        )}
+      </div>
+      {ask.target && (
+        <Link
+          to="/agents/$agentId/threads/$threadId"
+          params={{ agentId: ask.target.agentId, threadId: ask.target.threadId }}
+          className="inline-flex items-center gap-1 text-[var(--accent-bright)] underline-offset-4 hover:underline"
+        >
+          Open {ask.target.agentName}'s conversation
+          <ArrowUpRight className="size-3.5" aria-hidden="true" />
+        </Link>
+      )}
+    </>
+  );
+}
+
 /** One line for a step: icon, tool, what it acted on, and how it went. */
 function StepLine({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
+  const ask = useAskStep(part);
+  if (ask) return <AskLine part={part} step={step} ask={ask} />;
   const hint = hintOf(part);
   const took = toolDuration(part);
   return (
@@ -309,13 +455,18 @@ export function ToolStepRow({ part, step }: { part: ToolPart; step: ToolStepSumm
   const detailsId = useId();
   const output = toolOutputText(part);
   const hasInputs = isRecord(part.input) ? Object.keys(part.input).length > 0 : part.input != null;
+  const ask = useAskStep(part);
   return (
     <div className="min-w-0">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={detailsId}
-        aria-label={step.summary}
+        aria-label={
+          ask && step.state !== 'denied' && step.state !== 'awaiting-approval'
+            ? askSummary(ask, step.state)
+            : step.summary
+        }
         onClick={() => setOpen(!open)}
         className="flex w-full min-w-0 items-center gap-2 text-left text-[0.8125rem] text-[var(--text-muted)] transition-colors hover:text-[var(--text-secondary)]"
       >
@@ -331,23 +482,46 @@ export function ToolStepRow({ part, step }: { part: ToolPart; step: ToolStepSumm
           id={detailsId}
           className="mt-2 space-y-3 rounded-lg border border-[var(--border-subtle)] bg-black/10 px-3 py-2.5 text-xs text-[var(--text-secondary)]"
         >
-          {hasInputs && (
-            <div>
-              <p className="mb-1.5 font-medium text-[var(--text-primary)]">Input</p>
-              <ToolInputs input={part.input} />
-            </div>
+          {ask?.kind === 'ask' ? (
+            <AskDetails ask={ask} step={step} />
+          ) : (
+            <ToolStepBody part={part} step={step} output={output} hasInputs={hasInputs} />
           )}
-          <div>
-            <div className="mb-1.5 flex items-center justify-between">
-              <p className="font-medium text-[var(--text-primary)]">
-                {step.state === 'running' ? 'Output so far' : 'Output'}
-              </p>
-              {output && <CopyButton text={output} label="Copy output" />}
-            </div>
-            <ToolOutput part={part} step={step} />
-          </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** A tool call's inputs and output, as any tool shows them. */
+function ToolStepBody({
+  part,
+  step,
+  output,
+  hasInputs,
+}: {
+  part: ToolPart;
+  step: ToolStepSummary;
+  output: string | null;
+  hasInputs: boolean;
+}) {
+  return (
+    <>
+      {hasInputs && (
+        <div>
+          <p className="mb-1.5 font-medium text-[var(--text-primary)]">Input</p>
+          <ToolInputs input={part.input} />
+        </div>
+      )}
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <p className="font-medium text-[var(--text-primary)]">
+            {step.state === 'running' ? 'Output so far' : 'Output'}
+          </p>
+          {output && <CopyButton text={output} label="Copy output" />}
+        </div>
+        <ToolOutput part={part} step={step} />
+      </div>
+    </>
   );
 }

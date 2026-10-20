@@ -222,6 +222,8 @@ export interface InboxEntry {
   threadId: string;
   title: string;
   updatedAt: number;
+  /** Another agent asked in this conversation (agents asking agents). */
+  calledBy?: { agentId: string; name: string; threadId: string } | null;
   meta: ThreadMeta;
   bucket: Bucket;
   status: RowStatus;

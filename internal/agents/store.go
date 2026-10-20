@@ -68,6 +68,30 @@ type Store struct {
 	ModelAvailable func(ModelRef) bool
 }
 
+// checkCanCall: every agent named exists, none twice, and not the agent itself.
+func (s *Store) checkCanCall(self string, ids []string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := map[string]bool{}
+	out := []string{}
+	for _, id := range ids {
+		if id == self {
+			return nil, invalid("invalid_can_call", "An agent can't ask itself.")
+		}
+		if _, ok := s.agents[id]; !ok {
+			return nil, invalid("invalid_can_call", "There is no agent %q.", id)
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if len(out) > 50 {
+		return nil, invalid("invalid_can_call", "An agent may name at most 50 others to ask.")
+	}
+	return out, nil
+}
+
 func (s *Store) checkModel(m ModelRef) error {
 	if m == DemoModel {
 		return nil
@@ -157,6 +181,7 @@ func (s *Store) notify(c Change) {
 
 func copyOf(a *Agent) *Agent {
 	c := *a
+	c.Config.CanCall = append([]string(nil), a.Config.CanCall...)
 	if a.LastUsedAt != nil {
 		t := *a.LastUsedAt
 		c.LastUsedAt = &t
@@ -204,6 +229,11 @@ func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	id := newID()
+	canCall, err := s.checkCanCall(id, cfg.CanCall)
+	if err != nil {
+		return nil, err
+	}
+	cfg.CanCall = canCall
 	dir := filepath.Join(s.root, id)
 	for _, sub := range []string{"workspace", "tmp", "logs"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
@@ -256,6 +286,12 @@ func (s *Store) Update(ctx context.Context, id string, fn func(*Config)) (*Agent
 		if err := s.checkModel(cfg.Model); err != nil {
 			return nil, err
 		}
+	}
+	if cfg.CanCall, err = s.checkCanCall(id, cfg.CanCall); err != nil {
+		return nil, err
+	}
+	if len(cfg.CanCall) == 0 {
+		cfg.CanCall = nil
 	}
 	now := time.Now()
 	if err := writeConfig(current.Dir, cfg); err != nil {
@@ -338,7 +374,38 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		}
 	}
 	s.notify(Change{AgentID: id, Deleted: true})
+	// Nobody may ask it any more.
+	for _, other := range s.List() {
+		if !containsID(other.Config.CanCall, id) {
+			continue
+		}
+		s.writeMu.Unlock()
+		_, err := s.Update(ctx, other.ID, func(c *Config) { c.CanCall = removeID(c.CanCall, id) })
+		s.writeMu.Lock()
+		if err != nil {
+			slog.Warn("removing a deleted agent from canCall", "agent", other.ID, "err", err)
+		}
+	}
 	return nil
+}
+
+func containsID(ids []string, id string) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+func removeID(ids []string, id string) []string {
+	out := ids[:0:0]
+	for _, x := range ids {
+		if x != id {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // CompareVersions compares two semantic versions (major.minor.patch, an optional pre-release counts as older).
@@ -389,4 +456,84 @@ func parseVersion(s string) version {
 		fmt.Sscanf(part, "%d", &v.n[i])
 	}
 	return v
+}
+
+// Exists reports whether there is an agent with that ID.
+func (s *Store) Exists(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.agents[id]
+	return ok
+}
+
+// CanCall is an agent's own list of agents it may ask.
+func (s *Store) CanCall(id string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if a, ok := s.agents[id]; ok {
+		return append([]string(nil), a.Config.CanCall...)
+	}
+	return nil
+}
+
+// ConfigText is an agent's agent.yaml as it is on disk.
+func (s *Store) ConfigText(id string) ([]byte, error) {
+	a, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(filepath.Join(a.Dir, configFile))
+}
+
+// Import makes a new agent from an exported folder's files: agent.yaml's config and, when given, its storage
+// (state.sqlite, and state.sqlite-wal if there was one). The model need not be available: the agent then fails to
+// start, saying so, until it is given another. canCall is cleared: agent IDs mean nothing on another computer.
+func (s *Store) Import(ctx context.Context, cfg Config, storage map[string][]byte) (*Agent, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	cfg.Normalize()
+	cfg.CanCall = nil
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	id := newID()
+	dir := filepath.Join(s.root, id)
+	for _, sub := range []string{"workspace", "tmp", "logs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+			return nil, err
+		}
+	}
+	for name, data := range storage {
+		if name != "state.sqlite" && name != "state.sqlite-wal" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			os.RemoveAll(dir)
+			return nil, err
+		}
+	}
+	if err := writeConfig(dir, cfg); err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	now := time.Now()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO agents (id, dir, revision, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
+		id, dir, now.UnixMilli(), now.UnixMilli()); err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	a := &Agent{ID: id, Dir: dir, Config: cfg, Revision: 1, CreatedAt: time.UnixMilli(now.UnixMilli()), UpdatedAt: time.UnixMilli(now.UnixMilli())}
+	s.mu.Lock()
+	s.agents[id] = a
+	s.mu.Unlock()
+	s.notify(Change{AgentID: id, Agent: copyOf(a)})
+	return copyOf(a), nil
+}
+
+// NameOf is an agent's name ("an agent" when there is none by that ID).
+func (s *Store) NameOf(id string) string {
+	if a, err := s.Get(id); err == nil {
+		return a.Config.Name
+	}
+	return "an agent"
 }

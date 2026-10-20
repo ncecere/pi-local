@@ -14,16 +14,24 @@ import (
 
 // Thread is a thread as the UI lists it (docs/api.md, AgentThread).
 type Thread struct {
-	ThreadID     string  `json:"threadId"`
-	Title        string  `json:"title"`
-	CreatedAt    int64   `json:"createdAt"`
-	UpdatedAt    int64   `json:"updatedAt"`
-	Busy         bool    `json:"busy"`
-	LastReplyAt  *int64  `json:"lastReplyAt,omitempty"`
-	LastError    *string `json:"lastError,omitempty"`
-	Visibility   string  `json:"visibility"`
-	CreatedBy    any     `json:"createdBy"`
-	Participants []any   `json:"participants"`
+	ThreadID     string    `json:"threadId"`
+	Title        string    `json:"title"`
+	CreatedAt    int64     `json:"createdAt"`
+	UpdatedAt    int64     `json:"updatedAt"`
+	Busy         bool      `json:"busy"`
+	LastReplyAt  *int64    `json:"lastReplyAt,omitempty"`
+	LastError    *string   `json:"lastError,omitempty"`
+	Visibility   string    `json:"visibility"`
+	CreatedBy    any       `json:"createdBy"`
+	Participants []any     `json:"participants"`
+	CalledBy     *CalledBy `json:"calledBy"`
+}
+
+// CalledBy is the agent (and its thread) that asked in a thread (ask_agent).
+type CalledBy struct {
+	AgentID  string `json:"agentId"`
+	Name     string `json:"name"`
+	ThreadID string `json:"threadId"`
 }
 
 // Status is a runtime's report on a thread (docs/runtime-contract.md, ThreadStatus).
@@ -53,6 +61,8 @@ type Index struct {
 	db       *sql.DB
 	onChange func(Change)
 	now      func() time.Time
+	// NameOf names an agent (for CalledBy); set by the app.
+	NameOf func(agentID string) string
 }
 
 // youngRecord: a sync doesn't remove a record the app wrote this recently (its first message may not have reached
@@ -67,15 +77,21 @@ func NewIndex(db *sql.DB, onChange func(Change)) *Index {
 	return &Index{db: db, onChange: onChange, now: time.Now}
 }
 
-const columns = `thread_id, COALESCE(title_override, title), created_at, updated_at, busy, last_reply_at, last_error`
+const columns = `thread_id, COALESCE(title_override, title), created_at, updated_at, busy, last_reply_at, last_error, called_by_agent, called_by_thread`
 
-func scan(row interface{ Scan(...any) error }) (*Thread, error) {
+func (x *Index) scan(row interface{ Scan(...any) error }) (*Thread, error) {
 	var t Thread
 	var busy int
 	var lastReply sql.NullInt64
-	var lastErr sql.NullString
-	if err := row.Scan(&t.ThreadID, &t.Title, &t.CreatedAt, &t.UpdatedAt, &busy, &lastReply, &lastErr); err != nil {
+	var lastErr, byAgent, byThread sql.NullString
+	if err := row.Scan(&t.ThreadID, &t.Title, &t.CreatedAt, &t.UpdatedAt, &busy, &lastReply, &lastErr, &byAgent, &byThread); err != nil {
 		return nil, err
+	}
+	if byAgent.Valid {
+		t.CalledBy = &CalledBy{AgentID: byAgent.String, ThreadID: byThread.String}
+		if x.NameOf != nil {
+			t.CalledBy.Name = x.NameOf(byAgent.String)
+		}
 	}
 	t.Busy = busy != 0
 	if lastReply.Valid {
@@ -100,7 +116,7 @@ func (x *Index) List(ctx context.Context, agentID string) ([]*Thread, error) {
 	defer rows.Close()
 	out := []*Thread{}
 	for rows.Next() {
-		t, err := scan(rows)
+		t, err := x.scan(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -111,7 +127,7 @@ func (x *Index) List(ctx context.Context, agentID string) ([]*Thread, error) {
 
 // Get returns one thread.
 func (x *Index) Get(ctx context.Context, agentID, threadID string) (*Thread, error) {
-	t, err := scan(x.db.QueryRowContext(ctx, `SELECT `+columns+` FROM threads WHERE agent_id = ? AND thread_id = ?`, agentID, threadID))
+	t, err := x.scan(x.db.QueryRowContext(ctx, `SELECT `+columns+` FROM threads WHERE agent_id = ? AND thread_id = ?`, agentID, threadID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -140,11 +156,16 @@ func TitleFrom(text string) string {
 
 // Sending records that a message is on its way to a thread: the thread is busy from now. The record is made when the
 // thread is new (created reports whether it was, so a refused first message can take it away again).
-func (x *Index) Sending(ctx context.Context, agentID, threadID, text string) (created bool, err error) {
+// calledBy, when an agent asks, is recorded on a new thread.
+func (x *Index) Sending(ctx context.Context, agentID, threadID, text string, calledBy *CalledBy) (created bool, err error) {
 	now := x.now().UnixMilli()
-	res, err := x.db.ExecContext(ctx, `INSERT INTO threads (agent_id, thread_id, title, created_at, updated_at, busy, status_at, recorded_at)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT (agent_id, thread_id) DO NOTHING`,
-		agentID, threadID, TitleFrom(text), now, now, now, now)
+	var byAgent, byThread any
+	if calledBy != nil {
+		byAgent, byThread = calledBy.AgentID, calledBy.ThreadID
+	}
+	res, err := x.db.ExecContext(ctx, `INSERT INTO threads (agent_id, thread_id, title, created_at, updated_at, busy, status_at, recorded_at, called_by_agent, called_by_thread)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?) ON CONFLICT (agent_id, thread_id) DO NOTHING`,
+		agentID, threadID, TitleFrom(text), now, now, now, now, byAgent, byThread)
 	if err != nil {
 		return false, err
 	}

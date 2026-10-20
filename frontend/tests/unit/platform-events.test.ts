@@ -65,6 +65,11 @@ describe('applyAgentEvent', () => {
     revision: 1,
     createdAt: '2026-10-20T00:00:00Z',
     updatedAt: '2026-10-20T00:00:00Z',
+    kindSettings: {},
+    canCall: [],
+    callable: [],
+    dir: `/tmp/${id}`,
+    piDurableVersion: null,
   });
   const list = [agent('ag_b'), agent('ag_a')];
 

@@ -49,10 +49,15 @@ export function useAgentThreads(agentId: string | undefined, enabled = true) {
   });
 }
 
+/** A conversation as the cached list has it, if known. */
+export function useThreadInfo(agentId: string, threadId: string): AgentThread | undefined {
+  const { data } = useAgentThreads(agentId);
+  return data?.find((thread) => thread.threadId === threadId);
+}
+
 /** A conversation's title from the cached list, if known. */
 export function useThreadTitle(agentId: string, threadId: string): string | undefined {
-  const { data } = useAgentThreads(agentId);
-  return data?.find((thread) => thread.threadId === threadId)?.title;
+  return useThreadInfo(agentId, threadId)?.title;
 }
 
 /** Stops and removes a conversation from the agent's list. */
@@ -206,6 +211,8 @@ export function useUpdateAgent() {
       description?: string;
       modelId?: string;
       instructions?: string;
+      kindSettings?: Record<string, unknown>;
+      canCall?: string[];
     }) => api.patch<Agent>(agentPath(id), body),
     onSuccess: (agent) =>
       queryClient.setQueryData<Agent[]>(AGENTS_KEY, (list) =>

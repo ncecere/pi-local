@@ -226,6 +226,7 @@ export function useInbox(): Inbox {
           threadId: thread.threadId,
           title: thread.title,
           updatedAt: thread.updatedAt,
+          calledBy: thread.calledBy ?? null,
           meta,
           bucket: bucketOf(meta, thread, now),
           status: statusOf(meta, now),

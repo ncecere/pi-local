@@ -87,6 +87,23 @@ export function liveOutputOf(part: { toolMetadata?: unknown }): string | null {
   return typeof live === 'string' ? live : null;
 }
 
+/**
+ * A tool's `details` (pi-durable's channel for UIs: an `ask_agent` call's
+ * `{agentId, agentName, threadId}`), kept on the part's metadata; undefined when none.
+ */
+export function toolDetailsOf(part: { toolMetadata?: unknown }): unknown {
+  return (part.toolMetadata as { details?: unknown } | undefined)?.details;
+}
+
+/** The metadata with a tool's details added, when it has any. */
+function withDetails(
+  metadata: DynamicToolUIPart['toolMetadata'],
+  details: unknown,
+): DynamicToolUIPart['toolMetadata'] {
+  if (details === undefined || details === null) return metadata;
+  return { ...(metadata ?? {}), details: details as NonNullable<typeof metadata>[string] };
+}
+
 /** A tool result's text, or the live output while it runs. */
 export function toolOutputText(part: Record<string, unknown>): string | null {
   const output = part.output as Partial<ToolOutput> | undefined;
@@ -158,7 +175,13 @@ export function viewToMessages(
       const part = live.tools.get(slot.callId);
       if (part && part.state === 'input-available') {
         if (slot.output) part.toolMetadata = { liveOutput: slot.output };
+        const metadata = withDetails(part.toolMetadata, slot.details);
+        if (metadata) part.toolMetadata = metadata;
       } else if (!part) {
+        const metadata = withDetails(
+          slot.output ? { liveOutput: slot.output } : undefined,
+          slot.details,
+        );
         // A tool running whose call is not committed yet: show it anyway.
         const added: DynamicToolUIPart = {
           type: 'dynamic-tool',
@@ -166,7 +189,7 @@ export function viewToMessages(
           toolCallId: slot.callId,
           state: 'input-available',
           input: {},
-          ...(slot.output ? { toolMetadata: { liveOutput: slot.output } } : {}),
+          ...(metadata ? { toolMetadata: metadata } : {}),
         };
         live.tools.set(slot.callId, added);
         parts.push(added);
@@ -287,13 +310,14 @@ function addToolResult(reply: Reply, message: ChatToolMessage) {
   const id = message.toolCallId ?? '';
   const text = message.text ?? '';
   const existing = reply.tools.get(id);
+  // Its timing, from the call, stays with it when the result arrives; its details come with the result.
+  const metadata = withDetails(existing?.toolMetadata, message.details);
   const base = {
     type: 'dynamic-tool' as const,
     toolName: existing?.toolName ?? message.name ?? 'tool',
     toolCallId: id,
     input: existing?.input ?? {},
-    // Its timing, from the call, stays with it when the result arrives.
-    ...(existing?.toolMetadata ? { toolMetadata: existing.toolMetadata } : {}),
+    ...(metadata ? { toolMetadata: metadata } : {}),
   };
   const done: DynamicToolUIPart = message.isError
     ? { ...base, state: 'output-error', errorText: text || 'The tool failed.' }
