@@ -180,6 +180,7 @@ const agent = (id, name, modelRef, extra = {}) => ({
   piDurableVersion: '0.14.2',
   workspace: { tools: [] },
   approvals: { tools: [], timeoutSeconds: 86400 },
+  mcp: [],
   ...extra,
 });
 const agents = [
@@ -233,6 +234,187 @@ agents[0].approvals = { tools: ['bash', 'write', 'edit'], timeoutSeconds: 86400 
 agents[2].workspace = { tools: ['bash'] };
 agents[2].approvals = { tools: ['bash', 'mcp__github__create_*'], timeoutSeconds: 5400 };
 agents[0].lastUsedAt = new Date(Date.now() - 3 * 3600_000).toISOString();
+agents[0].mcp = [
+  { server: 'github', tools: null },
+  { server: 'linear', tools: null },
+];
+agents[2].mcp = [
+  { server: 'filesystem', tools: ['read_text_file', 'list_directory', 'gone_tool'] },
+];
+
+// ── MCP servers (docs/api.md, Phase 5) ──
+const WS = '$' + '{workspace}';
+const mtool = (name, description, modelVisible = true) => ({
+  name,
+  title: null,
+  description,
+  modelVisible,
+});
+const FS_TOOLS = [
+  mtool('read_text_file', 'Read the complete contents of a file as text.'),
+  mtool('write_file', 'Create a new file or completely overwrite an existing file.'),
+  mtool('edit_file', 'Make line-based edits to a text file.'),
+  mtool('list_directory', 'Get a detailed listing of all files and directories in a path.'),
+  mtool('search_files', 'Recursively search for files and directories matching a pattern.'),
+];
+const GH_TOOLS = [
+  mtool('create_issue', 'Create a new issue in a GitHub repository'),
+  mtool('get_issue', 'Get details of a specific issue in a GitHub repository.'),
+  mtool('list_issues', 'List issues in a GitHub repository with filtering options'),
+  mtool('create_pull_request', 'Create a new pull request in a GitHub repository'),
+  mtool('render_issue_card', 'An app-only tool that draws an issue card.', false),
+];
+const LINEAR_TOOLS = [
+  mtool('list_issues', 'List issues in your Linear workspace.'),
+  mtool('create_issue', 'Create a Linear issue.'),
+];
+const mcpServer = (slug, name, extra = {}) => ({
+  slug,
+  name,
+  description: '',
+  transport: 'stdio',
+  command: null,
+  args: [],
+  cwd: null,
+  envNames: [],
+  url: null,
+  headerNames: [],
+  oauth: false,
+  signedIn: false,
+  enabled: true,
+  tools: [],
+  testedAt: null,
+  lastError: null,
+  importedFrom: null,
+  createdAt: now(),
+  updatedAt: now(),
+  ...extra,
+});
+const mcpServers = [
+  mcpServer('filesystem', 'Filesystem', {
+    description: 'Read, write and search files in the agent’s workspace.',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', WS],
+    tools: FS_TOOLS,
+    testedAt: Date.now() - 2 * 3600_000,
+  }),
+  mcpServer('github', 'GitHub', {
+    description: 'Issues, pull requests and files on GitHub.',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-github'],
+    envNames: ['GITHUB_PERSONAL_ACCESS_TOKEN'],
+    tools: GH_TOOLS,
+    testedAt: Date.now() - 26 * 3600_000,
+    importedFrom: 'claude',
+  }),
+  mcpServer('linear', 'Linear', {
+    transport: 'http',
+    url: 'https://mcp.linear.app/mcp',
+    oauth: true,
+    lastError: 'needs_sign_in: Linear asks you to sign in. Choose Sign in.',
+  }),
+  mcpServer('broken_python', 'Broken Python server', {
+    command: 'uvx',
+    args: ['my-broken-server', '--root', WS],
+    testedAt: null,
+    lastError:
+      'The server exited before it answered (exit code 1).\n\nstderr:\nTraceback (most recent call last):\n  File "/Users/test/.cache/uv/archive-v0/x/bin/my-broken-server", line 5, in <module>\n    from my_broken_server import main\nModuleNotFoundError: No module named \'my_broken_server\'',
+  }),
+  mcpServer('memory', 'Memory', {
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-memory'],
+    enabled: false,
+  }),
+];
+const mcpView = (x) => ({
+  ...x,
+  usedBy: agents
+    .filter((a) => (a.mcp ?? []).some((c) => c.server === x.slug))
+    .map(({ id, name }) => ({ id, name })),
+});
+const noteMcp = (x) => broadcast('mcp', { slug: x.slug, deleted: false, server: mcpView(x) });
+const fakeTest = (x) => {
+  x.updatedAt = now();
+  if (x.transport === 'http' && x.oauth && !x.signedIn) {
+    x.lastError = `needs_sign_in: ${x.name} asks you to sign in. Choose Sign in.`;
+    return;
+  }
+  if (/broken|fail/.test(`${x.command} ${x.args.join(' ')} ${x.url ?? ''}`)) {
+    x.lastError = `The server exited before it answered (exit code 1).\n\nstderr:\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/${x.args.at(-1) ?? 'x'}\nnpm ERR! 404 '${x.args.at(-1) ?? 'x'}' is not in this registry.`;
+    return;
+  }
+  x.lastError = null;
+  x.testedAt = Date.now();
+  if (!x.tools.length)
+    x.tools =
+      x.slug === 'github'
+        ? GH_TOOLS
+        : x.transport === 'http'
+          ? LINEAR_TOOLS
+          : [mtool('echo', 'Echoes back the input.'), mtool('add', 'Adds two numbers.')];
+};
+const importSources = () =>
+  [
+    {
+      id: 'claude',
+      path: '/Users/test/Library/Application Support/Claude/claude_desktop_config.json',
+      servers: [
+        {
+          name: 'github',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+          envNames: ['GITHUB_PERSONAL_ACCESS_TOKEN'],
+        },
+        {
+          name: 'sqlite',
+          transport: 'stdio',
+          command: 'uvx',
+          args: ['mcp-server-sqlite', '--db-path', '/Users/test/Documents/My Notes/notes.db'],
+          envNames: [],
+        },
+        {
+          name: 'old-sse',
+          transport: 'http',
+          url: 'https://example.com/sse',
+          envNames: [],
+          unsupported: "it uses the old HTTP+SSE transport, which Pi Local doesn't support",
+        },
+      ],
+    },
+    {
+      id: 'cursor',
+      path: '/Users/test/.cursor/mcp.json',
+      servers: [
+        {
+          name: 'Sentry',
+          transport: 'http',
+          url: 'https://mcp.sentry.dev/mcp',
+          envNames: ['Authorization'],
+        },
+        {
+          name: 'puppeteer',
+          transport: 'stdio',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-puppeteer'],
+          envNames: [],
+        },
+      ],
+    },
+  ].map((src) => ({
+    ...src,
+    servers: src.servers.map((f) => ({
+      ...f,
+      exists: mcpServers.some(
+        (x) =>
+          x.slug ===
+          f.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, ''),
+      ),
+    })),
+  }));
 
 const LEAD = 'ag_aaaaaaaaaaaaaaaa';
 const SCOUT = 'ag_cccccccccccccccc';
@@ -1017,6 +1199,29 @@ createServer(async (req, res) => {
         );
       a.approvals = { tools, timeoutSeconds };
     }
+    if (body.mcp !== undefined) {
+      if (!Array.isArray(body.mcp))
+        return fail(res, 400, 'invalid_mcp', 'mcp must be a list of servers.');
+      for (const c of body.mcp) {
+        const x = mcpServers.find((y) => y.slug === c.server);
+        if (!x)
+          return fail(
+            res,
+            400,
+            'invalid_mcp',
+            `There is no MCP server "${c.server}" (Settings → MCP).`,
+          );
+        if (Array.isArray(c.tools) && c.tools.length === 0)
+          return fail(
+            res,
+            400,
+            'invalid_mcp',
+            `Choose at least one tool of ${c.server}, or all of them.`,
+          );
+      }
+      a.mcp = body.mcp.map((c) => ({ server: c.server, tools: c.tools ?? null }));
+      for (const x of mcpServers) noteMcp(x);
+    }
     if (body.description !== undefined) a.description = body.description;
     if (body.instructions !== undefined) a.instructions = body.instructions;
     a.revision++;
@@ -1030,6 +1235,130 @@ createServer(async (req, res) => {
     Object.assign(a, body.name ? { name: body.name } : {});
     noteAgent(a);
     return ok(res, view(a));
+  }
+  if (path === '/api/mcp/servers' && m === 'GET') return ok(res, mcpServers.map(mcpView));
+  if (path === '/api/mcp/servers' && m === 'POST') {
+    const slug =
+      body.slug ??
+      String(body.name ?? '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 32);
+    if (!/^[a-z0-9](?:[a-z0-9_]{0,30}[a-z0-9])?$/.test(slug))
+      return fail(res, 400, 'invalid_slug', 'The ID is 1–32 of a-z, 0-9 and _.');
+    if (mcpServers.some((x) => x.slug === slug))
+      return fail(res, 409, 'slug_taken', `There is already a server called ${slug}.`);
+    if (!String(body.name ?? '').trim())
+      return fail(res, 400, 'invalid_name', 'A server needs a name.');
+    if (body.transport === 'stdio' && !String(body.command ?? '').trim())
+      return fail(res, 400, 'invalid_command', 'Give the command that starts it.');
+    if (body.transport === 'http' && !/^https?:\/\//.test(body.url ?? ''))
+      return fail(
+        res,
+        400,
+        'invalid_url',
+        "Give the server's URL, like https://mcp.example.com/mcp.",
+      );
+    const x = mcpServer(slug, body.name.trim(), {
+      description: body.description ?? '',
+      transport: body.transport,
+      command: body.transport === 'stdio' ? body.command : null,
+      args: body.args ?? [],
+      cwd: body.cwd || null,
+      envNames: Object.keys(body.env ?? {}).sort(),
+      url: body.transport === 'http' ? body.url : null,
+      headerNames: Object.keys(body.headers ?? {}).sort(),
+      oauth: Boolean(body.oauth),
+    });
+    await new Promise((r) => setTimeout(r, 1500));
+    fakeTest(x);
+    mcpServers.push(x);
+    noteMcp(x);
+    return ok(res, mcpView(x), 201);
+  }
+  if (path === '/api/mcp/import' && m === 'GET') {
+    await new Promise((r) => setTimeout(r, 300));
+    return ok(res, { sources: process.env.FAKE_NO_IMPORT ? [] : importSources() });
+  }
+  if (path === '/api/mcp/import' && m === 'POST') {
+    const src = importSources().find((x) => x.id === body.source);
+    if (!src)
+      return fail(res, 400, 'invalid_source', `No MCP servers were found for ${body.source}.`);
+    await new Promise((r) => setTimeout(r, 1200));
+    const added = [];
+    const skipped = [];
+    for (const f of src.servers.filter((y) => (body.names ?? []).includes(y.name))) {
+      if (f.unsupported) skipped.push({ name: f.name, reason: f.unsupported });
+      else if (f.exists)
+        skipped.push({ name: f.name, reason: 'a server with that name is already here' });
+      else {
+        const slug = f.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '');
+        const x = mcpServer(slug, f.name, {
+          transport: f.transport,
+          command: f.command ?? null,
+          args: f.args ?? [],
+          url: f.url ?? null,
+          envNames: f.transport === 'stdio' ? f.envNames : [],
+          headerNames: f.transport === 'http' ? f.envNames : [],
+          importedFrom: src.id,
+        });
+        fakeTest(x);
+        mcpServers.push(x);
+        noteMcp(x);
+        added.push(mcpView(x));
+      }
+    }
+    return ok(res, { servers: added, skipped });
+  }
+  if (parts[1] === 'mcp' && parts[2] === 'servers' && parts[3]) {
+    const x = mcpServers.find((y) => y.slug === parts[3]);
+    if (!x) return fail(res, 404, 'not_found', 'MCP server not found');
+    if (parts.length === 4 && m === 'PATCH') {
+      for (const k of ['name', 'description', 'command', 'args', 'url', 'oauth', 'enabled'])
+        if (body[k] !== undefined) x[k] = body[k];
+      if (body.cwd !== undefined) x.cwd = body.cwd || null;
+      if (body.env !== undefined) x.envNames = Object.keys(body.env).sort();
+      if (body.headers !== undefined) x.headerNames = Object.keys(body.headers).sort();
+      x.updatedAt = now();
+      noteMcp(x);
+      return ok(res, mcpView(x));
+    }
+    if (parts.length === 4 && m === 'DELETE') {
+      const users = mcpView(x).usedBy;
+      if (users.length)
+        return fail(res, 409, 'in_use', 'Agents use this server.', { agents: users });
+      mcpServers.splice(mcpServers.indexOf(x), 1);
+      broadcast('mcp', { slug: x.slug, deleted: true });
+      return ok(res, { ok: true });
+    }
+    if (parts[4] === 'test' && m === 'POST') {
+      await new Promise((r) => setTimeout(r, 1500));
+      fakeTest(x);
+      noteMcp(x);
+      return ok(res, mcpView(x));
+    }
+    if (parts[4] === 'sign-in' && m === 'POST') {
+      if (!x.oauth) return fail(res, 400, 'not_oauth', `${x.name} doesn't sign in with OAuth.`);
+      setTimeout(() => {
+        x.signedIn = true;
+        fakeTest(x);
+        noteMcp(x);
+      }, 4000);
+      return ok(res, {
+        authorizeUrl: `https://example.com/oauth/authorize?client_id=pi-local&state=${x.slug}`,
+      });
+    }
+    if (parts[4] === 'sign-out' && m === 'POST') {
+      x.signedIn = false;
+      x.lastError = `needs_sign_in: ${x.name} asks you to sign in. Choose Sign in.`;
+      x.updatedAt = now();
+      noteMcp(x);
+      return ok(res, mcpView(x));
+    }
   }
   if (path === '/api/settings/default-model' && m === 'PUT') {
     defaultModelId = body.modelId;

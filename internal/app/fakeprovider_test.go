@@ -118,6 +118,15 @@ func (f *fakeProvider) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user := lastUserText(body.Messages)
+		// CALL:<tool>:<json arguments> calls any tool (MCP tools, say).
+		if i := strings.Index(user, "CALL:"); i >= 0 {
+			name, args, _ := strings.Cut(strings.TrimSpace(user[i+5:]), ":")
+			if args == "" {
+				args = "{}"
+			}
+			f.openAIToolCall(w, body.Model, name, args)
+			return
+		}
 		for prefix, tool := range map[string]string{"RUN:": "bash", "READ:": "read", "WRITE:": "write"} {
 			i := strings.Index(user, prefix)
 			if i < 0 {

@@ -96,10 +96,16 @@ export function RequestError({ error, what }: { error: unknown; what: string }) 
 export function HeadersEditor({
   rows,
   onChange,
+  noun = 'header',
+  namePlaceholder = 'X-Header-Name',
 }: {
   rows: HeaderRow[];
   onChange: (rows: HeaderRow[]) => void;
+  /** What a row is, lower case: "header", "variable". */
+  noun?: string;
+  namePlaceholder?: string;
 }) {
+  const Noun = noun.charAt(0).toUpperCase() + noun.slice(1);
   const id = useId();
   const set = (index: number, change: Partial<HeaderRow>) =>
     onChange(rows.map((row, i) => (i === index ? { ...row, ...change } : row)));
@@ -110,17 +116,17 @@ export function HeadersEditor({
         <div key={index} className="flex items-center gap-2">
           <input
             id={`${id}-name-${index}`}
-            aria-label={`Header ${index + 1} name`}
+            aria-label={`${Noun} ${index + 1} name`}
             value={row.name}
             onChange={(event) => set(index, { name: event.target.value })}
-            placeholder="X-Header-Name"
+            placeholder={namePlaceholder}
             autoComplete="off"
             spellCheck={false}
             className={cn(FIELD, 'flex-1 font-mono text-xs')}
           />
           <input
             type="password"
-            aria-label={`Header ${index + 1} value`}
+            aria-label={`${Noun} ${index + 1} value`}
             value={row.value}
             onChange={(event) => set(index, { value: event.target.value })}
             placeholder="Value"
@@ -131,7 +137,7 @@ export function HeadersEditor({
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label={`Remove header ${index + 1}${row.name ? ` (${row.name})` : ''}`}
+            aria-label={`Remove ${noun} ${index + 1}${row.name ? ` (${row.name})` : ''}`}
             title="Remove"
             onClick={() => onChange(rows.filter((_, i) => i !== index))}
           >
@@ -153,7 +159,7 @@ export function HeadersEditor({
           }}
         >
           <Plus />
-          Add header
+          Add {noun}
         </Button>
       </div>
     </div>

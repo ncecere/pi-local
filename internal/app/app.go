@@ -5,7 +5,9 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +31,7 @@ import (
 	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
+	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/secrets"
 	"github.com/ncecere/pi-local/internal/supervisor"
@@ -64,9 +67,11 @@ type App struct {
 	Teams     *teams.Store
 	Asks      *asks.Broker
 	Approvals *approvals.Store
+	MCP       *mcp.Catalog
 	// DB is app.db (diagnostics and tests).
 	DB *sql.DB
 
+	mcpProber       *mcp.Prober
 	runtimeVersion  string
 	contractVersion int
 	nodeVersion     string
@@ -164,6 +169,16 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return out
 	}
 	a.Catalog.OnChange = a.catalogChanged
+	a.MCP = mcp.New(db, cfg.Secrets)
+	a.Agents.MCPExists = a.MCP.Exists
+	a.MCP.UsedBy = func(slug string) []mcp.Ref {
+		var out []mcp.Ref
+		for _, ag := range a.Agents.UsingMCP(slug) {
+			out = append(out, mcp.Ref{ID: ag.ID, Name: ag.Config.Name})
+		}
+		return out
+	}
+	a.MCP.OnChange = a.mcpChanged
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
 	})
@@ -177,6 +192,16 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	gatewayURL := "http://" + listener.Addr().String()
 	a.gatewayURL = gatewayURL
+	appKey := "pl.app." + randomKey()
+	a.mcpProber = &mcp.Prober{
+		Runtime:     cfg.Runtime,
+		Env:         baseEnv(cfg.DataDir),
+		OAuthURL:    gatewayURL + "/mcp/oauth",
+		Key:         appKey,
+		Scratch:     filepath.Join(cfg.DataDir, "mcp-scratch"),
+		OpenBrowser: func(u string) error { return a.Reveal(u) },
+	}
+	a.MCP.SetProber(a.mcpProber)
 
 	a.Sup = supervisor.New(supervisor.Options{
 		Runtime:      cfg.Runtime,
@@ -197,14 +222,14 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
@@ -284,6 +309,25 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 		raw, _ := json.Marshal(map[string]any{"tools": ag.Config.Approvals.Tools, "timeoutSeconds": ag.Config.Approvals.Timeout()})
 		env["TOOL_APPROVALS"] = string(raw)
 	}
+	// MCP servers: resolved here (secrets and paths filled in); the runtime connects to them itself.
+	if len(ag.Config.MCP) > 0 {
+		var choices []mcp.Choice
+		for _, m := range ag.Config.MCP {
+			choices = append(choices, mcp.Choice{Server: m.Server, Tools: m.Tools})
+		}
+		servers, skipped, err := a.MCP.ForAgent(ctx, choices, ag.WorkspaceDir(), ag.Dir)
+		if err != nil {
+			return supervisor.Spec{}, err
+		}
+		for _, sk := range skipped {
+			slog.Info("an agent's MCP server is left out", "agent", id, "server", sk)
+		}
+		if len(servers) > 0 {
+			raw, _ := json.Marshal(servers)
+			env["MCP_SERVERS"] = string(raw)
+			env["MCP_OAUTH_URL"] = a.gatewayURL + "/mcp/oauth"
+		}
+	}
 	// Asking other agents: the tools are there when it may ask someone (who exactly is decided at each ask).
 	if callees, err := a.Teams.Callable(ctx, id); err == nil && len(callees) > 0 {
 		env["AGENT_CALLS"] = "true"
@@ -334,6 +378,63 @@ func (a *App) teamChanged(teamID string, team *teams.Team) {
 		}()
 		a.publishAgent(id)
 	}
+}
+
+// mcpChanged: an MCP server changed (nil: deleted). Everyone hears of it; awake agents using it restart with it.
+func (a *App) mcpChanged(slug string, server *mcp.Server) {
+	if server == nil {
+		a.Hub.Publish("mcp", map[string]any{"slug": slug, "deleted": true})
+	} else {
+		a.Hub.Publish("mcp", map[string]any{"slug": slug, "deleted": false, "server": server})
+	}
+	for _, ag := range a.Agents.UsingMCP(slug) {
+		if status, _ := a.Sup.Status(ag.ID); status != supervisor.Awake {
+			continue
+		}
+		id := ag.ID
+		go func() {
+			if err := a.Sup.Wake(context.Background(), id); err != nil {
+				slog.Info("an agent's MCP server changed", "agent", id, "err", err)
+			}
+		}()
+	}
+}
+
+// oauthGateway: agents read and refresh the OAuth state of the MCP servers they use.
+type oauthGateway struct{ a *App }
+
+func (g oauthGateway) Uses(agentID, slug string) bool {
+	if !g.a.MCP.Exists(slug) {
+		return false
+	}
+	if agentID == "" {
+		return true // the app's own probe
+	}
+	ag, err := g.a.Agents.Get(agentID)
+	if err != nil {
+		return false
+	}
+	for _, m := range ag.Config.MCP {
+		if m.Server == slug {
+			return true
+		}
+	}
+	return false
+}
+
+func (g oauthGateway) OAuthState(slug string) (json.RawMessage, error) {
+	return g.a.MCP.OAuthState(slug)
+}
+func (g oauthGateway) SaveOAuthState(slug string, state json.RawMessage) error {
+	return g.a.MCP.SaveOAuthState(slug, state)
+}
+
+func randomKey() string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
 }
 
 // approvalAgents tells the approvals store about agents.

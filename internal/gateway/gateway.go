@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -58,6 +59,14 @@ type Approvals interface {
 	Sync(ctx context.Context, agentID string, reports []approvals.Report, at int64) []approvals.Answer
 }
 
+// OAuth is MCP servers' OAuth state, which runtimes read and refresh.
+type OAuth interface {
+	// Uses reports whether an agent uses an MCP server ("" for the app's own probe, which may use any).
+	Uses(agentID, slug string) bool
+	OAuthState(slug string) (json.RawMessage, error)
+	SaveOAuthState(slug string, state json.RawMessage) error
+}
+
 // Handler is the gateway's routes.
 type Handler struct {
 	Keys      Keys
@@ -65,6 +74,9 @@ type Handler struct {
 	Usage     Usage
 	Asks      Asks
 	Approvals Approvals
+	OAuth     OAuth
+	// AppKey authenticates the app's own MCP probe, for /mcp/oauth only.
+	AppKey string
 }
 
 const maxBody = 4 << 20
@@ -98,6 +110,15 @@ func decode(w http.ResponseWriter, r *http.Request, into any) bool {
 
 // ServeHTTP routes a runtime's call.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if key, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); found && h.AppKey != "" &&
+		subtle.ConstantTimeCompare([]byte(key), []byte(h.AppKey)) == 1 {
+		if h.OAuth != nil && strings.HasPrefix(r.URL.Path, "/mcp/oauth/") {
+			h.serveOAuth(w, r, "")
+			return
+		}
+		fail(w, http.StatusForbidden, "forbidden", "the app's key opens only the MCP sign-in state")
+		return
+	}
 	agentID, authed := h.agent(r)
 	if !authed {
 		fail(w, http.StatusUnauthorized, "unauthorized", "unknown runtime key")
@@ -172,6 +193,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body.Approvals = body.Approvals[:1000]
 		}
 		ok(w, h.Approvals.Sync(r.Context(), agentID, body.Approvals, body.At))
+	case h.OAuth != nil && strings.HasPrefix(r.URL.Path, "/mcp/oauth/"):
+		h.serveOAuth(w, r, agentID)
 	case h.Asks != nil && strings.HasPrefix(r.URL.Path, "/a2a/"):
 		h.serveAsks(w, r, agentID)
 	default:
@@ -240,5 +263,43 @@ func (h *Handler) serveAsks(w http.ResponseWriter, r *http.Request, caller strin
 		}
 	default:
 		fail(w, http.StatusNotFound, "not_found", "not offered")
+	}
+}
+
+// serveOAuth: GET and PUT /mcp/oauth/{slug}, the server's OAuth state (pi-mcp's McpOAuthState, opaque here).
+func (h *Handler) serveOAuth(w http.ResponseWriter, r *http.Request, agentID string) {
+	slug := strings.TrimPrefix(r.URL.Path, "/mcp/oauth/")
+	if slug == "" || strings.Contains(slug, "/") || !h.OAuth.Uses(agentID, slug) {
+		fail(w, http.StatusNotFound, "not_found", "no such MCP server for this agent")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		state, err := h.OAuth.OAuthState(slug)
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "internal", "could not read the sign-in state")
+			return
+		}
+		if state == nil {
+			fail(w, http.StatusNotFound, "not_found", "not signed in")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":`))
+		w.Write(state)
+		w.Write([]byte(`}`))
+	case http.MethodPut:
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10+1))
+		if err != nil || len(raw) > 64<<10 {
+			fail(w, http.StatusRequestEntityTooLarge, "too_large", "sign-in state too large")
+			return
+		}
+		if err := h.OAuth.SaveOAuthState(slug, raw); err != nil {
+			fail(w, http.StatusBadRequest, "invalid_state", err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		fail(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or PUT")
 	}
 }

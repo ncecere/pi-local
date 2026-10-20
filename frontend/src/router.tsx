@@ -124,6 +124,10 @@ const settingsChildren = [
     lazyRouteComponent(() => import('~/routes/settings/models'), 'SettingsModelsPage'),
   ),
   settingsPage(
+    '/settings/mcp',
+    lazyRouteComponent(() => import('~/routes/settings/mcp'), 'SettingsMcpPage'),
+  ),
+  settingsPage(
     '/settings/usage',
     lazyRouteComponent(() => import('~/routes/settings/usage'), 'SettingsUsagePage'),
   ),

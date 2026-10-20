@@ -7,6 +7,8 @@ import type {
   AgentThreadEvent,
   Approval,
   ApprovalEvent,
+  McpEvent,
+  McpServer,
   Team,
   TeamEvent,
 } from '~/api/client';
@@ -14,10 +16,12 @@ import { transport } from '~/api/transport';
 import { AGENTS_KEY, applyAgentEvent, threadsKey } from '~/hooks/use-agents';
 import { APPROVALS_KEY } from '~/hooks/use-approvals';
 import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
+import { MCP_SERVERS_KEY } from '~/hooks/use-mcp';
 import { TEAMS_KEY } from '~/hooks/use-teams';
 import { applyApprovalEvent } from '~/lib/approvals';
 import { setEventsLive } from '~/lib/events-live';
 import { threadKey } from '~/lib/inbox';
+import { applyMcpEvent } from '~/lib/mcp';
 import { applyTeamEvent } from '~/lib/teams';
 
 /**
@@ -33,6 +37,9 @@ import { applyTeamEvent } from '~/lib/teams';
  * - `approval`: a tool call asks for approval, or its request was decided,
  *   timed out or cancelled. It updates the pending list (['approvals']) in place,
  *   so the sidebar's "Needs you" and the title's count follow at once.
+ * - `mcp`: an MCP server added, changed, tested, signed in or out, or deleted.
+ *   It updates the catalog (['mcp', 'servers']) in place: an OAuth sign-in's
+ *   outcome arrives this way.
  * - `resync`, or a reconnect: events may have been missed; the lists are read
  *   again.
  * Mounted once, in the app shell.
@@ -71,6 +78,7 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY, exact: true });
       void queryClient.invalidateQueries({ queryKey: TEAMS_KEY });
       void queryClient.invalidateQueries({ queryKey: APPROVALS_KEY });
+      void queryClient.invalidateQueries({ queryKey: MCP_SERVERS_KEY });
       void queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'agents' && query.queryKey[2] === 'threads',
       });
@@ -132,6 +140,24 @@ export function usePlatformEvents() {
       };
       queryClient.setQueryData<Approval[]>(APPROVALS_KEY, (list) =>
         applyApprovalEvent(list, approval),
+      );
+    });
+    source.on('mcp', (data) => {
+      let event: McpEvent;
+      try {
+        event = JSON.parse(data) as McpEvent;
+      } catch {
+        return;
+      }
+      if (
+        queryClient.getQueryData(MCP_SERVERS_KEY) === undefined ||
+        (!event.deleted && !event.server)
+      ) {
+        void queryClient.invalidateQueries({ queryKey: MCP_SERVERS_KEY });
+        return;
+      }
+      queryClient.setQueryData<McpServer[]>(MCP_SERVERS_KEY, (list) =>
+        applyMcpEvent(list, event.slug, event.deleted ? null : event.server),
       );
     });
     source.on('thread', (data) => {

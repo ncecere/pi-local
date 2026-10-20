@@ -285,6 +285,57 @@ Attached files (in your workspace):
 - attachments/2026-10-20/report.pdf (120 KB)
 ```
 
+## MCP servers (Phase 5)
+
+The app keeps a catalog of MCP servers; each agent chooses which it uses (and, optionally, which of their tools).
+Agents connect to them themselves (pi-mcp in the runtime): a **stdio** server is a program the agent's runtime starts
+(it runs as you: only add commands you trust), an **http** server is a remote Streamable HTTP endpoint, with header
+values or an OAuth sign-in. Env and header values and OAuth tokens are kept in the OS keychain and never returned.
+An agent's tools from a server are named `mcp__<slug>__<tool>`.
+
+```ts
+type McpTool = { name: string; title: string | null; description: string | null; modelVisible: boolean };
+type McpServer = {
+  slug: string;                 // 1–32 of [a-z0-9_] (no leading/trailing _): the tool prefix
+  name: string;                 // 1–60 chars
+  description: string;
+  transport: "stdio" | "http";
+  command: string | null;       // stdio
+  args: string[];               // stdio; may use ${workspace} (the agent's workspace) and ${agentDir}
+  cwd: string | null;           // stdio; default ${workspace}
+  envNames: string[];           // stdio; values are secret
+  url: string | null;           // http
+  headerNames: string[];        // http; values are secret
+  oauth: boolean;               // http: sign in with OAuth
+  signedIn: boolean;            // oauth: tokens are stored
+  enabled: boolean;
+  tools: McpTool[];             // from the last successful test; agents get these (model-visible ones)
+  testedAt: number | null;      // Unix ms
+  lastError: string | null;     // the last test's error (with stderr's tail for stdio)
+  usedBy: { id: string; name: string }[];
+  importedFrom: string | null;  // "claude", "cursor", "vscode"
+  createdAt: string; updatedAt: string;
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/mcp/servers` | `McpServer[]` |
+| `POST /api/mcp/servers` | Body `{slug?, name, description?, transport, command?, args?, cwd?, env?: Record<string,string>, url?, headers?: Record<string,string>, oauth?}` (slug defaults from the name). Tests it right away (`tools`/`lastError` filled in). `201 McpServer`. Errors: `invalid_slug`, `slug_taken`, `invalid_name`, `invalid_transport`, `invalid_command`, `invalid_url` (https, or http on this computer/network), `invalid_headers`, `invalid_env`. |
+| `PATCH /api/mcp/servers/{slug}` | The same fields (not slug); `env`/`headers` replace all values. `enabled?`. Answers `McpServer`. Agents using it restart. |
+| `DELETE /api/mcp/servers/{slug}` | `{ok: true}`; `409 in_use` with `details.agents` while agents use it. Its keychain items go too. |
+| `POST /api/mcp/servers/{slug}/test` | Connects (stdio: starts it) and lists its tools, at most 60 s: `McpServer` with `tools`/`testedAt` or `lastError`. An OAuth server that needs a sign-in says so in `lastError` (`needs_sign_in`). |
+| `POST /api/mcp/servers/{slug}/sign-in` | OAuth: starts a sign-in in the browser (the app opens it) and answers at once `{authorizeUrl}`; the outcome comes as an `mcp` live event (the server, `signedIn` and `tools` updated, or `lastError`). Up to 5 minutes. |
+| `POST /api/mcp/servers/{slug}/sign-out` | Forgets its OAuth tokens. `McpServer`. |
+| `GET /api/mcp/import` | Servers found in other apps' configs: `{sources: [{id: "claude" \| "cursor" \| "vscode", path, servers: [{name, transport, command?, args?, url?, envNames: string[], exists: boolean}]}]}` (`exists`: a server with that slug is already here; `unsupported`: why it can't be imported), and `searched`: every path looked at. |
+| `POST /api/mcp/import` | Body `{source, names: string[]}`: adds those servers (with their env/header values), each tested. `{servers: McpServer[], skipped: [{name, reason}]}`. |
+
+`Agent` gains `mcp: {server: string; tools: string[] | null}[]` (tools null: all its model-visible tools), set with
+`PATCH /api/agents/{id}` `{mcp}` (`400 invalid_mcp`: an unknown server). An agent whose server is off or untested
+starts without it (its log says so).
+
+Live events: `event: mcp`, `data: {slug, deleted, server?: McpServer}`.
+
 ## Not yet (later phases)
 
 Message search (Phase 7), the delta stream in the UI (Phase 6), 

@@ -1,6 +1,7 @@
 import { McpClient } from "@earendil-works/pi-mcp";
 import { authorizeMcp, McpOAuthAuthorizationRequiredError, OAuthCallbackServer } from "@earendil-works/pi-mcp/oauth";
-import { appOAuthStore, createTransport, type McpServerConfig, modelVisible } from "./mcp.ts";
+import type { McpOAuthStateStore } from "@earendil-works/pi-mcp/oauth";
+import { appOAuthStore, createTransport, type McpServerConfig, modelVisible, refreshOnlyStore } from "./mcp.ts";
 
 /**
  * What the app asks of `runtime.mjs mcp-probe` (one JSON object on stdin):
@@ -39,7 +40,10 @@ export async function probeMcpServer(request: ProbeRequest, emit: (event: ProbeE
 	const onStderr = (chunk: string) => {
 		if (stderr.length < 16 * 1024) stderr += chunk;
 	};
-	const store = request.oauthUrl && request.key ? appOAuthStore(request.oauthUrl, request.key, server.slug) : undefined;
+	const base = request.oauthUrl && request.key ? appOAuthStore(request.oauthUrl, request.key, server.slug) : undefined;
+	// A test must leave the stored state alone: without tokens the OAuth flow would register a client (for a redirect
+	// nobody listens on) and save it, which a later sign-in would then reuse and be refused for. Only a sign-in writes.
+	let store: McpOAuthStateStore | undefined = base && !request.signIn ? refreshOnlyStore(base) : base;
 	const timeoutMs = request.timeoutMs ?? (request.signIn ? 5 * 60_000 : 30_000);
 	let callback: OAuthCallbackServer | undefined;
 	let timer: NodeJS.Timeout | undefined;
@@ -50,6 +54,20 @@ export async function probeMcpServer(request: ProbeRequest, emit: (event: ProbeE
 			callback = await OAuthCallbackServer.listen({ port: request.callbackPort ?? 0, timeoutMs });
 		}
 		const config: McpServerConfig = callback && server.oauth ? { ...server, oauth: { ...server.oauth, redirectUrl: callback.redirectUrl } } : server;
+		// A client registered for another redirect URI (an earlier sign-in on another port) can't sign in here:
+		// forget that registration, so the server registers this one.
+		if (callback && base) {
+			const redirect = callback.redirectUrl;
+			store = {
+				load: async () => {
+					const state = await base.load();
+					const uris = (state?.clientInformation as { redirect_uris?: string[] } | undefined)?.redirect_uris;
+					if (state && Array.isArray(uris) && !uris.includes(redirect)) return { ...state, clientInformation: undefined };
+					return state;
+				},
+				save: (state) => base.save(state),
+			};
+		}
 		let authorizeUrl: URL | undefined;
 		const connect = async () => {
 			const { transport, oauth } = createTransport(config, { oauthStore: store, onStderr, onAuthorize: (url) => void (authorizeUrl = url) });

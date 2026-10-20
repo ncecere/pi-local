@@ -55,6 +55,18 @@ export interface Agent {
   approvals?: AgentApprovals;
   /** Tool calls waiting for the person now. Phase 4. */
   pendingApprovals?: number;
+  /**
+   * The MCP servers it uses, each with all its model-visible tools (`tools: null`)
+   * or the ones picked. Phase 5; absent from an older backend (read as none).
+   */
+  mcp?: AgentMcpServer[];
+}
+
+/** One MCP server an agent uses: `tools` null is all its model-visible tools. */
+export interface AgentMcpServer {
+  /** The server's slug. */
+  server: string;
+  tools: string[] | null;
 }
 
 /** An agent's workspace tools (`read`, `write`, `edit`, `bash`); none: no file tools. */
@@ -309,6 +321,104 @@ export interface CatalogModel {
 export interface AgentRef {
   id: string;
   name: string;
+}
+
+// ── MCP servers (docs/api.md, Phase 5) ──────────────────────────────────────────────────────
+
+export type McpTransport = 'stdio' | 'http';
+
+/** A tool an MCP server offers, as its last successful test listed it. */
+export interface McpTool {
+  name: string;
+  title: string | null;
+  description: string | null;
+  /** False: the server hides it from the model (an app-only tool); agents don't get it. */
+  modelVisible: boolean;
+}
+
+/**
+ * An MCP server in the app's catalog. Env and header values and OAuth tokens
+ * are kept in the OS keychain and never returned.
+ */
+export interface McpServer {
+  /** 1–32 of [a-z0-9_], no leading or trailing _: the tool prefix (`mcp__<slug>__<tool>`). */
+  slug: string;
+  /** 1–60 characters. */
+  name: string;
+  description: string;
+  transport: McpTransport;
+  /** stdio: the program to start. */
+  command: string | null;
+  /** stdio; may use ${workspace} and ${agentDir}. */
+  args: string[];
+  /** stdio; null: ${workspace}. */
+  cwd: string | null;
+  /** stdio: environment variables; their values are secret. */
+  envNames: string[];
+  /** http: the Streamable HTTP endpoint. */
+  url: string | null;
+  /** http: request headers; their values are secret. */
+  headerNames: string[];
+  /** http: sign in with OAuth. */
+  oauth: boolean;
+  /** oauth: tokens are stored. */
+  signedIn: boolean;
+  enabled: boolean;
+  /** From the last successful test. */
+  tools: McpTool[];
+  /** Unix ms. */
+  testedAt: number | null;
+  /** The last test's error (with stderr's tail for stdio). */
+  lastError: string | null;
+  usedBy: AgentRef[];
+  /** "claude", "cursor", "vscode". */
+  importedFrom: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /api/events` `mcp` event. */
+export interface McpEvent {
+  slug: string;
+  deleted: boolean;
+  server?: McpServer | null;
+}
+
+export type McpImportSourceId = 'claude' | 'cursor' | 'vscode';
+
+/** A server found in another app's config (`GET /api/mcp/import`). */
+export interface McpImportServer {
+  name: string;
+  transport: McpTransport;
+  command?: string | null;
+  args?: string[] | null;
+  url?: string | null;
+  /** stdio: its environment variables' names; http: its headers' names. */
+  envNames: string[];
+  /** A server with that slug is already here. */
+  exists: boolean;
+  /** Why it can't be imported (the old HTTP+SSE transport, say); absent when it can. */
+  unsupported?: string;
+}
+
+export interface McpImportSource {
+  id: McpImportSourceId;
+  /** The config file read. */
+  path: string;
+  servers: McpImportServer[];
+}
+
+/** `GET /api/mcp/import`. */
+export interface McpImportList {
+  sources: McpImportSource[];
+  /** Every config file the backend looked at. */
+  searched?: string[];
+}
+
+/** `POST /api/mcp/import`. */
+export interface McpImportResult {
+  servers: McpServer[];
+  skipped: { name: string; reason: string }[];
 }
 
 // ── Usage (docs/api.md, Usage) ───────────────────────────────────────────────────────────────

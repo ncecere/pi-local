@@ -65,6 +65,14 @@ type Config struct {
 	Workspace Workspace `yaml:"workspace,omitempty"`
 	// Approvals: the tools that wait for a person's approval before they run.
 	Approvals Approvals `yaml:"approvals,omitempty"`
+	// MCP: the MCP servers it uses (from the app's catalog), with all their tools or some.
+	MCP []MCPChoice `yaml:"mcp,omitempty"`
+}
+
+// MCPChoice is one MCP server an agent uses; Tools nil means every tool it offers the model.
+type MCPChoice struct {
+	Server string   `yaml:"server" json:"server"`
+	Tools  []string `yaml:"tools,omitempty" json:"tools"`
 }
 
 // Workspace is an agent's workspace tools.
@@ -173,6 +181,22 @@ func (c *Config) Validate() error {
 	}
 	if t := c.Approvals.TimeoutSeconds; t != 0 && (t < 60 || t > 30*24*60*60) {
 		return invalid("invalid_approval_timeout", "A request waits from 1 minute to 30 days.")
+	}
+	seenServer := map[string]bool{}
+	if len(c.MCP) > 50 {
+		return invalid("invalid_mcp", "An agent uses at most 50 MCP servers.")
+	}
+	for _, m := range c.MCP {
+		if m.Server == "" || seenServer[m.Server] {
+			return invalid("invalid_mcp", "Each MCP server is named once.")
+		}
+		seenServer[m.Server] = true
+		if m.Tools != nil && len(m.Tools) == 0 {
+			return invalid("invalid_mcp", "Choose at least one tool of %s, or all of them.", m.Server)
+		}
+		if len(m.Tools) > 500 {
+			return invalid("invalid_mcp", "At most 500 tools per server.")
+		}
 	}
 	if c.Model.Provider == "" || c.Model.ID == "" || strings.ContainsAny(c.Model.Provider, "/ ") {
 		return invalid("invalid_model", "Choose one of the models offered.")

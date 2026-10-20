@@ -63,6 +63,9 @@ type Store struct {
 	agents    map[string]*Agent
 	listeners []func(Change)
 
+	// MCPExists says whether the app's catalog has an MCP server (set by the app).
+	MCPExists func(slug string) bool
+
 	// ModelAvailable says whether agents may be given a model now (set by the app from the model catalog). Only a
 	// model being chosen is checked: an agent keeps a model that went away until it is given another.
 	ModelAvailable func(ModelRef) bool
@@ -90,6 +93,34 @@ func (s *Store) checkCanCall(self string, ids []string) ([]string, error) {
 		return nil, invalid("invalid_can_call", "An agent may name at most 50 others to ask.")
 	}
 	return out, nil
+}
+
+func (s *Store) checkMCP(list []MCPChoice) error {
+	if s.MCPExists == nil {
+		return nil
+	}
+	for _, m := range list {
+		if !s.MCPExists(m.Server) {
+			return invalid("invalid_mcp", "There is no MCP server %q (Settings → MCP).", m.Server)
+		}
+	}
+	return nil
+}
+
+// UsingMCP lists the agents using an MCP server.
+func (s *Store) UsingMCP(slug string) []*Agent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*Agent
+	for _, a := range s.agents {
+		for _, m := range a.Config.MCP {
+			if m.Server == slug {
+				out = append(out, copyOf(a))
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (s *Store) checkModel(m ModelRef) error {
@@ -184,6 +215,14 @@ func copyOf(a *Agent) *Agent {
 	c.Config.CanCall = append([]string(nil), a.Config.CanCall...)
 	c.Config.Workspace.Tools = append([]string(nil), a.Config.Workspace.Tools...)
 	c.Config.Approvals.Tools = append([]string(nil), a.Config.Approvals.Tools...)
+	c.Config.MCP = nil
+	for _, m := range a.Config.MCP {
+		choice := MCPChoice{Server: m.Server}
+		if m.Tools != nil { // nil: all tools; an empty list stays empty
+			choice.Tools = append([]string{}, m.Tools...)
+		}
+		c.Config.MCP = append(c.Config.MCP, choice)
+	}
 	if a.LastUsedAt != nil {
 		t := *a.LastUsedAt
 		c.LastUsedAt = &t
@@ -236,6 +275,9 @@ func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	cfg.CanCall = canCall
+	if err := s.checkMCP(cfg.MCP); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(s.root, id)
 	for _, sub := range []string{"workspace", "tmp", "logs"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
@@ -290,6 +332,9 @@ func (s *Store) Update(ctx context.Context, id string, fn func(*Config)) (*Agent
 		}
 	}
 	if cfg.CanCall, err = s.checkCanCall(id, cfg.CanCall); err != nil {
+		return nil, err
+	}
+	if err := s.checkMCP(cfg.MCP); err != nil {
 		return nil, err
 	}
 	if len(cfg.CanCall) == 0 {
@@ -495,6 +540,14 @@ func (s *Store) Import(ctx context.Context, cfg Config, storage map[string][]byt
 	defer s.writeMu.Unlock()
 	cfg.Normalize()
 	cfg.CanCall = nil
+	// MCP servers this computer doesn't have are left out (add them in Settings → MCP, then choose them again).
+	var kept []MCPChoice
+	for _, m := range cfg.MCP {
+		if s.MCPExists == nil || s.MCPExists(m.Server) {
+			kept = append(kept, m)
+		}
+	}
+	cfg.MCP = kept
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

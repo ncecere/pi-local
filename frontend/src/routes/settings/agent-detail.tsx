@@ -8,6 +8,7 @@ import { CanAskTab } from '~/components/agent-manager/can-ask-tab';
 import { ConfigTab } from '~/components/agent-manager/config-tab';
 import { KindSettingsTab } from '~/components/agent-manager/kind-settings-tab';
 import { LogsTab } from '~/components/agent-manager/logs-tab';
+import { McpTab } from '~/components/agent-manager/mcp-tab';
 import { OverviewTab } from '~/components/agent-manager/overview-tab';
 import { ToolsTab } from '~/components/agent-manager/tools-tab';
 import { Button } from '~/components/ui/button';
@@ -18,9 +19,17 @@ import { usePageTitle } from '~/lib/document-title';
 import { hasKindSettings } from '~/lib/kind-settings';
 import { cn } from '~/lib/utils';
 
-type TabId = 'overview' | 'tools' | 'kind' | 'can-ask' | 'config' | 'logs';
+type TabId = 'overview' | 'tools' | 'mcp' | 'kind' | 'can-ask' | 'config' | 'logs';
 
-const TAB_IDS: readonly string[] = ['overview', 'tools', 'kind', 'can-ask', 'config', 'logs'];
+const TAB_IDS: readonly string[] = [
+  'overview',
+  'tools',
+  'mcp',
+  'kind',
+  'can-ask',
+  'config',
+  'logs',
+];
 
 /** Settings → Agents → one agent: its details, kind settings, who it may ask, agent.yaml and logs. */
 export function SettingsAgentDetailPage({
@@ -61,6 +70,7 @@ export function SettingsAgentDetailPage({
   const tabs: { id: TabId; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'tools', label: 'Tools' },
+    { id: 'mcp', label: 'MCP' },
     ...(hasKindSettings(agent.agentKind)
       ? [{ id: 'kind' as const, label: `${agentKindLabel(agent)} settings` }]
       : []),
@@ -150,6 +160,15 @@ export function SettingsAgentDetailPage({
       <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${current}`}>
         {current === 'overview' && <OverviewTab agent={agent} catalog={catalog.data} />}
         {current === 'tools' && <ToolsTab agent={agent} />}
+        {current === 'mcp' && (
+          <McpTab
+            agent={agent}
+            onOpenTools={() => {
+              setTab('tools');
+              document.getElementById(`${id}-tab-tools`)?.focus();
+            }}
+          />
+        )}
         {current === 'kind' && <KindSettingsTab agent={agent} />}
         {current === 'can-ask' && <CanAskTab agent={agent} agents={agents.data} />}
         {current === 'config' && <ConfigTab agent={agent} />}

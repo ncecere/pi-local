@@ -7,6 +7,7 @@ import { ErrorNotice, FIELD } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
 import { useReveal } from '~/hooks/use-agent-manager';
 import { useUpdateAgent } from '~/hooks/use-agents';
+import { useMcpServers } from '~/hooks/use-mcp';
 import {
   APPROVAL_PRESETS,
   applyPreset,
@@ -27,6 +28,7 @@ import {
   WORKSPACE_TOOLS,
 } from '~/lib/approvals';
 import { formatToolList, parseToolList } from '~/lib/kind-settings';
+import { approvalSuggestions, readAgentMcp } from '~/lib/mcp';
 import { cn } from '~/lib/utils';
 
 const TOOL_TEXT: Record<WorkspaceTool, { label: string; hint: ReactNode }> = {
@@ -314,6 +316,13 @@ function ToolsForm({ agent }: { agent: Agent }) {
                   )}
                 </p>
                 {fieldError('patterns') && <ErrorNotice>{fieldError('patterns')}</ErrorNotice>}
+                <McpToolAdder
+                  agent={agent}
+                  present={patterns}
+                  onAdd={(name) =>
+                    setForm({ ...form, patterns: formatToolList([...patterns, name]) })
+                  }
+                />
               </div>
             )}
           </div>
@@ -341,6 +350,73 @@ function ToolsForm({ agent }: { agent: Agent }) {
           />
         </div>
       </Panel>
+    </div>
+  );
+}
+
+/**
+ * The agent's MCP tools (and a pattern per server) as suggestions for the
+ * approvals list: type or pick one, and it is added as a line.
+ */
+function McpToolAdder({
+  agent,
+  present,
+  onAdd,
+}: {
+  agent: Agent;
+  present: readonly string[];
+  onAdd: (name: string) => void;
+}) {
+  const id = useId();
+  const selection = readAgentMcp(agent);
+  const servers = useMcpServers(selection.length > 0);
+  const [text, setText] = useState('');
+  if (selection.length === 0) return null;
+  const suggestions = approvalSuggestions(selection, servers.data ?? []).filter(
+    (name) => !present.includes(name),
+  );
+  const add = () => {
+    const name = text.trim();
+    if (!name) return;
+    if (!present.includes(name)) onAdd(name);
+    setText('');
+  };
+  return (
+    <div className="mt-2 flex flex-col gap-1.5">
+      <label htmlFor={`${id}-mcp`} className="text-xs font-medium text-[var(--text-secondary)]">
+        Add one of its MCP tools
+      </label>
+      <div className="flex items-center gap-2">
+        <input
+          id={`${id}-mcp`}
+          list={`${id}-mcp-list`}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            add();
+          }}
+          placeholder="mcp__server__tool"
+          spellCheck={false}
+          autoComplete="off"
+          aria-describedby={`${id}-mcp-hint`}
+          className={cn(FIELD, 'font-mono text-xs')}
+        />
+        <Button type="button" variant="secondary" className="h-10 shrink-0" onClick={add}>
+          Add
+        </Button>
+        <datalist id={`${id}-mcp-list`}>
+          {suggestions.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      </div>
+      <p id={`${id}-mcp-hint`} className="text-xs text-[var(--text-muted)]">
+        {suggestions.length > 0
+          ? `${suggestions.length} suggestions from its MCP servers (MCP tab).`
+          : 'Its MCP tools are all in the list, or not known yet (test its servers in Settings → MCP).'}
+      </p>
     </div>
   );
 }

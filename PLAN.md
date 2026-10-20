@@ -382,7 +382,42 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
 - "Open workspace in Finder", and a simple file browser panel.
 - Later: an optional macOS `sandbox-exec` profile as an `ExecutionEnv` wrapper.
 
-### Phase 5: MCP (pi-mcp in the runtime)
+### Phase 5: MCP ✅ done 2026-10-20
+- **Server catalog** (`internal/mcp`):
+  - stdio (command, args, cwd with `${workspace}`/`${agentDir}`, env values) or Streamable HTTP (URL, header values,
+    OAuth)
+  - values and OAuth state live in the keychain; tools are cached from the last test
+- **Testing and sign-in:**
+  - Test runs `runtime.mjs mcp-probe` with the config on stdin
+  - Sign in runs the probe in OAuth mode and opens the browser; the redirect port is reused, so a re-sign-in keeps the
+    registered client
+- **Agents:**
+  - `agent.yaml` `mcp: [{server, tools?}]` resolves into `MCP_SERVERS`, with secrets filled in at start
+  - runtimes read and refresh OAuth state at `/mcp/oauth/{slug}` (only for servers they use; the app's probe has its
+    own key)
+- **Import:** from Claude Desktop, Cursor and VS Code (`mcp.json`, and `settings.json` comments allowed); legacy
+  HTTP+SSE servers are reported as unsupported.
+- **UI:**
+  - Settings → MCP: presets, add, test, sign in and out, import, tools
+  - an agent's MCP tab (all or picked tools)
+  - MCP tool names suggested for approvals
+- **Tested:**
+  - a stdio fixture end to end: secret env, the agent's workspace as cwd, tool picking, in-use protection, keychain
+    cleanup
+  - a server that won't start shows its stderr
+  - the full OAuth flow against a fixture authorization server: needs sign-in, sign in, the agent calls it, sign out,
+    the agent is told to sign in
+  - import from a Claude config
+  - by hand: the real `@modelcontextprotocol/server-everything` added from a preset in the UI (13 tools)
+- **Found and fixed:**
+  - Testing an OAuth server without tokens registered a client with a placeholder redirect and saved it; the later
+    sign-in reused it and was refused. Tests now use the refresh-only store, and sign-in drops a registration made for
+    another redirect URI.
+  - An agent signed out mid-session got pi-mcp's raw error; it now gets the "needs you to sign in" message.
+- **Carried forward:** MCP resources and prompts (tools only for now); per-agent instances of shared heavy servers
+  (each agent starts its own stdio processes).
+
+### (Original Phase 5 notes)
 - App-level MCP server catalog in `app.db`:
   - **stdio:** command, args, env, cwd, with `${workspace}` and `${secret:…}` expansion
   - **Streamable HTTP:** URL, header secrets, OAuth

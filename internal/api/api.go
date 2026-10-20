@@ -20,6 +20,7 @@ import (
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/events"
+	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
@@ -48,6 +49,7 @@ type API struct {
 	Teams     *teams.Store
 	Manager   Manager
 	Approvals *approvals.Store
+	MCP       *mcp.Catalog
 	// SaveDialog asks where to save a file (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
 	SaveDialog func(defaultName string) (string, error)
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
@@ -99,6 +101,7 @@ func (a *API) Handler() http.Handler {
 	a.modelRoutes(m)
 	a.manageRoutes(m)
 	a.toolRoutes(m)
+	a.mcpRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
 	return m
@@ -294,6 +297,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"workspace":        map[string]any{"tools": nonNil(ag.Config.Workspace.Tools)},
 		"approvals":        map[string]any{"tools": nonNil(ag.Config.Approvals.Tools), "timeoutSeconds": ag.Config.Approvals.Timeout()},
 		"pendingApprovals": a.pendingApprovals(ag.ID),
+		"mcp":              mcpChoices(ag.Config.MCP),
 	}
 }
 
@@ -316,6 +320,18 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+func mcpChoices(list []agents.MCPChoice) []map[string]any {
+	out := []map[string]any{}
+	for _, m := range list {
+		var tools any
+		if m.Tools != nil {
+			tools = m.Tools
+		}
+		out = append(out, map[string]any{"server": m.Server, "tools": tools})
+	}
+	return out
 }
 
 func (a *API) pendingApprovals(id string) int {
@@ -370,15 +386,16 @@ func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
 }
 
 type agentInput struct {
-	Name         *string           `json:"name"`
-	Description  *string           `json:"description"`
-	TemplateID   *string           `json:"templateId"`
-	ModelID      *string           `json:"modelId"`
-	Instructions *string           `json:"instructions"`
-	KindSettings *map[string]any   `json:"kindSettings"`
-	CanCall      *[]string         `json:"canCall"`
-	Workspace    *agents.Workspace `json:"workspace"`
-	Approvals    *agents.Approvals `json:"approvals"`
+	Name         *string             `json:"name"`
+	Description  *string             `json:"description"`
+	TemplateID   *string             `json:"templateId"`
+	ModelID      *string             `json:"modelId"`
+	Instructions *string             `json:"instructions"`
+	KindSettings *map[string]any     `json:"kindSettings"`
+	CanCall      *[]string           `json:"canCall"`
+	Workspace    *agents.Workspace   `json:"workspace"`
+	Approvals    *agents.Approvals   `json:"approvals"`
+	MCP          *[]agents.MCPChoice `json:"mcp"`
 }
 
 func (in agentInput) apply(c *agents.Config) error {
@@ -405,6 +422,9 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.Workspace != nil {
 		c.Workspace = *in.Workspace
+	}
+	if in.MCP != nil {
+		c.MCP = *in.MCP
 	}
 	if in.Approvals != nil {
 		c.Approvals = *in.Approvals

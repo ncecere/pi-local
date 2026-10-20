@@ -254,6 +254,8 @@ function toolsFor(
 					return { output: toLlmContent(result), isError: result.isError === true };
 				} catch (error) {
 					await conn.close(); // a fresh session next time
+					// Signed out (or the tokens were revoked) while connected: say what to do, as a connect would.
+					if (error instanceof McpOAuthAuthorizationRequiredError) throw new McpSignInRequiredError(server);
 					throw error;
 				}
 			},
