@@ -1,0 +1,551 @@
+/*
+ * Agent avatars: three styles, one set of states (see states.ts).
+ *
+ * Every avatar is `.av.av-<style>.av-<state>` sized by font-size (1em square), coloured from one hue
+ * (--agent-h). A state is a pose (static properties, so reduced motion still reads) plus motion layered on
+ * top. Changing state eases between poses with a springy overshoot.
+ */
+
+/* The hue is a registered number so a change of state can shift it smoothly (error turns red). */
+@property --h {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 250;
+}
+
+.av {
+  --h: var(--agent-h, 250);
+  --a: oklch(0.7 0.17 var(--h));
+  --a-hi: oklch(0.88 0.11 var(--h));
+  --a-lo: oklch(0.46 0.17 var(--h));
+  --a-soft: oklch(0.7 0.17 var(--h) / 0.16);
+  --a-line: oklch(0.7 0.17 var(--h) / 0.4);
+  --ink: oklch(0.18 0.05 var(--h));
+  --spring: cubic-bezier(0.3, 1.45, 0.5, 1);
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  line-height: 1;
+  vertical-align: middle;
+  transition:
+    --h 0.6s ease,
+    filter 0.4s ease;
+}
+
+.av *,
+.av *::before,
+.av *::after {
+  box-sizing: border-box;
+}
+
+.av-error {
+  --h: 25;
+}
+
+/* A disabled agent: grey and still. */
+.av-off {
+  filter: grayscale(1) opacity(0.45);
+}
+
+.av-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+@keyframes av-ping {
+  0% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  80%,
+  100% {
+    opacity: 0;
+    transform: scale(1.32);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════
+   SIGNAL: a level meter. Five bars; each state is a different way of moving them.
+   ════════════════════════════════════════════════════════════════════════════════════════════ */
+
+.av-bars .bars-tile {
+  fill: var(--a-soft);
+  stroke: var(--a-line);
+  stroke-width: 2;
+  transition: fill 0.4s ease;
+}
+
+.av-bars .bars-ping {
+  fill: none;
+  stroke: var(--a);
+  stroke-width: 2;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.av-bars .bars-bar {
+  fill: var(--a);
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scaleY(var(--s, 0.4));
+  transition:
+    transform 0.55s var(--spring),
+    opacity 0.4s ease;
+}
+
+.av-bars .bars-bar:nth-child(1) {
+  --s: 0.3;
+}
+
+.av-bars .bars-bar:nth-child(2) {
+  --s: 0.5;
+}
+
+.av-bars .bars-bar:nth-child(3) {
+  --s: 0.4;
+}
+
+.av-bars .bars-bar:nth-child(4) {
+  --s: 0.55;
+}
+
+.av-bars .bars-bar:nth-child(5) {
+  --s: 0.3;
+}
+
+.av-bars.av-idle .bars-bar {
+  animation: av-bar-idle 3.8s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -0.45s + var(--phase, 0s));
+}
+
+.av-bars.av-thinking .bars-bar {
+  animation: av-bar-wave 1.5s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.13s - 1.5s);
+}
+
+.av-bars.av-working .bars-bar {
+  animation: av-bar-scan 1s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.1s - 1s);
+}
+
+.av-bars.av-waiting .bars-bar {
+  --s: 0.18;
+  animation: av-bar-wait 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 0.2s - 1.8s);
+}
+
+.av-bars.av-attention .bars-bar {
+  animation: av-bar-alert 0.8s ease-in-out infinite alternate;
+}
+
+.av-bars.av-attention .bars-bar:nth-child(even) {
+  animation-direction: alternate-reverse;
+}
+
+.av-bars.av-attention .bars-ping {
+  animation: av-ping 1.8s ease-out infinite;
+}
+
+.av-bars.av-done .bars-tile {
+  fill: oklch(0.7 0.17 var(--h) / 0.3);
+}
+
+.av-bars.av-done .bars-bar {
+  animation: av-bar-rise 0.7s var(--spring) both;
+  animation-delay: calc(var(--i) * 0.08s);
+}
+
+.av-bars.av-done .bars-bar:nth-child(1) {
+  --s: 0.4;
+}
+
+.av-bars.av-done .bars-bar:nth-child(2) {
+  --s: 0.55;
+}
+
+.av-bars.av-done .bars-bar:nth-child(3) {
+  --s: 0.7;
+}
+
+.av-bars.av-done .bars-bar:nth-child(4) {
+  --s: 0.85;
+}
+
+.av-bars.av-done .bars-bar:nth-child(5) {
+  --s: 1;
+}
+
+.av-bars.av-done .bars-ping {
+  animation: av-ping 1s ease-out 1 forwards;
+}
+
+.av-bars.av-error .bars-bar:nth-child(1) {
+  --s: 0.9;
+}
+
+.av-bars.av-error .bars-bar:nth-child(2) {
+  --s: 0.25;
+}
+
+.av-bars.av-error .bars-bar:nth-child(3) {
+  --s: 0.65;
+}
+
+.av-bars.av-error .bars-bar:nth-child(4) {
+  --s: 0.15;
+}
+
+.av-bars.av-error .bars-bar:nth-child(5) {
+  --s: 0.45;
+}
+
+.av-bars.av-error .bars-bar {
+  animation: av-bar-glitch 3s steps(1, end) infinite;
+  animation-delay: calc(var(--i) * -0.6s);
+}
+
+.av-bars.av-asleep .bars-bar {
+  --s: 0.12;
+  opacity: 0.45;
+  animation: av-bar-sleep 5s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -0.5s);
+}
+
+@keyframes av-bar-idle {
+  0%,
+  100% {
+    transform: scaleY(0.28);
+  }
+  50% {
+    transform: scaleY(0.55);
+  }
+}
+
+@keyframes av-bar-wave {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes av-bar-scan {
+  0%,
+  45%,
+  100% {
+    opacity: 0.55;
+    transform: scaleY(0.22);
+  }
+  20% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes av-bar-wait {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes av-bar-alert {
+  from {
+    transform: scaleY(0.95);
+  }
+  to {
+    transform: scaleY(0.3);
+  }
+}
+
+@keyframes av-bar-rise {
+  from {
+    transform: scaleY(0.12);
+  }
+}
+
+@keyframes av-bar-glitch {
+  0% {
+    opacity: 0.9;
+  }
+  14% {
+    opacity: 0.3;
+  }
+  20% {
+    opacity: 1;
+  }
+  52% {
+    opacity: 0.55;
+  }
+  58% {
+    opacity: 0.2;
+  }
+  64% {
+    opacity: 0.95;
+  }
+}
+
+@keyframes av-bar-sleep {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════
+   PIXEL: a round dot matrix. Outer ring of eight, inner four; each state a pattern of light.
+   ════════════════════════════════════════════════════════════════════════════════════════════ */
+
+.av-dots .dots-back {
+  fill: var(--a-soft);
+}
+
+.av-dots .dot {
+  fill: var(--a);
+  opacity: 0.35;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    opacity 0.4s ease,
+    transform 0.5s var(--spring);
+}
+
+.av-dots .dot-in {
+  opacity: 0.5;
+}
+
+/* idle: a scatter of twinkles */
+.av-dots.av-idle .dot {
+  animation: av-dot-twinkle 6s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -1.37s + var(--phase, 0s));
+}
+
+/* thinking: a ripple from the centre outward */
+.av-dots.av-thinking .dot {
+  animation: av-dot-ripple 1.7s ease-in-out infinite;
+  animation-delay: calc(var(--d) * 0.3s - 1.7s);
+}
+
+/* working: a light chases around the ring */
+.av-dots.av-working .dot-out {
+  animation: av-dot-orbit 1.2s linear infinite;
+  animation-delay: calc(var(--o) * 0.15s - 1.2s);
+}
+
+.av-dots.av-working .dot-in {
+  opacity: 0.6;
+}
+
+/* waiting: a slow heartbeat turning in the middle */
+.av-dots.av-waiting .dot-out {
+  opacity: 0.15;
+}
+
+.av-dots.av-waiting .dot-in {
+  animation: av-dot-beat 1.6s ease-in-out infinite;
+  animation-delay: calc(var(--o) * 0.4s - 1.6s);
+}
+
+/* attention: the centre holds, the ring pulses */
+.av-dots.av-attention .dot-in {
+  opacity: 1;
+}
+
+.av-dots.av-attention .dot-out {
+  animation: av-dot-alert 0.9s ease-in-out infinite;
+}
+
+/* done: lights up from the centre and stays lit */
+.av-dots.av-done .dot {
+  opacity: 1;
+  animation: av-dot-done 0.7s var(--spring) both;
+  animation-delay: calc(var(--d) * 0.22s);
+}
+
+/* error: red, flickering like a faulty display */
+.av-dots.av-error .dot {
+  opacity: 0.6;
+  animation: av-dot-glitch 2.6s steps(1, end) infinite;
+  animation-delay: calc(var(--i) * -0.43s);
+}
+
+/* asleep: nearly dark; one dot breathing */
+.av-dots.av-asleep .dot {
+  opacity: 0.1;
+}
+
+.av-dots.av-asleep .dot-heart {
+  animation: av-dot-sleep 4s ease-in-out infinite;
+}
+
+@keyframes av-dot-twinkle {
+  0%,
+  84%,
+  100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  91% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+}
+
+@keyframes av-dot-ripple {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.22);
+  }
+}
+
+@keyframes av-dot-orbit {
+  0% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+  45% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.18;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes av-dot-beat {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.9);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+@keyframes av-dot-alert {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+}
+
+@keyframes av-dot-done {
+  from {
+    opacity: 0.2;
+    transform: scale(0.5);
+  }
+}
+
+@keyframes av-dot-glitch {
+  0% {
+    opacity: 0.7;
+  }
+  12% {
+    opacity: 0.15;
+  }
+  18% {
+    opacity: 0.95;
+  }
+  40% {
+    opacity: 0.5;
+  }
+  52% {
+    opacity: 0.1;
+  }
+  60% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes av-dot-sleep {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════
+   Demo page helpers and motion preferences
+   ════════════════════════════════════════════════════════════════════════════════════════════ */
+
+@keyframes av-reel {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.av-paused .av,
+.av-paused .av *,
+.av-paused .av *::before,
+.av-paused .av *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: pausing must beat every state's animation */
+  animation-play-state: paused !important;
+}
+
+/* Reduced motion: every state is still a distinct pose, just without the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .av,
+  .av *,
+  .av *::before,
+  .av *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: a motion preference must beat every state's animation */
+    animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: a motion preference must beat every state's transition */
+    transition: none !important;
+  }
+}
+
+.av-frozen,
+.av-frozen *,
+.av-frozen *::before,
+.av-frozen *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: a frozen avatar must beat every state's animation */
+  animation: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: a frozen avatar must beat every state's transition */
+  transition: none !important;
+}
+
+.av-still .av,
+.av-still .av *,
+.av-still .av *::before,
+.av-still .av *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: a motion preference must beat every state's animation */
+  animation: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: a motion preference must beat every state's transition */
+  transition: none !important;
+}

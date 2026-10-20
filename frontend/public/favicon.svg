@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Pi Agent Interface">
+<rect width="64" height="64" rx="14" fill="#171717"/>
+<circle cx="32" cy="32" r="21" fill="#fe9a00"/>
+<rect x="22.5" y="24.5" width="6.5" height="12" rx="3.25" fill="#171717"/>
+<rect x="35" y="24.5" width="6.5" height="12" rx="3.25" fill="#171717"/>
+</svg>

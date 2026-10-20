@@ -1,0 +1,422 @@
+import {
+  type ComponentProps,
+  type ComponentType,
+  lazy,
+  memo,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import { MessageLink } from '~/components/chat/external-link-warning';
+import { escapeCurrencyDollars } from '~/components/chat/markdown-currency';
+import { rehypeAutoDirection } from '~/components/chat/markdown-direction';
+import {
+  DEMOTED_HEADINGS,
+  HeadingLevels,
+  headingLevelsOf,
+} from '~/components/chat/markdown-headings';
+import { remarkSoftBreaks } from '~/components/chat/markdown-soft-breaks';
+import { TASK_LIST_COMPONENTS } from '~/components/chat/markdown-task-list';
+import {
+  installStreamdownOverlayFocus,
+  installStreamdownScrollRegions,
+} from '~/components/chat/streamdown-overlay-focus';
+import { readableCodePlugin } from '~/lib/code-contrast';
+import { cn } from '~/lib/utils';
+
+/**
+ * Streamdown pulls in Shiki's syntax-highlighting grammars, which dominate the
+ * bundle. Loading it on demand keeps that cost out of the initial payload; the
+ * fallback preserves the text so nothing disappears while it resolves.
+ */
+const loadRenderer = () =>
+  Promise.all([
+    import('streamdown'),
+    // Shiki's GitHub colours, adjusted where they fall short of AA on our surfaces (#171).
+    import('@streamdown/code').then(({ code }) => ({ code: readableCodePlugin(code) })),
+    import('@streamdown/math'),
+    import('~/components/chat/mermaid-plugin'),
+  ]);
+
+interface Renderers {
+  markdown: ComponentType<MarkdownProps>;
+  code: ComponentType<HighlightedCodeProps>;
+}
+
+/**
+ * The renderers once their chunk has loaded. A `React.lazy` component suspends
+ * once even when its module is already there, so a reply could show its
+ * Markdown source for a frame first; read from here, a loaded renderer draws
+ * the final Markdown on the first paint (#311).
+ */
+let renderers: Renderers | null = null;
+let loadingRenderers: Promise<Renderers> | null = null;
+
+/**
+ * Starts loading the Markdown renderer, once; resolves when it is ready. On a
+ * slow connection a saved conversation showed its replies as Markdown source
+ * for 1-2 s, then jumped as code blocks and tables appeared (CLS 0.10, #311):
+ * the conversation now loads the renderer beside its history and waits for
+ * both (useMarkdownRendererReady).
+ */
+export function preloadMarkdownRenderer(): Promise<Renderers> {
+  loadingRenderers ??= loadRenderer().then((modules) => {
+    renderers = {
+      markdown: buildMarkdownRenderer(modules),
+      code: buildCodeRenderer(modules),
+    };
+    return renderers;
+  });
+  return loadingRenderers;
+}
+
+/**
+ * Whether the Markdown renderer is ready, loading it when `wanted`. A failed
+ * load counts as ready, so the replies show as text, as they did before,
+ * rather than the conversation waiting for ever.
+ */
+export function useMarkdownRendererReady(wanted = true): boolean {
+  const [ready, setReady] = useState(() => renderers !== null);
+  useEffect(() => {
+    if (!wanted || ready) return;
+    let active = true;
+    const done = () => {
+      if (active) setReady(true);
+    };
+    preloadMarkdownRenderer().then(done, done);
+    return () => {
+      active = false;
+    };
+  }, [wanted, ready]);
+  return ready || !wanted;
+}
+
+type RendererModules = Awaited<ReturnType<typeof loadRenderer>>;
+
+function buildMarkdownRenderer([
+  { Streamdown, defaultRehypePlugins, defaultRemarkPlugins },
+  { code },
+  { createMathPlugin },
+  { createEditorialMermaidPlugin },
+]: RendererModules): ComponentType<MarkdownProps> {
+  // Streamdown's table full-screen view does not manage focus itself.
+  installStreamdownOverlayFocus();
+  // Its wide tables and code blocks scroll; make them reachable by keyboard.
+  installStreamdownScrollRegions();
+  const ownerRehypePlugins = conversationRehypePlugins(defaultRehypePlugins);
+  // Streamdown's own plugins with every paragraph, list, item and cell taking
+  // its own direction last (#360). Built once: Streamdown re-parses when the
+  // array changes.
+  const withDirection = (plugins: Pluggable[]): Pluggable[] => [...plugins, rehypeAutoDirection];
+  const defaultPlugins = withDirection(Object.values(defaultRehypePlugins ?? {}));
+  const conversationPlugins = ownerRehypePlugins ? withDirection(ownerRehypePlugins) : null;
+  // Streamdown's own (GFM, code metadata), then single line breaks kept (#207).
+  // One array for every message: Streamdown re-parses when its identity changes.
+  const remarkPlugins = [...Object.values(defaultRemarkPlugins ?? {}), remarkSoftBreaks];
+  // Single-dollar inline math is off by default, but models commonly emit it;
+  // escapeCurrencyDollars keeps amounts of money out of it (#339).
+  // Mermaid itself loads only when a diagram is first rendered.
+  const mermaid = createEditorialMermaidPlugin();
+  const plugins = {
+    code,
+    math: createMathPlugin({ singleDollarTextMath: true }),
+    mermaid,
+  };
+  // A person's own message: text, not LaTeX, so every `$` is a dollar sign (#339).
+  const pluginsWithoutMath = { code, mermaid };
+
+  return ({ children, className, math = true, skipHtml, urlTransform }: MarkdownProps) => (
+    <Streamdown
+      plugins={math ? plugins : pluginsWithoutMath}
+      className={cn(MARKDOWN_BASE, className)}
+      remarkPlugins={remarkPlugins}
+      translations={TRANSLATIONS}
+      // The reference interface shows plain code without a gutter.
+      lineNumbers={false}
+      // Links are real links that warn before leaving the instance (#174),
+      // not Streamdown's link-safety buttons; headings sit below the
+      // page's h1 (#212, #271); a task list's checkboxes are named (#240).
+      components={MESSAGE_COMPONENTS}
+      // Share pages pass their own URL policy and keep the visible marker.
+      rehypePlugins={
+        !skipHtml && !urlTransform && conversationPlugins ? conversationPlugins : defaultPlugins
+      }
+      {...(skipHtml ? { skipHtml } : {})}
+      {...(urlTransform
+        ? { urlTransform: urlTransform as ComponentProps<typeof Streamdown>['urlTransform'] }
+        : {})}
+    >
+      {math ? normalizeMathDelimiters(escapeCurrencyDollars(children)) : children}
+    </Streamdown>
+  );
+}
+
+const StreamdownMarkdown = lazy(() =>
+  preloadMarkdownRenderer().then((loaded) => ({ default: loaded.markdown })),
+);
+
+/** "Copy Code" was the one title-cased tooltip among the reply's controls (#194). */
+const TRANSLATIONS = { copyCode: 'Copy code' };
+
+const MESSAGE_COMPONENTS = { a: MessageLink, ...DEMOTED_HEADINGS, ...TASK_LIST_COMPONENTS };
+
+type Pluggable = NonNullable<
+  ComponentProps<typeof import('streamdown').Streamdown>['rehypePlugins']
+>[number];
+
+/**
+ * Streamdown's own rehype plugins (raw HTML, sanitizing, hardening), with one
+ * change for a person's own conversation: a link the hardening refuses (a
+ * relative path, or a scheme such as `sandbox:` that models invent) shows as
+ * its plain text instead of "text [blocked]". Its destination is still
+ * dropped. Null when the defaults are not in the expected shape.
+ */
+function conversationRehypePlugins(
+  defaults: Record<string, Pluggable> | undefined,
+): Pluggable[] | null {
+  const harden = defaults?.harden;
+  if (!defaults || !Array.isArray(harden) || typeof harden[1] !== 'object') return null;
+  return Object.entries(defaults).map(([name, plugin]) =>
+    name === 'harden'
+      ? ([harden[0], { ...(harden[1] as object), linkBlockPolicy: 'text-only' }] as Pluggable)
+      : plugin,
+  );
+}
+
+/**
+ * Rewrites LaTeX bracket delimiters into the dollar forms the math plugin
+ * understands. Models frequently emit `\\(x\\)` and `\\[x\\]`, which would
+ * otherwise render as literal backslashes in the middle of a sentence.
+ *
+ * Fenced and inline code are left untouched so a snippet demonstrating LaTeX
+ * is not silently rewritten.
+ */
+export function normalizeMathDelimiters(markdown: string): string {
+  const segments = markdown.split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+
+  return segments
+    .map((segment, index) => {
+      // Odd indices are the captured code spans.
+      if (index % 2 === 1) return segment;
+      return segment
+        .replace(/\\\[([\s\S]+?)\\\]/g, (_match, body) => `$$${body}$$`)
+        .replace(/\\\(([\s\S]+?)\\\)/g, (_match, body) => `$${body}$`);
+    })
+    .join('');
+}
+
+/**
+ * One fenced block of source code, highlighted by the same Streamdown code
+ * plugin (Shiki, the same themes) as code blocks in replies, from the same
+ * lazily loaded chunk. Static mode: the text is never treated as unfinished
+ * Markdown. The block's own copy and download controls are hidden; the caller
+ * offers its own.
+ */
+function buildCodeRenderer([
+  { Streamdown },
+  { code },
+]: RendererModules): ComponentType<HighlightedCodeProps> {
+  const plugins = { code };
+  return ({ source, language, className }: HighlightedCodeProps) => (
+    <Streamdown
+      plugins={plugins}
+      mode="static"
+      controls={false}
+      lineNumbers={false}
+      className={cn(MARKDOWN_BASE, className)}
+    >
+      {codeFence(source, language)}
+    </Streamdown>
+  );
+}
+
+const StreamdownCode = lazy(() =>
+  preloadMarkdownRenderer().then((loaded) => ({ default: loaded.code })),
+);
+
+/** A fenced code block that holds `source` exactly, whatever backticks it contains. */
+function codeFence(source: string, language: string): string {
+  const longest = Math.max(0, ...(source.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  return `${fence}${language}\n${source}\n${fence}`;
+}
+
+interface HighlightedCodeProps {
+  source: string;
+  /** A Shiki language id or alias. */
+  language: string;
+  className?: string;
+}
+
+/** Source code highlighted like a reply's code blocks; plain text until the highlighter loads. */
+export const HighlightedCode = memo(function HighlightedCode({
+  source,
+  language,
+  className,
+}: HighlightedCodeProps) {
+  // Already loaded: drawn at once, without a Suspense frame of plain text (#311).
+  const Loaded = renderers?.code;
+  if (Loaded) return <Loaded source={source} language={language} className={className} />;
+  return (
+    <Suspense
+      fallback={
+        <pre className={cn('m-0 whitespace-pre-wrap break-words font-mono text-xs', className)}>
+          <code>{source}</code>
+        </pre>
+      }
+    >
+      <StreamdownCode source={source} language={language} className={className} />
+    </Suspense>
+  );
+});
+
+export interface MarkdownProps {
+  children: string;
+  className?: string;
+  /**
+   * Typeset `$…$` and `$$…$$` as maths (default). A person's own message turns
+   * it off: they type text, and "$5 … $10" or a message about LaTeX must read
+   * as typed (#339).
+   */
+  math?: boolean;
+  skipHtml?: boolean;
+  /**
+   * Matches Streamdown's signature. Public shares use this to drop every
+   * destination that is not a safe external href, so the shape must be
+   * preserved rather than narrowed.
+   */
+  urlTransform?: (value: string, key: string, node: unknown) => string | null;
+}
+
+/**
+ * What every rendering needs, whatever its prose styling (a user's message,
+ * a reply, a share page): without the gutter, Shiki's one span per line must
+ * be a block again, or every line of a code block collapses onto one row.
+ * This lived in the reply's prose classes only, so the share page (which had
+ * its own) and user messages showed code on one line (#186).
+ *
+ * A long unbroken word (a hash, a key, a run of letters) wraps inside the
+ * column, as links already did, instead of pushing the conversation or the
+ * share page sideways (#187). `anywhere` rather than `break-word`, so the word
+ * no longer sets the column's minimum width either. Code blocks keep their
+ * lines (`pre` does not wrap) unless the person turned code wrapping on.
+ */
+const MARKDOWN_BASE = cn(
+  'wrap-anywhere [&_pre_code]:block [&_pre_code>span]:block',
+  // Streamdown skips laying out a code block until it is on screen
+  // (content-visibility: auto, 200 px assumed). A conversation opens scrolled
+  // to its end, so blocks were drawn at 200 px, then at their height a frame
+  // later, and the replies jumped (a one-line block: 218 -> 110 px, #311).
+  '[&_[data-streamdown=code-block]]:![content-visibility:visible]',
+  // Paragraphs, lists and cells take their own direction (markdown-direction.ts,
+  // #360); code does not follow them: a code block stays left to right, even
+  // in a right-to-left list item or quote, and inline code reads by its own text.
+  '[&_[data-streamdown=code-block]]:[direction:ltr] [&_pre]:text-left',
+  '[&_:not(pre)>code]:[unicode-bidi:plaintext]',
+);
+
+/**
+ * Shared prose styling so chat and public shares render identically (#186:
+ * the share page had its own copy, which styled block code as inline code).
+ * Only inline code gets the inline-code look.
+ *
+ * Streamdown wraps every fence in its own bordered container and inner scroll
+ * pane. Adding a third border around `pre` produced a visibly nested box, so
+ * the inner surfaces are flattened and only the outer container keeps a
+ * border, matching the single flat panel in the reference interface.
+ */
+export const MARKDOWN_PROSE = cn(
+  'prose-headings:font-semibold prose-headings:text-[var(--text-primary)]',
+  '[&_a]:text-[var(--accent-bright)] [&_a]:underline-offset-2',
+  '[&_strong]:text-[var(--text-primary)]',
+  // Inline code only; fenced blocks are styled by their container.
+  '[&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-[var(--bg-control)]',
+  '[&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0.5',
+  '[&_pre]:!border-0 [&_pre]:!bg-transparent [&_pre]:!rounded-none [&_pre]:!p-0',
+  // The scroll pane sits inside the container's own border; a second one reads
+  // as a nested box rather than the single flat panel the reference shows.
+  '[&>div>div.overflow-x-auto]:!border-0 [&>div>div.overflow-x-auto]:!rounded-none',
+  // Squeezed to the reply's width, a table with many columns left a prose
+  // column one word wide (rows 200+ px tall in the QA walk). A table may be as
+  // wide as its content, never narrower than the reply, with long cells
+  // wrapping at a readable width; a wide one scrolls (a focusable region).
+  '[&_[data-streamdown=table]]:w-max [&_[data-streamdown=table]]:min-w-full',
+  '[&_[data-streamdown=table-cell]]:max-w-[22rem]',
+  '[&_hr]:border-[var(--border-subtle)]',
+  '[&_li::marker]:text-[var(--accent-bright)]',
+  // Streamdown puts list markers inside the text: a wrapped line started under
+  // the bullet, and an item that was one long link left its bullet alone on a
+  // line. Outside markers give a hanging indent (#241).
+  // The indent is on the side the list starts, so a right-to-left list indents
+  // from the right (#360); Streamdown's nested lists add a left one to undo.
+  '[&_ul]:list-outside [&_ol]:list-outside [&_ul]:ps-6 [&_ol]:ps-6',
+  '[&_ul:dir(rtl)]:pl-0 [&_ol:dir(rtl)]:pl-0',
+  // An item that reads the other way from its list (an Arabic item in an
+  // English list) keeps its marker inside its own text: outside, the marker
+  // would fall in the list's unpadded side.
+  '[&_:is(ul,ol):dir(ltr)>li:dir(rtl)]:list-inside [&_:is(ul,ol):dir(rtl)>li:dir(ltr)]:list-inside',
+  // A task's checkbox sits where the bullet would, so its text hangs too:
+  // 16 px box, 4 px margin and the space after it fill the 24 px indent.
+  '[&_.task-list-item_input]:-ms-6 [&_.task-list-item_input]:w-4',
+  // A task list item shows its checkbox, not a bullet as well (#240).
+  '[&_li.task-list-item]:list-none [&_.task-list-item_input]:me-1',
+  // Streamdown's table header is left-aligned and its quote bar is on the
+  // left: both follow the text's direction instead (#360).
+  '[&_th]:text-start',
+  '[&_blockquote:dir(rtl)]:border-l-0 [&_blockquote:dir(rtl)]:border-r-4',
+  '[&_blockquote:dir(rtl)]:pl-0 [&_blockquote:dir(rtl)]:pr-4',
+);
+
+// Cache at the wrapper boundary, before normalization and the lazy renderer.
+// Safety props and URL transforms participate in the default shallow comparison.
+/**
+ * Some models (gpt-oss) put narrow no-break spaces between words and numbers;
+ * in this typeface they read as no space at all ("3PM", "SanSalvador"). Shown
+ * as ordinary no-break spaces: the same meaning, a readable width.
+ */
+const readableSpaces = (text: string) =>
+  text.includes('\u202f') ? text.replace(/\u202f/g, '\u00a0') : text;
+
+export const Markdown = memo(function Markdown({
+  children: source,
+  className,
+  math,
+  skipHtml,
+  urlTransform,
+}: MarkdownProps) {
+  const children = readableSpaces(source);
+  // Its headings continue from the page's h1 without skipping a level (#271).
+  const levels = useMemo(() => headingLevelsOf(children), [children]);
+  // Already loaded: the final Markdown on the first paint, without a Suspense
+  // frame of Markdown source (#311).
+  const Loaded = renderers?.markdown;
+  if (Loaded)
+    return (
+      <HeadingLevels.Provider value={levels}>
+        <Loaded className={className} math={math} skipHtml={skipHtml} urlTransform={urlTransform}>
+          {children}
+        </Loaded>
+      </HeadingLevels.Provider>
+    );
+  return (
+    <Suspense
+      fallback={
+        <div dir="auto" className={cn('whitespace-pre-wrap wrap-anywhere', className)}>
+          {children}
+        </div>
+      }
+    >
+      <HeadingLevels.Provider value={levels}>
+        <StreamdownMarkdown
+          className={className}
+          math={math}
+          skipHtml={skipHtml}
+          urlTransform={urlTransform}
+        >
+          {children}
+        </StreamdownMarkdown>
+      </HeadingLevels.Provider>
+    </Suspense>
+  );
+});

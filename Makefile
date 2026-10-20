@@ -1,0 +1,52 @@
+# Pi Local. The Go binaries embed runtime/dist/runtime.mjs and frontend/dist, so build those first (`make build`).
+export MACOSX_DEPLOYMENT_TARGET ?= 11.0
+export CGO_LDFLAGS ?= -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
+
+.PHONY: help deps runtime frontend build app server run-server dev-web test test-go test-runtime test-frontend lint check clean
+
+help: ## This list
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
+
+deps: ## Install the runtime's and the frontend's packages
+	cd runtime && pnpm install
+	cd frontend && pnpm install
+
+runtime: ## Bundle the agent runtime (runtime/dist/runtime.mjs)
+	cd runtime && pnpm bundle
+
+frontend: ## Build the UI (frontend/dist)
+	cd frontend && pnpm build
+
+build: runtime frontend app server ## Everything: bin/pi-local (desktop) and bin/pi-local-server (headless)
+
+app: ## The desktop app: bin/pi-local
+	go build -o bin/pi-local ./cmd/pi-local
+
+server: ## The headless server: bin/pi-local-server
+	go build -o bin/pi-local-server ./cmd/pi-local-server
+
+run-server: server ## Headless on http://127.0.0.1:5190 with a scratch data dir (runtime from source)
+	bin/pi-local-server -dev -data $${PI_LOCAL_DATA:-/tmp/pi-local-dev}
+
+dev-web: ## The UI with hot reload on :5191, proxying /api to run-server
+	cd frontend && pnpm dev
+
+test: test-go test-runtime test-frontend ## All tests
+
+test-go: ## Go tests (run the real runtime from source; needs `make deps`)
+	go test -count=1 ./internal/...
+
+test-runtime: ## Runtime typecheck and tests
+	cd runtime && pnpm exec tsc --noEmit && pnpm test
+
+test-frontend: ## UI typecheck, lint and tests
+	cd frontend && pnpm typecheck && pnpm lint && pnpm test
+
+lint: ## go vet and gofmt
+	go vet ./internal/... ./cmd/...
+	@test -z "$$(gofmt -l cmd internal frontend/embed.go runtime/embed.go)" || (gofmt -l cmd internal; exit 1)
+
+check: lint test ## lint and every test
+
+clean:
+	rm -rf bin runtime/dist frontend/dist

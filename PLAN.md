@@ -268,12 +268,26 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
 5. **Workspace guard:** a `beforeTool` hook that resolves symlinks and refuses paths outside `workspace/` for
    `read`/`write`/`edit`. Try escaping it (`..`, absolute paths, symlinks).
 
-### Phase 1: Skeleton (chat with one local agent)
+### Phase 1: Skeleton ✅ done 2026-10-20 (chat with local agents)
 - Repo scaffold (below), `app.db` migrations, data dir and single-instance lock.
 - Supervisor: spawn, health, proxy, reap, restart. Gateway: threads sync/report.
 - Port the frontend with auth stripped and the transport adapter. Demo model.
 - **Milestone:** create an agent, chat, quit the app mid-reply, reopen, and the reply finishes. The sidebar lists
   threads without waking the agent.
+- **Done.** `internal/app/app_test.go` proves the milestone against the real runtime, along with these:
+  - hibernation; listing never wakes an agent
+  - a crash (SIGKILL) restarts the agent and finishes the reply
+  - a refused first message leaves no thread
+  - rename/delete; a config change restarts an awake agent
+  - live events; one app per data directory; prefs
+- **Checked by hand.** In a browser (headless server) and in the desktop app started from a Finder-like environment
+  (`PATH=/usr/bin:/bin`, so Node is found through the login shell): create an agent, chat, streaming, the inbox, and
+  SIGTERM → a graceful stop of every runtime.
+- **Carried forward:**
+  - Node isn't bundled yet; the app uses the login shell's PATH (Phase 8).
+  - The approvals gateway answers 404 (Phase 4); the runtime logs `approvals sync: status 404` at each start.
+  - The UI still uses whole-view streams (Phase 6).
+  - One runtime approvals test is load-sensitive (a 5 s timeout) and can fail when the machine is busy.
 
 ### Phase 2: Models
 - Providers (OpenAI, Anthropic, OpenAI-compatible/Ollama/LiteLLM), keychain keys, discovery, per-agent model.

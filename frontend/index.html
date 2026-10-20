@@ -1,0 +1,22 @@
+
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Pi Local</title>
+    <!-- Blocking on purpose: sets the stored theme before the first paint. -->
+    <script src="/theme-init.js"></script>
+    <!-- The desktop app opens /?shell=desktop-mac: make room for the window's traffic lights before the first paint. -->
+    <script src="/shell-init.js"></script>
+    <!-- The mark, "Face", from Pi Agent Interface (pai-assets logo/face/). -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" data-brand-icon />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" data-brand-icon />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" data-brand-icon />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

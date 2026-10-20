@@ -1,0 +1,204 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+@import "./tokens.css";
+
+/*
+ * `dark:` follows OCI's theme (the `dark` class the theme provider sets on the
+ * root), not the operating system's colour scheme: code highlighting uses it,
+ * and a light system with OCI's dark theme otherwise draws light-theme colours
+ * on a dark background.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  * {
+    border-color: var(--border-subtle);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--bg-root);
+    background-image: var(--root-gradient);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: var(--accent-soft);
+    color: var(--text-primary);
+  }
+
+  /*
+   * The ring's colour is set on every element, not only when focused (#355).
+   * Unfocused, an outline's colour is currentcolor, and the many controls with
+   * `transition-colors` (which includes outline-color) faded the ring in from
+   * their text colour over 150 ms: a ring that began as near-white on a
+   * near-white page. With the same colour in both states there is no fade.
+   */
+  *,
+  ::before,
+  ::after {
+    outline-color: var(--accent-bright);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent-bright);
+    outline-offset: 2px;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--text-primary);
+    font-weight: 650;
+    line-height: 1.2;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: var(--border-strong);
+    border-radius: 9999px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* Streamdown ships compiled classes that Tailwind must scan. */
+@source "../../node_modules/streamdown/dist/*.js";
+
+/*
+ * Streamdown's block controls (copy, download, full screen, exit) are a 14 px
+ * icon in 4 px of padding: 22 px square, under the WCAG 2.2 target size. They
+ * are at least 24 px, in a reply and in a table's full-screen view (#246).
+ */
+[data-streamdown] button[title]:has(> svg:only-child) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+}
+
+/* Optional wrapping of long code lines (Customization → Wrap long code lines). */
+.code-wrap [data-streamdown="code-block-body"] pre,
+.code-wrap [data-streamdown="code-block-body"] code,
+.code-wrap [data-streamdown="code-block-body"] code > span {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A message opened from conversation search: briefly marked, then fades. */
+[data-search-target] {
+  border-radius: 0.75rem;
+  animation: oci-search-target 2.4s ease-out both;
+}
+
+[data-search-target]:focus {
+  outline: none;
+}
+
+@keyframes oci-search-target {
+  0%,
+  45% {
+    background-color: var(--accent-soft);
+    box-shadow: 0 0 0 0.5rem var(--accent-soft);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0.5rem transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-search-target] {
+    animation: none;
+    outline: 2px solid var(--accent-bright);
+    outline-offset: 0.5rem;
+  }
+
+  [data-search-target]:focus {
+    outline: 2px solid var(--accent-bright);
+  }
+}
+
+/* A conversation arriving in the sidebar fades in (see sidebar-inbox.tsx). */
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+/* A label for work in progress ("Thinking…", "Using bash…"): a soft light passes over it. */
+.text-shimmer {
+  background:
+    linear-gradient(90deg, var(--text-primary) 35%, var(--text-muted) 50%, var(--text-primary) 65%)
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 2.2s linear infinite;
+}
+@keyframes text-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .text-shimmer {
+    animation: none;
+    background: none;
+    color: inherit;
+  }
+}
+
+/*
+ * On a touch screen, text fields are at least 16px. iOS Safari zooms the page into any field under 16px when it gets
+ * focus, and does not zoom back out, so the person has to pinch the page back to size after every tap. This is
+ * outside the cascade layers so it beats the utilities' smaller sizes (text-sm, text-[0.9375rem]); the pinch-zoom
+ * itself stays allowed. Checkboxes and radios have no text, so they are left alone.
+ */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"]),
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+}
+
+/* The desktop app on macOS (data-shell, public/shell-init.js): the window has a hidden, inset title bar. The sidebar's
+   header steps right of the traffic lights and drags the window (Wails' --wails-draggable). */
+html[data-shell="desktop-mac"] [data-titlebar] {
+  padding-left: 80px;
+  --wails-draggable: drag;
+}
+html[data-shell="desktop-mac"] [data-titlebar] :is(a, button) {
+  --wails-draggable: no-drag;
+}

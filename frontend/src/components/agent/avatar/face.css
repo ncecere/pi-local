@@ -1,0 +1,871 @@
+/*
+ * FACE: pi-d-ui's animated face, ported as it is (apps/web/src/styles.css there, Face.tsx).
+ *
+ * Each state poses the two eyes (position, angle, thickness, length) and the change is an animated move between
+ * poses; the gaze group moves both eyes together, the body tilts and bobs. Its moods map to ours:
+ * idle, thinking, working, waiting, done, error are the same; blocked is `attention` (the waving "!");
+ * sleeping is `asleep`; off is `av-off` (a disabled agent: grey, eyes shut).
+ */
+
+/* ── Face: the agent's animated avatar (Face.tsx) ──────────────────────────────────────────────────────────────── */
+/* Each mood places the two eyes (position, angle, thickness, length); changing mood animates between poses. The gaze
+   group moves both eyes together (looking around); the body tilts and bobs. */
+.av-face {
+  --lx: 39.5px;
+  --ly: 45px;
+  --la: 0deg;
+  --lw: 10px;
+  --lh: 22px;
+  --rx: 60.5px;
+  --ry: 45px;
+  --ra: 0deg;
+  --rw: 10px;
+  --rh: 22px;
+}
+
+.av-face .face-disc {
+  fill: var(--a);
+  transition: fill 0.4s ease;
+}
+
+.av-face .face-body,
+.av-face .face-gaze {
+  transform-box: view-box;
+  transform-origin: 50px 50px;
+  transition:
+    transform 0.42s cubic-bezier(0.3, 1.45, 0.5, 1),
+    opacity 0.25s ease;
+}
+
+.av-face .face-eye {
+  transform-box: view-box;
+  transform-origin: 0 0;
+  transition: transform 0.45s cubic-bezier(0.3, 0.8, 0.25, 1);
+}
+
+.av-face .face-eye-l {
+  --ew: var(--lw);
+  --eh: var(--lh);
+  transform: translate(var(--lx), var(--ly)) rotate(var(--la));
+}
+
+.av-face .face-eye-r {
+  --ew: var(--rw);
+  --eh: var(--rh);
+  transform: translate(var(--rx), var(--ry)) rotate(var(--ra));
+}
+
+.av-face .face-eye rect {
+  x: calc(var(--ew) * -0.5);
+  y: calc(var(--eh) * -0.5);
+  width: var(--ew);
+  height: var(--eh);
+  rx: calc(var(--ew) * 0.5);
+  fill: #0b0b0d;
+  transition:
+    x 0.45s ease,
+    y 0.45s ease,
+    width 0.45s ease,
+    height 0.45s ease,
+    rx 0.45s ease;
+}
+
+.av-face .face-blink {
+  transform-box: view-box;
+  transform-origin: 0 0;
+}
+
+.av-face .face-alert {
+  opacity: 0;
+  fill: var(--a);
+  transform-box: view-box;
+  transform-origin: 50px 50px;
+  transform: scale(0.6);
+  transition:
+    opacity 0.25s ease,
+    transform 0.35s cubic-bezier(0.3, 1.45, 0.5, 1);
+  pointer-events: none;
+}
+
+/* Extras around the face: z's while asleep, a bead of sweat while working, a sparkle when done. */
+.av-face .face-zzz,
+.av-face .face-sweat,
+.av-face .face-sparkle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.av-face .face-z {
+  fill: color-mix(in srgb, var(--a) 30%, #ffffff);
+  font-family: ui-rounded, system-ui, sans-serif;
+  font-weight: 800;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.av-face .face-z-1 {
+  font-size: 17px;
+}
+
+.av-face .face-z-2 {
+  font-size: 14px;
+}
+
+.av-face .face-z-3 {
+  font-size: 11px;
+}
+
+/* Happy closed eyes (^ ^), only when done. */
+.av-face .face-happy {
+  opacity: 0;
+  fill: none;
+  stroke: #0b0b0d;
+  stroke-width: 6.5;
+  stroke-linecap: round;
+  transform-box: view-box;
+  transform-origin: 50px 46px;
+  transform: scale(0.6);
+  transition:
+    opacity 0.2s ease,
+    transform 0.3s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+.av-face .face-sweat {
+  fill: #9fd6ff;
+  transform-box: fill-box;
+  transform-origin: center top;
+}
+
+.av-face .face-sparkle {
+  fill: #ffd56a;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* The eyes sit on a sphere: looking far to a side moves them toward the edge and squeezes them together. */
+.av-face .face-gaze {
+  transform-origin: 50px 47px;
+}
+
+/* ── idle: a routine. Look around, notice you, get drowsy, doze off, startle awake. ─────────────────────────── */
+.av-face .face-ring {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.av-face .face-ring-track {
+  fill: none;
+  stroke: var(--a);
+  stroke-opacity: 0.25;
+  stroke-width: 2.5;
+}
+
+/* The arc is 22% of the ring; turned so its bright (clockwise) end is at the top at the start. */
+.av-face .face-ring-arc {
+  fill: none;
+  stroke: var(--a-hi);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-dasharray: 22 78;
+  transform-box: view-box;
+  transform-origin: 50px 50px;
+  transform: rotate(190.8deg);
+}
+
+.av-face.av-idle {
+  --lx: 39.5px;
+  --ly: 45px;
+  --la: 0deg;
+  --lw: 10px;
+  --lh: 22px;
+  --rx: 60.5px;
+  --ry: 45px;
+  --ra: 0deg;
+  --rw: 10px;
+  --rh: 22px;
+}
+
+.av-face.av-idle .face-gaze {
+  animation: av-face-idle-gaze 26s ease-in-out infinite;
+  animation-delay: var(--phase, 0s);
+}
+
+.av-face.av-idle .face-blink {
+  animation: av-face-idle-lids 26s ease-in-out infinite;
+  animation-delay: var(--phase, 0s);
+}
+
+.av-face.av-idle .face-body {
+  animation: av-face-idle-body 26s ease-in-out infinite;
+  animation-delay: var(--phase, 0s);
+}
+
+/* Idle gets drowsy (half-lidded) but never dozes: z's mean the agent is hibernating. */
+.av-face.av-idle .face-zzz {
+  opacity: 0;
+}
+
+.av-face.av-idle .face-z,
+.av-face.av-asleep .face-z {
+  animation: av-face-z 3s ease-out infinite;
+}
+
+.av-face.av-idle .face-z-2,
+.av-face.av-asleep .face-z-2 {
+  animation-delay: 1s;
+}
+
+.av-face.av-idle .face-z-3,
+.av-face.av-asleep .face-z-3 {
+  animation-delay: 2s;
+}
+
+@keyframes av-face-idle-gaze {
+  0%,
+  5% {
+    transform: translate(0, 0) scale(1);
+  }
+  8%,
+  13% {
+    transform: translate(-15px, -9px) scale(0.8, 0.95);
+  }
+  16%,
+  21% {
+    transform: translate(15px, -9px) scale(0.8, 0.95);
+  }
+  24%,
+  28% {
+    transform: translate(12px, 9px) scale(0.8, 0.95);
+  }
+  31%,
+  33% {
+    transform: translate(21px, 0) scale(0.42, 0.9);
+  }
+  36%,
+  40% {
+    transform: translate(0, 3px) scale(1.3);
+  }
+  44% {
+    transform: translate(0, 6px) scale(1);
+  }
+  52%,
+  84% {
+    transform: translate(0, 10px) scale(1.06, 1);
+  }
+  86% {
+    transform: translate(0, -3px) scale(1.45);
+  }
+  89% {
+    transform: translate(-18px, 0) scale(0.5, 0.95);
+  }
+  92% {
+    transform: translate(18px, 0) scale(0.5, 0.95);
+  }
+  96%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+@keyframes av-face-idle-lids {
+  0%,
+  6%,
+  7.2%,
+  22%,
+  23%,
+  24%,
+  34%,
+  35.2%,
+  41% {
+    transform: scaleY(1);
+  }
+  6.6%,
+  22.5%,
+  23.5%,
+  34.6% {
+    transform: scaleY(0.1);
+  }
+  44% {
+    transform: scaleY(0.5);
+  }
+  46% {
+    transform: scaleY(0.4);
+  }
+  47.5% {
+    transform: scaleY(0.55);
+  }
+  50%,
+  84% {
+    transform: scaleY(0.42);
+  }
+  86% {
+    transform: scaleY(1.3);
+  }
+  88%,
+  94%,
+  95.2%,
+  100% {
+    transform: scaleY(1);
+  }
+  94.6% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes av-face-idle-body {
+  0%,
+  6% {
+    transform: none;
+  }
+  10%,
+  14% {
+    transform: rotate(-2.5deg);
+  }
+  18%,
+  22% {
+    transform: rotate(2.5deg);
+  }
+  26% {
+    transform: rotate(1.5deg) translateY(1px);
+  }
+  32% {
+    transform: rotate(4deg);
+  }
+  36% {
+    transform: scale(1.04, 0.96);
+  }
+  38%,
+  41% {
+    transform: none;
+  }
+  44% {
+    transform: rotate(-1.5deg) translateY(2px);
+  }
+  46% {
+    transform: rotate(-2.5deg) translateY(5px);
+  }
+  47% {
+    transform: rotate(-0.5deg) translateY(1px);
+  }
+  49% {
+    transform: rotate(-1.5deg) translateY(4px);
+  }
+  52%,
+  64%,
+  76% {
+    transform: translateY(3px) scale(1.03, 0.96);
+  }
+  58%,
+  70%,
+  82% {
+    transform: translateY(3px) scale(0.99, 1);
+  }
+  85% {
+    transform: translateY(4px) scale(1.07, 0.92);
+  }
+  87% {
+    transform: translateY(-7px) scale(0.94, 1.08);
+  }
+  89% {
+    transform: scale(1.04, 0.96);
+  }
+  91% {
+    transform: rotate(-2deg);
+  }
+  93% {
+    transform: rotate(2deg);
+  }
+  96%,
+  100% {
+    transform: none;
+  }
+}
+
+@keyframes av-face-idle-zzz {
+  0%,
+  52% {
+    opacity: 0;
+  }
+  55%,
+  82% {
+    opacity: 1;
+  }
+  84%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes av-face-z {
+  0% {
+    opacity: 0;
+    transform: translate(-2px, 5px) scale(0.6);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(4px, -7px) scale(1.1);
+  }
+}
+
+/* ── sleeping (nothing for a long while): the asleep part of idle, nonstop ──────────────────────────────────── */
+.av-face.av-asleep .face-gaze {
+  transform: translate(0, 10px) scale(1.06, 1);
+}
+
+.av-face.av-asleep .face-body {
+  animation: av-face-breathe 4s ease-in-out infinite;
+}
+
+.av-face.av-asleep .face-zzz {
+  opacity: 1;
+}
+
+/* ── thinking: the skeptical look (one pill, one dash), drifting along the top, head rocking ───────────────── */
+.av-face.av-thinking {
+  --lx: 39px;
+  --ly: 42px;
+  --la: 0deg;
+  --lw: 13px;
+  --lh: 16px;
+  --rx: 61px;
+  --ry: 42px;
+  --ra: 0deg;
+  --rw: 13px;
+  --rh: 16px;
+}
+
+.av-face.av-thinking .face-gaze {
+  animation: av-face-ponder 5s ease-in-out infinite;
+}
+
+.av-face.av-thinking .face-body {
+  animation: av-face-muse 5s ease-in-out infinite;
+}
+
+.av-face.av-thinking .face-blink {
+  animation: av-face-wonder 4.2s ease-in-out infinite;
+}
+
+@keyframes av-face-ponder {
+  0%,
+  100% {
+    transform: translate(-9px, -6px) scale(0.86, 1);
+  }
+  35%,
+  50% {
+    transform: translate(9px, -9px) scale(0.86, 1);
+  }
+  75% {
+    transform: translate(0, -11px) scale(0.95, 1);
+  }
+}
+
+@keyframes av-face-muse {
+  0%,
+  100% {
+    transform: rotate(-5deg);
+  }
+  40% {
+    transform: rotate(5deg) translateY(-1px);
+  }
+  75% {
+    transform: rotate(0) translateY(-2px);
+  }
+}
+
+/* ── working: focused, reading line by line, bouncing; now and then a bead of sweat ───────────────────────── */
+.av-face.av-working {
+  --lx: 38px;
+  --ly: 47px;
+  --la: -10deg;
+  --lw: 14px;
+  --lh: 14px;
+  --rx: 62px;
+  --ry: 47px;
+  --ra: 10deg;
+  --rw: 14px;
+  --rh: 14px;
+}
+
+.av-face.av-working .face-gaze {
+  animation: av-face-read 2.4s ease-in-out infinite;
+}
+
+.av-face.av-working .face-body {
+  animation: av-face-bounce 0.6s ease-in-out infinite alternate;
+}
+
+.av-face.av-working .face-sweat {
+  animation: av-face-sweat 4.5s ease-in infinite;
+}
+
+@keyframes av-face-read {
+  0% {
+    transform: translate(-9px, -1px) scale(0.9, 1);
+  }
+  38% {
+    transform: translate(9px, -1px) scale(0.9, 1);
+  }
+  46% {
+    transform: translate(-9px, 4px) scale(0.9, 1);
+  }
+  84% {
+    transform: translate(9px, 4px) scale(0.9, 1);
+  }
+  92%,
+  100% {
+    transform: translate(-9px, -1px) scale(0.9, 1);
+  }
+}
+
+@keyframes av-face-bounce {
+  from {
+    transform: translateY(0) scale(1.03, 0.97);
+  }
+  to {
+    transform: translateY(-3px) scale(0.98, 1.03);
+  }
+}
+
+@keyframes av-face-sweat {
+  0%,
+  55% {
+    opacity: 0;
+    transform: translateY(0) scale(0.6);
+  }
+  62% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  92%,
+  100% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.8);
+  }
+}
+
+/* ── waiting: searching; peeks off one edge, then the other, then up ──────────────────────────────────────── */
+.av-face.av-waiting {
+  --lx: 39px;
+  --ly: 46px;
+  --la: 0deg;
+  --lw: 12px;
+  --lh: 15px;
+  --rx: 61px;
+  --ry: 46px;
+  --ra: 0deg;
+  --rw: 12px;
+  --rh: 15px;
+}
+
+.av-face.av-waiting .face-gaze {
+  animation: av-face-follow 3s linear infinite;
+}
+
+.av-face.av-waiting .face-blink {
+  animation: av-face-blink 2.6s infinite;
+}
+
+.av-face.av-waiting .face-ring {
+  opacity: 1;
+}
+
+.av-face.av-waiting .face-ring-arc {
+  animation: av-face-ring 3s linear infinite;
+}
+
+@keyframes av-face-search {
+  0%,
+  18% {
+    transform: translate(-19px, 0) scale(0.48, 0.95);
+  }
+  40%,
+  58% {
+    transform: translate(19px, -2px) scale(0.48, 0.95);
+  }
+  78%,
+  92% {
+    transform: translate(0, -12px) scale(0.92, 0.85);
+  }
+  100% {
+    transform: translate(-19px, 0) scale(0.48, 0.95);
+  }
+}
+
+@keyframes av-face-tap {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-1.5px);
+  }
+}
+
+/* ── blocked: just a "!", waving at you ───────────────────────────────────────────────────────────────────── */
+.av-face.av-attention .face-body {
+  opacity: 0;
+  transform: scale(0.3);
+}
+
+.av-face.av-attention .face-alert {
+  opacity: 1;
+  transform: scale(1);
+  transform-origin: 50px 90px;
+  animation: av-face-wave 2.4s ease-in-out infinite;
+}
+
+@keyframes av-face-wave {
+  0%,
+  50%,
+  100% {
+    transform: rotate(0) translateY(0);
+  }
+  8% {
+    transform: rotate(-13deg);
+  }
+  16% {
+    transform: rotate(11deg);
+  }
+  24% {
+    transform: rotate(-7deg);
+  }
+  32% {
+    transform: rotate(3deg);
+  }
+  70% {
+    transform: translateY(-3px);
+  }
+}
+
+/* ── done: happy round eyes squinting into a smile, two hops, a sparkle ───────────────────────────────────── */
+.av-face.av-done {
+  --lx: 40px;
+  --ly: 45px;
+  --la: 0deg;
+  --lw: 11px;
+  --lh: 13px;
+  --rx: 60px;
+  --ry: 45px;
+  --ra: 0deg;
+  --rw: 11px;
+  --rh: 13px;
+}
+
+.av-face.av-done .face-gaze {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.av-face.av-done .face-happy {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.av-face.av-done .face-body {
+  animation: av-face-hop 0.65s cubic-bezier(0.3, 0.7, 0.4, 1) 2;
+}
+
+.av-face.av-done .face-sparkle {
+  animation: av-face-sparkle 1.4s ease-out forwards;
+}
+
+@keyframes av-face-sparkle {
+  0% {
+    opacity: 0;
+    transform: scale(0.2) rotate(0);
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1.15) rotate(45deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.6) rotate(90deg);
+  }
+}
+
+/* ── error: a head shake, then droops with downcast eyes ──────────────────────────────────────────────────── */
+.av-face.av-error {
+  --lx: 38.5px;
+  --ly: 58px;
+  --la: 14deg;
+  --lw: 12px;
+  --lh: 16px;
+  --rx: 61.5px;
+  --ry: 58px;
+  --ra: -14deg;
+  --rw: 12px;
+  --rh: 16px;
+}
+
+.av-face.av-error .face-body {
+  animation: av-face-shake 1.4s ease-in-out forwards;
+}
+
+.av-face.av-error .face-disc {
+  fill: color-mix(in srgb, var(--a) 65%, #6b6b73);
+}
+
+@keyframes av-face-shake {
+  0% {
+    transform: none;
+  }
+  12% {
+    transform: rotate(-7deg);
+  }
+  28% {
+    transform: rotate(7deg);
+  }
+  44% {
+    transform: rotate(-5deg);
+  }
+  60% {
+    transform: rotate(3deg);
+  }
+  100% {
+    transform: scaleY(0.95) translateY(2px);
+  }
+}
+
+/* ── off: grey, eyes shut, still ──────────────────────────────────────────────────────────────────────────── */
+.av-face.av-off,
+.av-face.av-asleep {
+  --lx: 38px;
+  --ly: 50px;
+  --la: 90deg;
+  --lw: 5px;
+  --lh: 16px;
+  --rx: 62px;
+  --ry: 50px;
+  --ra: 90deg;
+  --rw: 5px;
+  --rh: 16px;
+}
+
+.av-face.av-asleep .face-blink {
+  transform: none;
+}
+
+.av-face.av-off .face-disc {
+  fill: #5b5b63;
+}
+
+@keyframes av-face-blink {
+  0%,
+  90%,
+  100% {
+    transform: scaleY(1);
+  }
+  94% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes av-face-hop {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  20% {
+    transform: translateY(2px) scale(1.06, 0.93);
+  }
+  50% {
+    transform: translateY(-7px) scale(0.95, 1.07);
+  }
+  80% {
+    transform: translateY(0) scale(1.04, 0.96);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes av-face-breathe {
+  0%,
+  100% {
+    transform: translateY(3px) scale(1.03, 0.96);
+  }
+  50% {
+    transform: translateY(3px) scale(0.99, 1);
+  }
+}
+
+@keyframes av-face-alert {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    transform: scale(1.06) translateY(-2px);
+  }
+}
+
+/* An error keeps the agent's own colour here (the face greys itself); the others turn red. */
+.av-face.av-error {
+  --h: var(--agent-h, 250);
+}
+
+.av-face.av-off {
+  filter: none;
+}
+
+/* ── Eyes that swell (thinking) and eyes that follow a loading ring (waiting) ──────────────────────────────── */
+
+@keyframes av-face-wonder {
+  0%,
+  86%,
+  100% {
+    transform: scale(1);
+  }
+  30%,
+  56% {
+    transform: scale(1.22);
+  }
+  89% {
+    transform: scale(1, 0.1);
+  }
+  93% {
+    transform: scale(1);
+  }
+}
+
+/* A circle of radius 7, starting at the top and going clockwise, in step with the ring's bright end. */
+@keyframes av-face-follow {
+  0%,
+  100% {
+    transform: translate(0, -7px);
+  }
+  12.5% {
+    transform: translate(4.95px, -4.95px);
+  }
+  25% {
+    transform: translate(7px, 0);
+  }
+  37.5% {
+    transform: translate(4.95px, 4.95px);
+  }
+  50% {
+    transform: translate(0, 7px);
+  }
+  62.5% {
+    transform: translate(-4.95px, 4.95px);
+  }
+  75% {
+    transform: translate(-7px, 0);
+  }
+  87.5% {
+    transform: translate(-4.95px, -4.95px);
+  }
+}
+
+@keyframes av-face-ring {
+  from {
+    transform: rotate(190.8deg);
+  }
+  to {
+    transform: rotate(550.8deg);
+  }
+}

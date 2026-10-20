@@ -135,7 +135,7 @@ function demoReply(messages: readonly Message[], name: string): AssistantMessage
 		fauxThinking("No tool needed."),
 		fauxText(
 			`Hi, I'm ${name}. I'm running on a **scripted demo model**, so this reply is canned.\n\n` +
-				`You said: "${text}". This is message ${turns} in this chat. It's stored durably in PostgreSQL, so it survives my pod being restarted or hibernated. Ask me the time to see a tool call.`,
+				`You said: "${text}". This is message ${turns} in this chat. It's stored durably in this agent's own SQLite file, so it survives the app quitting, a crash, or me going to sleep. Ask me the time to see a tool call.`,
 		),
 	]);
 }

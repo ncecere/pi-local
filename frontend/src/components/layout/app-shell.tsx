@@ -1,0 +1,154 @@
+import { useNavigate, useRouterState } from '@tanstack/react-router';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { CommandPalette } from '~/components/command-palette/command-palette';
+import { Sidebar } from '~/components/layout/sidebar';
+import { SkipLink } from '~/components/layout/skip-link';
+import { TopBar } from '~/components/layout/top-bar';
+import { useCommandPalette } from '~/hooks/use-command-palette';
+import { useGlobalShortcuts } from '~/hooks/use-global-shortcuts';
+import { useInboxSync, useInboxTracker } from '~/hooks/use-inbox';
+import { usePlatformEvents } from '~/hooks/use-platform-events';
+import { focusComposerSoon, focusWhenReady } from '~/lib/focus-after-navigation';
+import { cn } from '~/lib/utils';
+
+function GlobalShortcuts({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+  const navigate = useNavigate();
+  useGlobalShortcuts({
+    onNewChat: () => {
+      // Typing straight after the shortcut goes into the new chat (#251).
+      void navigate({ to: '/' }).then(focusComposerSoon);
+    },
+    onToggleSidebar,
+  });
+  return null;
+}
+
+/**
+ * Desktop shell: sidebar, a full-width top bar carrying the global controls,
+ * and an inset rounded main panel below it.
+ */
+const DOCKED_SIDEBAR = '(min-width: 1024px)';
+const DRAWER = 'aside[aria-label="Conversation sidebar"]';
+
+export function AppShell({ children }: { children: ReactNode }) {
+  // Conversations as they change on the platform: lists and inbox, live.
+  usePlatformEvents();
+  // When that stream is down, replies being written elsewhere are checked on here.
+  useInboxTracker();
+  // Pinned, snoozed, done and read follow the person to every device.
+  useInboxSync();
+  // A drawer below 1024px, as on phones: docked at 768 it left the chat 512px,
+  // wrapping the model name and squeezing Send (#109).
+  const [mobile, setMobile] = useState(() => !window.matchMedia(DOCKED_SIDEBAR).matches);
+  const [sidebarOpen, setSidebarOpen] = useState(() => !mobile);
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const previousPathname = useRef(pathname);
+  const commandPalette = useCommandPalette();
+
+  useEffect(() => {
+    const query = window.matchMedia(DOCKED_SIDEBAR);
+    const onChange = (event: MediaQueryListEvent) => {
+      setMobile(!event.matches);
+      setSidebarOpen(event.matches);
+    };
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+
+  // The mobile drawer closes after any successful navigation.
+  useEffect(() => {
+    const navigated = previousPathname.current !== pathname;
+    previousPathname.current = pathname;
+    if (!mobile || !navigated) return;
+    setSidebarOpen(false);
+    // A conversation chosen in the drawer: the link hides with the drawer and
+    // focus fell to the body (#242). It goes to the page the person asked
+    // for instead, the skip link's target, unless the page took it itself.
+    if (!document.activeElement?.closest(DRAWER)) return;
+    focusWhenReady(() => document.getElementById('main-content'), {
+      until: () => {
+        const active = document.activeElement;
+        return Boolean(active && active !== document.body && !active.closest(DRAWER));
+      },
+    });
+  }, [mobile, pathname]);
+
+  useEffect(() => {
+    if (!mobile || !sidebarOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setSidebarOpen(false);
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>('[aria-label="Open sidebar"]')?.focus();
+      });
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [mobile, sidebarOpen]);
+
+  function closeSidebar() {
+    setSidebarOpen(false);
+    if (!mobile) return;
+    // Back to "Open sidebar" once the page behind is no longer inert, unless
+    // the page has already taken focus (a navigation from the drawer, #242).
+    focusWhenReady(() => document.querySelector<HTMLElement>('[aria-label="Open sidebar"]'), {
+      until: () => {
+        const active = document.activeElement;
+        return Boolean(active && active !== document.body && !active.closest(DRAWER));
+      },
+    });
+  }
+
+  return (
+    <>
+      <GlobalShortcuts
+        onToggleSidebar={() => (sidebarOpen ? closeSidebar() : setSidebarOpen(true))}
+      />
+      <div className="flex h-dvh overflow-hidden bg-[var(--bg-app)]">
+        {/* Its target is inert behind the drawer, and Shift+Tab from the
+            drawer's first control went to it, out of the modal (#191). */}
+        <SkipLink inert={mobile && sidebarOpen} />
+        <Sidebar open={sidebarOpen} mobile={mobile} onToggle={closeSidebar} />
+
+        <div
+          className="flex min-w-0 flex-1 flex-col"
+          inert={mobile && sidebarOpen ? true : undefined}
+        >
+          <TopBar
+            sidebarOpen={sidebarOpen}
+            onOpenSidebar={() => setSidebarOpen(true)}
+            onOpenCommandPalette={commandPalette.show}
+          />
+          <main className="flex min-h-0 flex-1 flex-col rounded-tl-xl bg-[var(--bg-root)] bg-[image:var(--root-gradient)]">
+            {/*
+             * The top bar's floating controls (absolute, top-6, about 2.6rem
+             * tall) get a strip of their own, always: the page scrolls below
+             * it rather than under them, where they hid a conversation's first
+             * lines (#166). Announcements sit below the strip, outside the
+             * scroller, so they are not lost when the conversation scrolls.
+             */}
+            <div
+              data-banners
+              className={cn('shrink-0', sidebarOpen ? 'pt-[3.25rem]' : 'pt-[4.25rem]')}
+            />
+            <div
+              id="main-content"
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region needs keyboard access per WCAG 2.1.1, and this doubles as the skip-link target
+              tabIndex={0}
+              className="scrollbar-thin min-h-0 flex-1 overflow-y-auto"
+            >
+              {children}
+            </div>
+          </main>
+        </div>
+
+        <CommandPalette
+          open={commandPalette.open}
+          onOpenChange={commandPalette.setOpen}
+          sidebarOpen={sidebarOpen}
+          onSidebarOpenChange={setSidebarOpen}
+        />
+      </div>
+    </>
+  );
+}
