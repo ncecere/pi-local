@@ -264,7 +264,8 @@ describe('"Approve and always allow this"', () => {
       tool: 'bash',
       args: { command: 'npm run*' },
     });
-    expect(rule('ls -la')).toEqual({ tool: 'bash', args: { command: 'ls*' } });
+    expect(rule('ls -la')).toEqual({ tool: 'bash', args: { command: 'ls -la*' } });
+    expect(rule('git --version')).toEqual({ tool: 'bash', args: { command: 'git --version*' } });
     expect(rule('ls')).toEqual({ tool: 'bash', args: { command: 'ls*' } });
     expect(rule('cat ./notes.md')).toEqual({ tool: 'bash', args: { command: 'cat*' } });
     expect(rule('git status 2>&1')).toEqual({ tool: 'bash', args: { command: 'git status*' } });

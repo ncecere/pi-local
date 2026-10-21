@@ -260,7 +260,7 @@ export function isCompoundCommand(command: string): boolean {
 /**
  * The rule "Approve and always allow this" adds for a call: for a shell
  * command its first word and subcommand (`git status --short` → `git status*`,
- * `ls -la` → `ls*`), for any other tool the tool alone. Null when no allow
+ * `git --version` → `git --version*`), for any other tool the tool alone. Null when no allow
  * rule could cover the call (a compound command, or an empty one).
  */
 export function suggestRule(
@@ -273,8 +273,10 @@ export function suggestRule(
   if (command === null || isCompoundCommand(command)) return null;
   const [first, second] = command.trim().split(/\s+/);
   if (!first) return null;
-  // A subcommand is a plain word (`status`, `run`), not an option, a path or a value.
-  const sub = second && /^[A-Za-z][A-Za-z0-9:_-]*$/.test(second) ? ` ${second}` : '';
+  // A subcommand is a plain word (`status`, `run`). When the next word is an option (`git --version`, `ls -la`) it is
+  // kept too, so one harmless call doesn't allow every `git` command.
+  const sub =
+    second && /^(?:[A-Za-z][A-Za-z0-9:_-]*|-[A-Za-z0-9-]+)$/.test(second) ? ` ${second}` : '';
   return { tool, args: { command: `${first}${sub}*` } };
 }
 

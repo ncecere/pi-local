@@ -376,7 +376,7 @@ Templates carry the profile and tools but never rules.
 
 **Approve and always allow this.** The approval card offers it unless the request came from a `builtin` or `rule` ask
 or an agent's own code (`source`). It adds the rule, then approves: for `bash` the command's first word and subcommand
-(`git status --short` → `{tool: "bash", args: {command: "git status*"}}`; `ls -la` → `ls*`), for any other tool the
+(`git status --short` → `{tool: "bash", args: {command: "git status*"}}`; an option counts as the subcommand, so `git --version` → `git --version*`, not every `git` command; `cat notes.md` → `cat*`), for any other tool the
 tool alone. It isn't offered for a compound command (an allow rule would never match it).
 
 **Fast-judgment tightening.** With fast judgments on and the `approvals` use switched on (Settings → Models), a call
