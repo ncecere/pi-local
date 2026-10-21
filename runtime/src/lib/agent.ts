@@ -28,6 +28,7 @@ import { createRuntimeServer } from "./server.ts";
 import { AgentOwnedElsewhereError, openSqliteAgentStorage } from "./storage/sqlite.ts";
 import { gatewayCall, gatewayPost, ThreadStatusReporter } from "./thread-status.ts";
 import { ThreadStore } from "./threads.ts";
+import { knowledgeExtension } from "./knowledge.ts";
 import { memoryExtension } from "./memory.ts";
 import { type Complete, extractFacts, turnsOf } from "./memory-extract.ts";
 import type { ImageContent, ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
@@ -38,7 +39,7 @@ import { ModelChoices } from "./model-choices.ts";
 import { personExtension, TodoDoc } from "./person.ts";
 import { parseSkillSources, skillsExtension } from "./skills.ts";
 import { parseWebTools, webExtension } from "./web.ts";
-import { createWorkspaceEnv, parseSandboxEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
+import { createWorkspaceEnv, parseKnowledgeFolders, parseSandboxEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
 
 /** Everything one agent needs, from the environment the app starts the runtime with. */
 export type AgentConfig = {
@@ -130,7 +131,16 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	if (workspaceTools.length > 0 && !workspaceDir) throw new AgentDefinitionError("WORKSPACE_TOOLS needs WORKSPACE_DIR");
 	const workspaceTemp = workspaceDir ? (config.modelEnv.WORKSPACE_TEMP_DIR ?? `${workspaceDir.replace(/\/$/, "")}/../tmp`) : undefined;
 	const workspace = workspaceExtension(workspaceTools, workspaceTemp ? { convertedDir: `${workspaceTemp.replace(/\/$/, "")}/converted` } : {});
-	const workspaceEnv = workspaceDir ? createWorkspaceEnv({ root: workspaceDir, tempDir: workspaceTemp!, processEnv: config.modelEnv, sandbox: parseSandboxEnv(config.modelEnv) }) : undefined;
+	// The knowledge folders (KNOWLEDGE_FOLDERS) can be read, never changed, by the file tools.
+	const workspaceEnv = workspaceDir
+		? createWorkspaceEnv({
+				root: workspaceDir,
+				tempDir: workspaceTemp!,
+				processEnv: config.modelEnv,
+				sandbox: parseSandboxEnv(config.modelEnv),
+				readOnlyRoots: parseKnowledgeFolders(config.modelEnv.KNOWLEDGE_FOLDERS),
+			})
+		: undefined;
 	// Tool preselection (fast judgments): with deferred tools (many MCP tools), the app may judge which ones a message
 	// needs, and they are loaded before the model runs, as tool_search would (small models often skip tool_search).
 	const pickTools =
@@ -195,6 +205,11 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	// an agent that has skills; their files are read from disk on each use.
 	const skillSources = parseSkillSources(config.modelEnv.SKILL_DIRS);
 	const skills = skillSources.length > 0 ? skillsExtension({ sources: skillSources }) : undefined;
+	// Knowledge folders (KNOWLEDGE=on): search_knowledge, through the gateway.
+	const knowledge =
+		config.modelEnv.KNOWLEDGE === "on" && config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
+			? knowledgeExtension({ gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL, key: config.modelEnv.PLATFORM_KEY })
+			: undefined;
 	// Asking other agents (AGENT_CALLS, with the gateway): the app decides who may be asked (agent-calls.ts).
 	const calling = config.modelEnv.AGENT_CALLS === "true" && !!config.modelEnv.PLATFORM_GATEWAY_URL && !!config.modelEnv.PLATFORM_KEY;
 	const builder = builderEnabled(config.modelEnv) ? agentBuilder({ gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL!, key: config.modelEnv.PLATFORM_KEY! }) : undefined;
@@ -206,6 +221,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		...(web ? [web] : []),
 		...(skills ? [skills] : []),
 		...(memory ? [memory] : []),
+		...(knowledge ? [knowledge] : []),
 		...(person ? [person] : []),
 		...(calling
 			? [

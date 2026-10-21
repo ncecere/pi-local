@@ -4,7 +4,12 @@
 //   runtime.mjs mcp-probe   connect to one MCP server, sign in if asked, list its tools (src/lib/probe.ts).
 //   runtime.mjs version     print {contractVersion, piDurableVersion} as JSON: the app checks, before it starts an
 //                           agent, that this runtime is not older than the one that last wrote the agent's storage.
-if (process.argv[2] === "version") {
+//   runtime.mjs --extract <file>   a document's text as Markdown on stdout (the app's knowledge index);
+//   runtime.mjs --extract --batch  paths on stdin, one JSON line per file on stdout (src/lib/extract.ts).
+if (process.argv[2] === "--extract") {
+	const { processIo, runExtract } = await import("./lib/extract.ts");
+	process.exit(await runExtract(process.argv.slice(3), processIo()));
+} else if (process.argv[2] === "version") {
 	const { CONTRACT_VERSION, PI_DURABLE_VERSION } = await import("./lib/version.ts");
 	console.log(JSON.stringify({ contractVersion: CONTRACT_VERSION, piDurableVersion: PI_DURABLE_VERSION }));
 } else if (process.argv[2] === "apple-mcp") {

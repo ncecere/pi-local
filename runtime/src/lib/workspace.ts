@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { lstat, mkdir, mkdtemp, realpath, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -42,6 +42,21 @@ const PATH_ARGS: Record<string, number[]> = {
 	remove: [0],
 };
 
+/** The operations that only read. Folders the agent may read but not change (its knowledge folders) allow only these. */
+const READ_ONLY_OPS = new Set([
+	"openTextLineReader",
+	"readTextFile",
+	"readTextLines",
+	"readBinaryFile",
+	"openBinaryReader",
+	"fileInfo",
+	"listDir",
+	"listFiles",
+	"openDirReader",
+	"canonicalPath",
+	"exists",
+]);
+
 export type WorkspaceEnvOptions = {
 	/** The folder the agent's tools may touch. Created when missing. */
 	root: string;
@@ -55,6 +70,13 @@ export type WorkspaceEnvOptions = {
 	 * folders (and /tmp), the network on or off. Absent: commands run unconfined, as the person's own shell would.
 	 */
 	sandbox?: WorkspaceSandbox;
+	/**
+	 * Folders outside the workspace the file tools may read, never change (the agent's knowledge folders): reading,
+	 * listing and stat work in them; every write, rename, remove and `watch` is refused there as anywhere outside the
+	 * workspace. Symlinks are followed first, so a link in one of them to somewhere else is still refused. Folders that
+	 * don't exist are left out.
+	 */
+	readOnlyRoots?: readonly string[];
 };
 
 export type WorkspaceSandbox = {
@@ -68,6 +90,17 @@ export type WorkspaceSandbox = {
 	/** The OS's sandbox (default: the running OS's). For tests. */
 	platform?: SandboxPlatform;
 };
+
+/** KNOWLEDGE_FOLDERS: the agent's knowledge folders, as a JSON array of absolute paths. Anything else is ignored. */
+export function parseKnowledgeFolders(raw: string | undefined): string[] {
+	if (!raw) return [];
+	try {
+		const list: unknown = JSON.parse(raw);
+		return Array.isArray(list) ? list.filter((p): p is string => typeof p === "string" && isAbsolute(p)) : [];
+	} catch {
+		return [];
+	}
+}
 
 /**
  * The sandbox settings in the runtime's environment: `WORKSPACE_SANDBOX=on` turns it on, `WORKSPACE_SANDBOX_NETWORK=off`
@@ -156,12 +189,21 @@ export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 	mkdirSync(options.root, { recursive: true });
 	mkdirSync(options.tempDir, { recursive: true });
 	const roots = [realpathSync(options.root), realpathSync(options.tempDir)];
+	const readOnlyRoots: string[] = [];
+	for (const folder of options.readOnlyRoots ?? []) {
+		try {
+			// A configured directory that became a link must not grant access to its new target on restart.
+			if (lstatSync(folder).isDirectory()) readOnlyRoots.push(realpathSync(folder));
+		} catch {
+			// A folder that isn't there (an unplugged drive) gives access to nothing.
+		}
+	}
 	const processEnv = options.processEnv ?? process.env;
 	const shellEnv: NodeJS.ProcessEnv = { TMPDIR: roots[1] };
 	for (const key of SHELL_ENV_KEEP) if (processEnv[key] !== undefined && key !== "TMPDIR") shellEnv[key] = processEnv[key];
 	const base = new AgentTempEnv({ cwd: roots[0]!, shellEnv }, roots[1]!);
 
-	const check = async (path: unknown): Promise<FileError | undefined> => {
+	const check = async (path: unknown, readOnly = false): Promise<FileError | undefined> => {
 		if (typeof path !== "string") return new FileError("invalid", "A path must be a string");
 		if (path.includes("\0")) return new FileError("invalid", "A path cannot contain a NUL character", path);
 		let real: string;
@@ -175,6 +217,7 @@ export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 			return new FileError("permission_denied", `Cannot resolve ${path}: ${(error as Error).message}`, path);
 		}
 		if (roots.some((root) => inside(root, real))) return undefined;
+		if (readOnly && readOnlyRoots.some((root) => inside(root, real))) return undefined;
 		return new FileError("permission_denied", `${path} is outside the agent's workspace (${roots[0]}); only files inside it can be used`, path);
 	};
 
@@ -211,9 +254,10 @@ export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 		);
 	}
 	for (const [method, positions] of Object.entries(PATH_ARGS)) {
+		const readOnly = READ_ONLY_OPS.has(method);
 		guarded[method] = async (...args: unknown[]) => {
 			for (const i of positions) {
-				const problem = await check(args[i]);
+				const problem = await check(args[i], readOnly);
 				if (problem) return err(problem);
 			}
 			return (base as unknown as Record<string, (...a: unknown[]) => unknown>)[method]!.apply(base, args);

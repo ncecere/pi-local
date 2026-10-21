@@ -44,7 +44,7 @@ type Template struct {
 	Schedule *Schedule `yaml:"schedule,omitempty" json:"schedule,omitempty"`
 	// MCP names the MCP servers it works with (their IDs in Settings → MCP), used when this computer has them.
 	MCP []string `yaml:"mcp,omitempty" json:"mcp,omitempty"`
-	// Needs says what makes it work well ("web-search"), so the gallery can say what to set up.
+	// Needs says what makes it work well ("web-search", "knowledge"), so the gallery can say what to set up.
 	Needs []string `yaml:"needs,omitempty" json:"needs,omitempty"`
 	// Builtin: shipped with the app (not editable or deletable).
 	Builtin bool `yaml:"-" json:"builtin"`
@@ -105,7 +105,7 @@ func New(dir string) (*Store, error) {
 		t.Builtin = true
 		s.builtin = append(s.builtin, *t)
 	}
-	order := map[string]int{"assistant": 0, "researcher": 1, "writer": 2, "daily-briefing": 3, "translator": 4, "planner": 5, "coding": 6, "agent-builder": 7, "concierge": 8, "meeting-helper": 9}
+	order := map[string]int{"assistant": 0, "researcher": 1, "writer": 2, "daily-briefing": 3, "translator": 4, "planner": 5, "document-qa": 6, "coding": 7, "agent-builder": 8, "concierge": 9, "meeting-helper": 10}
 	sort.SliceStable(s.builtin, func(i, j int) bool { return order[s.builtin[i].ID] < order[s.builtin[j].ID] })
 	return s, nil
 }

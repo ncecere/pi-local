@@ -41,6 +41,7 @@ import (
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
 	"github.com/ncecere/pi-local/internal/judge"
+	"github.com/ncecere/pi-local/internal/knowledge"
 	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/memory"
 	"github.com/ncecere/pi-local/internal/models"
@@ -78,6 +79,10 @@ type Config struct {
 	// native desktop's private UI transport may enable bundled Apple creation tools.
 	// Headless/unauthenticated hosts must leave this false.
 	TrustedHumanConfirmations bool
+	// KnowledgeInterval is how often knowledge folders are checked for changes (default 30 s; tests make it short).
+	KnowledgeInterval time.Duration
+	// OpenFile opens (or reveals) a knowledge file the person clicked; nil: the system's opener (tests give their own).
+	OpenFile func(path string, reveal bool) error
 }
 
 // App is a running Pi Local.
@@ -97,10 +102,12 @@ type App struct {
 	Asks      *asks.Broker
 	Approvals *approvals.Store
 	// Activity is the audit log.
-	Activity   *activity.Store
-	MCP        *mcp.Catalog
-	Schedules  *schedules.Store
-	Search     *search.Store
+	Activity  *activity.Store
+	MCP       *mcp.Catalog
+	Schedules *schedules.Store
+	Search    *search.Store
+	// Knowledge indexes the documents in agents' knowledge folders.
+	Knowledge  *knowledge.Service
 	Updater    *update.Updater
 	notifyMu   sync.Mutex
 	lastNotify map[string]time.Time
@@ -286,6 +293,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return id
 	}
 	a.Search = search.New(db)
+	a.Knowledge = knowledge.New(knowledge.NewStore(db), knowledge.NodeExtractor{Runtime: cfg.Runtime}, cfg.KnowledgeInterval, func() { a.Hub.Publish("knowledge", map[string]any{}) })
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
 		// A conversation quiet for ten minutes after a reply is read for suggestions (when the person turned them on).
@@ -374,18 +382,20 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Builder: func(ctx context.Context, caller, action string, body json.RawMessage) (any, error) {
 		return a.API.BuilderCall(ctx, caller, action, body)
-	}, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, Activity: a.Activity, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, JudgeApproval: a.Judge.RiskyCall, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
+	}, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, Activity: a.Activity, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, Knowledge: knowledgeGateway{a}, PickTools: a.Judge.PickTools, JudgeApproval: a.Judge.RiskyCall, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, Activity: a.Activity, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, Skills: a.Skills, Prompts: a.Prompts, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, Activity: a.Activity, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Knowledge: a.Knowledge, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, Skills: a.Skills, Prompts: a.Prompts, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
 	// An agent's own skills changed: its next call resolves its configuration again (the runtime has the skills tool only
 	// while there are skills), and restarts it if that differs.
 	a.API.SkillsChanged = a.Sup.Invalidate
 	a.Agents.OnChange(func(c agents.Change) {
+		// Its knowledge folders may have changed (or gone with it).
+		a.syncKnowledge()
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
 			a.Approvals.ForgetAgent(context.Background(), c.AgentID)
@@ -459,6 +469,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.Schedules.Start()
 	a.Backups.Start()
+	// Knowledge folders are read again now (only what changed since the last run), then watched.
+	a.Knowledge.Start()
+	a.syncKnowledge()
 	ok = true
 	return a, nil
 }
@@ -610,6 +623,8 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 		raw, _ := json.Marshal(skillSources)
 		env["SKILL_DIRS"] = string(raw)
 	}
+	// Knowledge folders: search_knowledge, and the folders the file tools may read (never write).
+	knowledgeEnv(ag.Config.Knowledge.Folders, env)
 	// Secret scrubbing of what tools return (on unless the agent's agent.yaml turns it off); logs are always cleaned.
 	env["SCRUB_SECRETS"] = strconv.FormatBool(ag.Config.Security.Scrub())
 	// ask_person, notify_person and todo.
@@ -955,6 +970,9 @@ func (a *App) Close() {
 	}
 	if a.MCP != nil {
 		a.MCP.Close()
+	}
+	if a.Knowledge != nil {
+		a.Knowledge.Close() // before app.db closes
 	}
 	if a.Sup != nil {
 		a.Sup.Close()

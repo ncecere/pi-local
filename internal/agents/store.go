@@ -292,6 +292,7 @@ func copyOf(a *Agent) *Agent {
 	c.Config.CanCall = append([]string(nil), a.Config.CanCall...)
 	c.Config.Workspace.Tools = append([]string(nil), a.Config.Workspace.Tools...)
 	c.Config.Approvals.Tools = append([]string(nil), a.Config.Approvals.Tools...)
+	c.Config.Knowledge.Folders = append([]string(nil), a.Config.Knowledge.Folders...)
 	c.Config.Approvals.Rules = nil
 	for _, r := range a.Config.Approvals.Rules {
 		c.Config.Approvals.Rules = append(c.Config.Approvals.Rules, r.Copy())
@@ -436,7 +437,7 @@ func (s *Store) UpdatePrepared(ctx context.Context, id string, fn func(*Config),
 	}
 	fn(&cfg)
 	cfg.Normalize()
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.ValidateChange(current.Config); err != nil {
 		return nil, err
 	}
 	if cfg.Model != current.Config.Model {
@@ -682,6 +683,14 @@ func (s *Store) Import(ctx context.Context, cfg Config, storage map[string][]byt
 			cfg.Workspace.Folder = ""
 		}
 	}
+	// Knowledge folders this computer doesn't have are left out too.
+	var folders []string
+	for _, f := range cfg.Knowledge.Folders {
+		if info, err := os.Stat(f); err == nil && info.IsDir() {
+			folders = append(folders, f)
+		}
+	}
+	cfg.Knowledge.Folders = folders
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

@@ -26,12 +26,19 @@ reply finishes the next time you open the app.
     choose: pi's coding prompt, `read`/`write`/`edit`/`bash`, and the project's `AGENTS.md` or `CLAUDE.md`
   - instructions and a raw `agent.yaml`, logs, wake and sleep
   - duplicate, export and import
-  - templates (Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner, Coding); save your own,
+  - templates (Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner, Document Q&A, Coding); save your own,
     import and export them
+- **Knowledge folders.** Give each agent document folders to search and cite: text, Markdown, PDF, Word, Excel and
+  PowerPoint, indexed locally and checked for changes every 30 seconds. Add folders and see index status in its
+  Knowledge tab. The Document Q&A template answers from them, cites its claims and says when the documents don't
+  say. Knowledge grants read-only access outside the workspace, never extra writes; citations open only indexed files
+  in that agent's current folders. Scanned PDFs need OCR elsewhere.
 - **Memory.** An About me card every agent knows, facts agents learn about you (guesses wait for your review), each
   agent's own notes, and which agents see which categories: Settings → You.
 - **Fast judgments (optional).** A TypeSafe System One model picks the agent for a message you didn't address
-  ("Auto"), and loads the right tools for agents with large MCP servers. Off unless set up; self-hosted works.
+  ("Auto"), loads the right tools for agents with large MCP servers, and can rerank knowledge passages for relevance.
+  Off unless set up; self-hosted works. Retrieved passages go to the agent's model provider; reranking also sends
+  candidate passages to the judgment service.
 - **Teams, and agents asking agents.** An agent may ask the agents it is allowed to ask (its `canCall`, or its team);
   each answers in a conversation of its own that you can read.
 - **Workspace tools.** `read`, `write`, `edit` and `bash` in the agent's own folder or a project folder; `bash` runs in
@@ -113,6 +120,7 @@ A local release build: `make release VERSION=0.2.0` (signs when `RELEASE_SIGNING
 | `internal/models`, `internal/mcp`, `internal/secrets` | Providers and models, MCP servers, the OS keychain |
 | `internal/approvals`, `internal/asks`, `internal/teams` | Tool approvals, agents asking agents, teams |
 | `internal/schedules`, `internal/search`, `internal/usage` | Schedules, message search (FTS5), usage |
+| `internal/knowledge` | Local document passages (FTS5), polling watcher, bounded runtime extraction, scoped citations |
 | `internal/activity` | The audit log: what runtimes report (tool calls) and the app records, kept 90 days, CSV export |
 | `internal/backup`, `internal/diagnostics` | Backups, restoring them at the next start, the daily one; the diagnostics zip |
 | `internal/api` | The UI's API ([docs/api.md](docs/api.md)) |
@@ -126,8 +134,8 @@ The data directory is `~/Library/Application Support/Pi Local`, or `-data` / `PI
 
 | Path | What |
 |---|---|
-| `app.db` | The index of agents and threads, settings, providers, MCP servers, approvals, asks, schedules, usage, activity, search |
-| `agents/<id>/agent.yaml` | The agent's config: model, instructions, tools, approvals, MCP servers, schedules |
+| `app.db` | The index of agents and threads, settings, providers, MCP servers, approvals, asks, schedules, usage, activity, search, knowledge passages |
+| `agents/<id>/agent.yaml` | The agent's config: model, instructions, tools, approvals, MCP servers, schedules, knowledge folders |
 | `agents/<id>/state.sqlite` | Its conversations; only its runtime opens it |
 | `agents/<id>/workspace/` | Its files (attachments under `attachments/`) |
 | `agents/<id>/tmp/`, `agents/<id>/logs/runtime.log` | Its temporary files and its log |
@@ -137,6 +145,11 @@ The data directory is `~/Library/Application Support/Pi Local`, or `-data` / `PI
 | `runtime/` | The runtime bundle, written out by the app |
 
 Secrets (provider keys, MCP env and header values, OAuth tokens) are kept in the macOS keychain under "Pi Local".
+
+Knowledge documents stay in the folders you choose; the app keeps only their searchable text and status in `app.db`.
+Hidden files, symlinks and `node_modules` are skipped. The index reads at most 10,000 files per folder, 50 MiB per file,
+and 3,000 passages per file; the Knowledge tab reports errors and partial files. Backups include the index and folder
+configuration, not external document folders. See [Knowledge folders in the API](docs/api.md#knowledge-folders-v04).
 
 ## Development
 

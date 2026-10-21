@@ -190,7 +190,9 @@ export function useReveal() {
  */
 export function useChooseFolder() {
   return useMutation({
-    mutationFn: () => api.post<ChosenFolder>('/api/choose-folder'),
+    // `title`: what the dialog says (default: "Choose the project folder").
+    mutationFn: (title?: string) =>
+      api.post<ChosenFolder>('/api/choose-folder', title ? { title } : undefined),
   });
 }
 

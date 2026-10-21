@@ -3,9 +3,8 @@
 // and a fallback, so the app works the same without it. What is judged is sent to the configured service.
 //
 // Uses: agent routing (which agent should take a message), tool preselection (which of an agent's deferred tools
-// a message needs), approvals (whether a tool call the rules let run could cause harm) and memory (whether a fact an
-// agent noted about the person is lasting, not a one-off). Model routing is
-// deliberately not a use.
+// a message needs), approvals (whether a tool call the rules let run could cause harm), memory (whether a fact is
+// lasting, not a one-off), and knowledge (which passages answer a question). Model routing is deliberately not a use.
 package judge
 
 import (
@@ -534,4 +533,67 @@ func (s *Service) KeepFacts(ctx context.Context, facts []string, record UsageRec
 		keep[i] = *a.Noul >= threshold
 	}
 	return keep, nil
+}
+
+// --- knowledge reranking -----------------------------------------------------------------------------------------
+
+// MaxPassagesJudged is how many passages one search has judged (the best of the index's own ranking).
+const MaxPassagesJudged = 20
+
+const maxPassageChars = 1500
+
+// RankPassages orders the passages a knowledge search found by whether they help answer the question (the
+// `knowledge` use): a yes/no per passage, in one request, and the positions of the best `keep` of them, most relevant
+// first. Passages judged not relevant are left out, unless none is relevant: then the first `keep` in the order given
+// stand (the index's own ranking), so a judgment never empties an answer. ErrOff when the use is off; any other error
+// means no judgment, and the caller keeps the index's order.
+func (s *Service) RankPassages(ctx context.Context, question string, passages []string, keep int) ([]int, error) {
+	if !s.On("knowledge") {
+		return nil, ErrOff
+	}
+	if len(passages) > MaxPassagesJudged {
+		passages = passages[:MaxPassagesJudged]
+	}
+	if keep <= 0 || keep > len(passages) {
+		keep = len(passages)
+	}
+	questions := map[string]Question{}
+	for i, p := range passages {
+		if r := []rune(p); len(r) > maxPassageChars {
+			p = string(r[:maxPassageChars])
+		}
+		questions[fmt.Sprintf("p%d", i)] = Question{
+			Type:         "noul",
+			Instructions: "Does this passage from the person's documents help answer `question`, by containing information that answers it or part of it? Passage:\n" + p,
+		}
+	}
+	answers, _, err := s.Ask(ctx, map[string]string{"question": question}, questions)
+	if err != nil {
+		return nil, err
+	}
+	type scored struct {
+		i int
+		p float64
+	}
+	var relevant []scored
+	cutoff := max(0.5, s.Settings().Threshold-0.1)
+	for i := range passages {
+		if a, ok := answers[fmt.Sprintf("p%d", i)]; ok && a.Noul != nil && *a.Noul >= cutoff {
+			relevant = append(relevant, scored{i, *a.Noul})
+		}
+	}
+	sort.SliceStable(relevant, func(a, b int) bool { return relevant[a].p > relevant[b].p })
+	out := []int{}
+	for _, r := range relevant {
+		if len(out) == keep {
+			break
+		}
+		out = append(out, r.i)
+	}
+	if len(out) == 0 {
+		for i := 0; i < keep; i++ {
+			out = append(out, i)
+		}
+	}
+	return out, nil
 }

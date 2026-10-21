@@ -3,6 +3,8 @@ package agents
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -238,5 +240,80 @@ func TestSharedSkillsAreNamesInAgentYAML(t *testing.T) {
 	yaml.NewEncoder(&out).Encode(Config{Name: "A"})
 	if strings.Contains(out.String(), "skills") {
 		t.Fatalf("yaml:\n%s", out.String())
+	}
+}
+
+func TestKnowledgeFoldersAreCheckedAndReadableInAgentYAML(t *testing.T) {
+	dir := t.TempDir()
+	c, err := ParseConfig([]byte("name: Docs\nknowledge:\n  folders:\n    - " + dir + "\n    - " + dir + "/\n"))
+	if err != nil || len(c.Knowledge.Folders) != 2 {
+		t.Fatalf("parsed: %+v %v", c.Knowledge, err)
+	}
+	// Cleaned and each once.
+	if err := c.Validate(); err != nil || len(c.Knowledge.Folders) != 1 || c.Knowledge.Folders[0] != dir {
+		t.Fatalf("validated: %+v %v", c.Knowledge, err)
+	}
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	enc.Encode(c)
+	if !strings.Contains(out.String(), "knowledge:\n  folders:\n    - "+dir+"\n") {
+		t.Fatalf("yaml:\n%s", out.String())
+	}
+	// None leaves no trace.
+	plain, _ := ParseConfig([]byte("name: Plain\n"))
+	out.Reset()
+	yaml.NewEncoder(&out).Encode(plain)
+	if strings.Contains(out.String(), "knowledge") {
+		t.Fatalf("yaml without knowledge:\n%s", out.String())
+	}
+
+	file := dir + "/a.txt"
+	os.WriteFile(file, []byte("x"), 0o600)
+	home, _ := os.UserHomeDir()
+	for name, folder := range map[string]string{"relative": "docs/contracts", "missing": dir + "/nope", "a file": file, "the disk": "/", "home": home} {
+		c := Config{Name: "X", Knowledge: Knowledge{Folders: []string{folder}}}
+		c.Normalize()
+		var inv *InvalidError
+		if err := c.Validate(); !errors.As(err, &inv) || inv.Code != "invalid_knowledge_folder" {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	many := Config{Name: "X"}
+	many.Normalize()
+	for i := 0; i <= MaxKnowledgeFolders; i++ {
+		many.Knowledge.Folders = append(many.Knowledge.Folders, dir+"/"+strings.Repeat("a", i+1))
+	}
+	if err := many.Validate(); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Errorf("too many: %v", err)
+	}
+
+	// Aliases must not bypass the broad-folder check, nor become watched symlink roots.
+	for name, target := range map[string]string{"disk": "/", "home": home, "documents": dir} {
+		alias := filepath.Join(t.TempDir(), name)
+		if err := os.Symlink(target, alias); err != nil {
+			t.Fatal(err)
+		}
+		cfg := Config{Name: "Alias", Knowledge: Knowledge{Folders: []string{alias}}}
+		cfg.Normalize()
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("symlink root accepted: %s", target)
+		}
+	}
+
+	// A folder the agent already had may be gone (an unplugged drive) without stopping other changes.
+	gone := t.TempDir()
+	had := Config{Name: "X", Knowledge: Knowledge{Folders: []string{gone}}}
+	had.Normalize()
+	os.RemoveAll(gone)
+	renamed := had
+	renamed.Name = "Y"
+	if err := renamed.ValidateChange(had); err != nil {
+		t.Fatalf("an existing folder that is gone: %v", err)
+	}
+	added := Config{Name: "X", Knowledge: Knowledge{Folders: []string{gone}}}
+	added.Normalize()
+	if err := added.Validate(); err == nil {
+		t.Fatal("a new folder that doesn't exist was accepted")
 	}
 }

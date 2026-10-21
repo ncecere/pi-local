@@ -87,6 +87,8 @@ export interface Agent {
    * Absent from an older backend (read as on, sharing nothing more).
    */
   memory?: AgentMemory;
+  /** The folders whose documents it can search and cite. Absent from an older backend (read as none). */
+  knowledge?: AgentKnowledge;
   /** Its monthly budget; null (or absent from an older backend): none. */
   budget?: AgentBudget | null;
   /** The shared skills it uses, by name (its own skills are always on). Absent from an older backend (none). */
@@ -158,6 +160,72 @@ export interface AgentBudget {
   monthlyUsd: number;
   /** "stop": new messages, schedule runs and asks are refused at the limit; "warn": only said. */
   onExceed: 'stop' | 'warn';
+}
+
+/** An agent's knowledge folders (its agent.yaml `knowledge`): absolute paths of folders on this computer. */
+export interface AgentKnowledge {
+  folders: string[];
+}
+
+/** `waiting`: not read yet; `missing`: the folder isn't on this computer (a drive unplugged?). */
+export type KnowledgeFolderState = 'waiting' | 'indexing' | 'ready' | 'missing';
+
+/** One knowledge folder and what the index holds for it (`GET /api/agents/{id}/knowledge`). */
+export interface KnowledgeFolder {
+  path: string;
+  state: KnowledgeFolderState;
+  /** Files with text in the index. */
+  files: number;
+  passages: number;
+  /** Files that could not be read. */
+  problems: number;
+  /** Files over the size limit (not read). */
+  tooLarge: number;
+  /** Very long files, only partly searchable. */
+  partial: number;
+  /** More files than the cap: only the first ones are indexed. */
+  truncated: boolean;
+  /** Unix ms; null before the first read. */
+  lastScanAt: number | null;
+  /** Why the folder is missing. */
+  error?: string;
+  progress?: { done: number; total: number };
+}
+
+export interface KnowledgeInfo {
+  folders: KnowledgeFolder[];
+  limits: { maxFileBytes: number; maxFiles: number };
+}
+
+/** A file that could not be indexed (`status` error or too_large), or only in part (partial). */
+export interface KnowledgeProblem {
+  folder: string;
+  path: string;
+  rel: string;
+  status: 'error' | 'too_large' | 'partial';
+  message: string;
+}
+
+/** A passage a search found (`GET /api/agents/{id}/knowledge/search`). */
+export interface KnowledgePassage {
+  folder: string;
+  rel: string;
+  /** Absolute. */
+  path: string;
+  file: string;
+  /** "page 4", "sheet Budget", "slide 2", or the section. */
+  locator?: string;
+  text: string;
+}
+
+export interface KnowledgeSearch {
+  passages: KnowledgePassage[];
+  searched: {
+    folders: number;
+    files: number;
+    passages: number;
+    indexing?: { done: number; total: number };
+  };
 }
 
 /** An agent's memory settings (its agent.yaml `memory`). */

@@ -45,6 +45,7 @@ type Agent = {
   model: { id: string; name: string; provider: string } | null;  // Phase 1: the demo model
   enabled: boolean;           // always true in Phase 1
   lastUsedAt: string | null;
+  knowledge: { folders: string[] }; // v0.4: document folders (absolute paths); see Knowledge folders
   budget: { monthlyUsd: number; onExceed: "stop" | "warn" } | null;  // its monthly budget (see Budgets); null: none
   revision: number;           // bumped on every config change
   createdAt: string;
@@ -55,9 +56,9 @@ type Agent = {
 | Route | Answer |
 |---|---|
 | `GET /api/agents` | `Agent[]`, newest first. Never starts a runtime. |
-| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. `templates` are the New agent gallery's starting points, the same list as `GET /api/templates` (see [Templates](#templates-and-web-tools-v02)): the built-ins Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner, Coding, Agent builder and Concierge, plus Meeting helper when its Apple Calendar capability is connected, then the person's own. `triage` is retired: no longer offered, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
-| `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?, web?}` (`workspace`: see [Workspace tools](#workspace-tools-approvals-and-attachments-phase-4)). `templateId` is a template's ID: the agent starts from it (its kind, instructions, tools, approvals, web tools and first schedule), and the body's own fields win; an empty `instructions` keeps the template's. `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`, `invalid_workspace_folder`. A `coding` agent made without `workspace.tools` gets `["read", "write", "edit", "bash"]`. |
-| `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?, memory?, budget?}` (later phases add more; `memory`: see [Memory](#memory-v02); `budget`: see [Budgets](#budgets-v03), `null` removes it). Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
+| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. The same templates as `GET /api/templates`: Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner, Document Q&A, Coding, Agent builder and Concierge, plus Meeting helper when Apple Calendar is connected, then the person's own. `triage` is retired but existing agents keep running. |
+| `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?, web?, knowledge?, skills?}`. The template sets defaults; supplied fields win, except empty instructions retain the template's. Returns `201 Agent`. Invalid settings return `400`; an unavailable connection-dependent template returns `409 connection_required`. Coding defaults to workspace tools `["read", "write", "edit", "bash"]`. |
+| `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?, memory?, knowledge?, skills?, budget?}` (and the other configuration fields described below). Returns `Agent`; absent fields stay unchanged. `budget: null` removes a budget. A change increments revision and restarts an awake runtime. |
 | `DELETE /api/agents/{id}` | Stops its runtime and moves its folder to the OS trash (or deletes it). Answers `{ok: true}`. |
 
 ## Threads
@@ -102,6 +103,8 @@ type AgentThread = {
 - `event: memory`, `data: {agentId}` when memory changes: `agentId` `""` is the person's (the About me card, facts,
   suggestions), otherwise that agent's notes. Nothing else is sent: read `/api/you…` or `/api/agents/{id}/memory` again
   (see [Memory](#memory-v02))
+- `event: knowledge`, `data: {}` when knowledge folder configuration or index status changes. Read the agent's
+  `GET /api/agents/{id}/knowledge` again (see [Knowledge folders](#knowledge-folders-v04)).
 - `event: backup`, `data: {}` when backups change: one made or deleted, the daily setting, a restore recorded or taken
   back, a backup starting or ending. Read `GET /api/backups` again (see
   [Backups and diagnostics](#backups-and-diagnostics-v03))
@@ -304,7 +307,7 @@ type BudgetStatus = { scope: "app" | "agent"; agentId?: string; name: string;   
 | `POST /api/agents/import` | Body: the zip's bytes (`Content-Type: application/zip`, at most 1 GiB; send an ArrayBuffer, not a Blob: Wails drops Blob bodies). A new agent (a new ID) from it, with its conversations when the zip has them. `canCall` is cleared (IDs are local to one computer). `201 Agent`. `400 invalid_archive` with a message. |
 | `GET /api/about` | `{version, dataDir, runtime: {node, nodeVersion, piDurableVersion, contractVersion}, agents: number}` |
 | `POST /api/reveal` | Body `{target: "data"}` or `{target: "agent", agentId}` or `{target: "workspace", agentId}`: opens the folder in Finder (`workspace`: the effective one, `workspace.dir`). `{ok: true}`. |
-| `POST /api/choose-folder` | Opens the native folder dialog (a coding agent's project folder). `{path}` (absolute), or `{cancelled: true}`. `501 not_supported` without a dialog (the headless server): ask for the path instead. `GET /api/me` says `features.folderDialog`. |
+| `POST /api/choose-folder` | Opens the native folder dialog. Optional body `{title}` (at most 100 characters; default "Choose the project folder"). `{path}` (absolute), or `{cancelled: true}`. `501 not_supported` without a dialog (the headless server): ask for the path instead. `GET /api/me` says `features.folderDialog`. |
 
 ## Teams and agents asking agents (Phase 3)
 
@@ -971,7 +974,7 @@ type Template = {
   schedules?: { agentMade: boolean };                     // may set its own schedules
   schedule?: { name: string; cron: string; message: string; threadMode?: "new" | "this" };  // made with the agent
   mcp?: string[];                 // MCP server IDs it works with, used when this computer has them
-  needs?: string[];               // what makes it work well: "web-search"
+  needs?: string[];               // what makes it work well: "web-search", "knowledge"
   builtin: boolean;               // shipped with the app: can't be deleted
 };
 ```
@@ -983,7 +986,7 @@ type Template = {
 | `GET /api/templates/{id}/export` | The YAML file, `Content-Disposition: attachment; filename="<id>.pi-template.yaml"`. |
 | `POST /api/templates/{id}/export-save` | Desktop app: asks where to save it (the system Save dialog) and writes the YAML there. `{path}`, or `{cancelled: true}`; `501` in a browser (use `/export`). |
 | `DELETE /api/templates/{id}` | `{ok: true}`. `409 builtin` for a built-in. Agents made from it keep working. |
-| `POST /api/agents/{id}/save-template` | Body `{name?, description?}` (default: the agent's). A template of the agent's kind, instructions, workspace tools, approvals, web tools, `schedules.agentMade` and MCP server IDs (never its project folder, memory or conversations). `201 Template` (category `yours`). |
+| `POST /api/agents/{id}/save-template` | Body `{name?, description?}` (default: the agent's). A template of the agent's kind, instructions, workspace tools, approvals, web tools, `schedules.agentMade` and MCP server IDs (never its project folder, knowledge folder paths, memory or conversations). `201 Template` (category `yours`). |
 
 `POST /api/agents` with `templateId` makes an agent from one (see [Agents](#agents)). A template with a `schedule` also
 gets that schedule. The `coding` template's project folder is sent as `workspace` as before.
@@ -1244,11 +1247,111 @@ Routes on the gateway a runtime calls with its key (not the UI's API): `GET /mem
 `{enabled}` (eligible conversation, memory and suggestions on, budget allows; missing/unknown thread: false); `POST /memory/suggest` `{threadId, trigger: "compaction", facts: [{text, category}]}` → `{saved}`;
 `POST /memory/conversations` `{query, limit?}` → `{results: [{threadId, title, date, snippet}]}`.
 
+## Knowledge folders (v0.4)
+
+An agent may search and cite documents in folders on this computer. Set them in Settings → Agents → the agent →
+**Knowledge**, with the folder dialog (desktop) or an absolute path (browser), or in `agent.yaml`:
+
+```yaml
+knowledge:
+  folders:
+    - /Users/ada/Documents/contracts
+```
+
+`POST /api/agents` and `PATCH /api/agents/{id}` take `{knowledge: {folders: string[]}}`. The whole list is replaced;
+`[]` removes access. At most 20 folders; paths are cleaned, `~/` expanded, duplicates removed. New paths must be
+existing directories, not symbolic links, the home folder, `/`, `/Users` or `/System` (including aliases to these).
+A folder already configured may be missing, so an unplugged drive does not block other agent changes. Invalid paths
+answer `400 invalid_knowledge_folder`. Imported agents drop paths that aren't directories on this computer.
+Changing folders restarts an awake runtime, as other agent changes do. A duplicate keeps its folder list; saving an
+agent as a template does not copy these local paths.
+
+### Index and status
+
+The app indexes locally into `knowledge_*` tables in `app.db` (FTS5). Agents using the same folder share one index,
+but every search and file opening is scoped to that agent's current folder list. Removing the last reference drops
+that folder's index, never its files. Pending removals are retained independently of the scan queue and retried after
+storage errors; re-adding a folder cancels its pending removal. The app rescans on startup and polls for added,
+edited and deleted files every 30 seconds. Only changed files are read again; startup and manual rescans also retry failed files. A missing folder
+keeps its index but is excluded from searches until it returns.
+
+- Text: `.txt`, `.md`, `.markdown`, `.mdx`, `.rst`, `.org`, `.tex`, `.csv`, `.tsv`, `.log`, `.json`, `.yaml`, `.yml`,
+  `.toml`, `.ini`; plus `.pdf`, `.docx`, `.xlsx`, `.pptx` through the same runtime converters as `read`.
+- Hidden paths, symbolic links, Office lock files (`~$…`), `node_modules` and special files are skipped. Index reads
+  are confined with `os.Root`, including when a directory changes into a symlink between scans. Converters receive
+  private temporary snapshots, removed afterwards, not unchecked paths to external documents. The converter's
+  subprocess receives only executable-path, home, locale and temporary-directory environment settings, never the
+  app's provider/MCP/gateway credentials or Node loader environment.
+- Limits: 50 MiB per file, 10,000 supported files per folder (sorted path order), 3,000 passages per file, about 1,200
+  characters each. Splitting streams even single huge lines, stops at the passage cap, and checks cancellation
+  throughout; cancelled work is not indexed. Very long documents are partial. PDF/Office conversion has time and
+  output limits. Scanned PDFs need OCR elsewhere; damaged, encrypted and unreadable documents are reported. Office layout is best effort, and
+  Excel conversion itself is limited to 5,000 rows and 100 columns per sheet.
+
+```ts
+type KnowledgeFolder = {
+  path: string; state: "waiting" | "indexing" | "ready" | "missing";
+  files: number; passages: number; problems: number; tooLarge: number; partial: number;
+  truncated: boolean; lastScanAt: number | null; // Unix ms of the last completed scan
+  error?: string; progress?: {done: number; total: number};
+};
+type KnowledgeHit = {
+  folder: string; rel: string; path: string; file: string;
+  locator?: string; text: string; ord: number; score: number; // FTS5 score: lower is better
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/agents/{a}/knowledge` | `{folders: KnowledgeFolder[], limits: {maxFileBytes, maxFiles}}`. Files count documents with searchable text; `problems` counts failed documents, `tooLarge` oversized ones, `partial` partially indexed ones. |
+| `POST /api/agents/{a}/knowledge/rescan` | Optional body `{path}` for one enabled folder; otherwise every enabled folder. Queues a rescan, including failed files. `{ok: true}`. |
+| `GET /api/agents/{a}/knowledge/problems?folder=` | At most 200 `{folder, path, rel, status: "error" \| "too_large" \| "partial", message}` entries. `404 not_found` for a folder not enabled on this agent. |
+| `GET /api/agents/{a}/knowledge/search?q=` | A trial search without fast judgments: `{passages: KnowledgeHit[], searched: {folders, files, passages, indexing?: {done, total}}}`, at most 8 passages. `400 invalid_query` for empty queries or more than 500 bytes. |
+| `GET /api/agents/{a}/knowledge/file?path=` | Only an indexed, regular file of this agent's enabled folders. PDF inline, text/Markdown as `text/plain`, Office as a download; `nosniff`, `no-store`. `404 not_found` for unavailable or escaping paths, even before the next rescan. |
+| `POST /api/agents/{a}/knowledge/open` | JSON `{path, reveal?: boolean}`: opens that same indexed file in the system's application, or selects it in Finder. `{ok: true, path}`. `415 json_required` without JSON; `404 not_found` outside the current scope. |
+
+The Knowledge tab shows counts, last scan, progress, missing folders, limits and file errors, with Rescan and Remove.
+It polls every 2 seconds while reading, otherwise every 30 seconds. `knowledge` live events also announce index changes.
+
+### Tools, citations and Document Q&A
+
+An agent with folders gets `search_knowledge({query, limit?})` (default 5, maximum 10) and `read`, even when it has no
+other workspace tools. The runtime calls the authenticated gateway `POST /knowledge/search` with `{query, limit}`;
+the gateway derives the agent from its runtime key, never from a supplied agent ID or paths. Its answer is
+`{passages: [{file, path, locator?, text, link}], searched: {folders, files, passages}, indexing?, reranked, notice?}`.
+
+Search uses FTS5 prefix matching, stemming and BM25, with common question words removed. With fast judgments enabled
+and its `knowledge` use on, up to 20 matching passages are sent to the judgment service for relevance ranking; the
+best requested number are kept (usually 5). Off, slow or failing: local ranking stands. No relevant judgments also
+falls back to local ranking rather than emptying the answer.
+
+Each passage names a page, sheet, slide or heading where available and supplies its citation link:
+`/api/agents/{a}/knowledge/file?path=<encoded absolute path>`. A normal click in chat calls the scoped `knowledge/open`
+endpoint; modified clicks may view/download via `knowledge/file`. External links and arbitrary `file:` URLs are not
+converted into local file openings.
+
+`read` can reach those folders outside the workspace, but **never gains write, edit, rename, delete or shell write
+permission from knowledge**. Existing workspace write permissions stay unchanged. Links escaping the allowed roots
+are refused. Sandboxed and unsandboxed shell policies are unchanged; knowledge is not a new shell allowance.
+
+The **Document Q&A** built-in template disables web tools, searches the supplied folders, cites every claim, treats
+document text as information rather than instructions, and says "The documents don't say" when there is no answer.
+It starts without folder paths; add them in its Knowledge tab after creating it. This is an instruction policy, not a
+guarantee that every model will follow it. Only local indexing is fully offline: retrieved passages go to the agent's
+model provider, and reranking sends candidates to the configured judgment service when enabled.
+
+The bundled runtime also supports `node runtime.mjs --extract <file>` (Markdown on stdout, error on stderr and exit 1)
+and `--extract --batch` (newline-delimited paths on stdin, one `{path, markdown}` or `{path, error}` JSON line per file).
+It reuses `runtime/src/lib/documents.ts` and starts no agent or model connection.
+
 ## Fast judgments (v0.2)
 
 Optional and off by default: quick, typed decisions by a System One model (TypeSafe's Jev, or a self-hosted service
 speaking its API). The text being judged is sent to that service. Its key lives in the OS keychain and is never
-returned. Each use has its own switch; `agentRouting`, `toolPreselection`, `approvals` (v0.3: see [Approval rules and profiles](#approval-rules-and-profiles-v03)) and `memory` (v0.4: it filters [suggestions from conversations](#suggestions-from-conversations-v04)) do something so far.
+returned. Each use has its own switch: `agentRouting`, `toolPreselection`, `approvals` (v0.3: see
+[Approval rules and profiles](#approval-rules-and-profiles-v03)), `memory` (v0.4: filters
+[suggestions from conversations](#suggestions-from-conversations-v04)) and `knowledge` (v0.4:
+[Knowledge folders](#knowledge-folders-v04)).
 
 ```ts
 type JudgmentSettings = {
