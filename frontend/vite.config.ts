@@ -1,7 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { defineConfig, type ProxyOptions } from 'vite';
+import { defineConfig, type Plugin, type ProxyOptions } from 'vite';
+import { writeBuildReceipt } from '../packaging/licenses/build-receipt.mjs';
 
 /**
  * In the desktop app the Go backend serves the built app (dist/) and /api
@@ -33,8 +34,23 @@ const proxy = { '/api': api };
 
 const port = Number(process.env.PORT ?? 5191);
 
+// Keep licensing evidence outside dist/: no added app assets or runtime behavior.
+function noticeBuildReceipt(): Plugin {
+  let inputs: string[] = [];
+  return {
+    name: 'pi-local-notice-build-receipt',
+    apply: 'build',
+    generateBundle() {
+      inputs = [...this.getModuleIds()];
+    },
+    closeBundle() {
+      writeBuildReceipt(fileURLToPath(new URL('..', import.meta.url)), 'frontend', inputs);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), noticeBuildReceipt()],
   resolve: {
     alias: {
       '~': fileURLToPath(new URL('./src', import.meta.url)),

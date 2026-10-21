@@ -34,8 +34,13 @@ if [ -z "$want" ] || [ "$want" != "$got" ]; then
 fi
 echo "✓ Node verified ($got)"
 
-# 2. The runtime bundle, the UI, and the binary (both embedded).
+# 2. Frozen installs, then the runtime bundle, the UI, and the binary (both embedded).
+# Include frontend devDependencies: they contain the UI's shipped runtime libraries.
+pnpm --dir runtime install --frozen-lockfile
+pnpm --dir frontend install --frozen-lockfile
 make runtime frontend >/dev/null
+case "$NODE_ARCH" in arm64) GO_NOTICE_ARCH=arm64 ;; x64) GO_NOTICE_ARCH=amd64 ;; esac
+export GOOS=darwin GOARCH="$GO_NOTICE_ARCH" CGO_ENABLED=1
 export MACOSX_DEPLOYMENT_TARGET=11.0 CGO_LDFLAGS="-mmacosx-version-min=11.0"
 go build -trimpath -ldflags "-s -w -X github.com/ncecere/pi-local/internal/app.Version=$VERSION" -o "$OUT/pi-local" ./cmd/pi-local
 
@@ -49,6 +54,10 @@ mv "$OUT/node-v$NODE_VERSION-darwin-$NODE_ARCH/LICENSE" "$APP/Contents/Resources
 cp LICENSE "$APP/Contents/Resources/LICENSE"
 cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
 rm -rf "$OUT/node-v$NODE_VERSION-darwin-$NODE_ARCH"
+
+# Full, package/version-labelled terms and inherited notices, assembled offline before ANY signing.
+# Fail closed on an uncovered package, missing required notice, changed pinned WASM/PDF.js, or stale override.
+node packaging/licenses/generate.mjs "$APP/Contents/Resources/third-party" --node-version "$NODE_VERSION" "$GO_NOTICE_ARCH"
 
 ICONSET="$OUT/icon.iconset"
 rm -rf "$ICONSET"; mkdir -p "$ICONSET"

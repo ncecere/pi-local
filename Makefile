@@ -2,7 +2,7 @@
 export MACOSX_DEPLOYMENT_TARGET ?= 11.0
 export CGO_LDFLAGS ?= -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
 
-.PHONY: help deps runtime frontend build app server run-server dev-web test test-go test-runtime test-frontend lint check clean package release fakes
+.PHONY: help deps runtime frontend build app server run-server dev-web test test-go test-runtime test-frontend test-licenses lint check clean package release fakes
 
 help: ## This list
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -31,7 +31,7 @@ run-server: server ## Headless on http://127.0.0.1:5190: scratch data dir, runti
 dev-web: ## The UI with hot reload on :5191, proxying /api to run-server
 	cd frontend && pnpm dev
 
-test: test-go test-runtime test-frontend ## All tests
+test: test-go test-runtime test-frontend test-licenses ## All tests
 
 test-go: ## Go tests (run the real runtime from source; needs `make deps`)
 	go test -count=1 ./internal/... ./cmd/...
@@ -41,6 +41,11 @@ test-runtime: ## Runtime typecheck and tests
 
 test-frontend: ## UI typecheck, lint and tests
 	cd frontend && pnpm typecheck && pnpm lint && pnpm test
+
+test-licenses: ## Offline packaging notice tests (NOTICE_TEST_NODE_LICENSE enables installed-tree integration)
+	node --test packaging/licenses/generate.test.mjs
+	node --check packaging/licenses/generate.mjs
+	bash -n packaging/macos/package.sh
 
 lint: ## go vet and gofmt
 	go vet ./internal/... ./cmd/...

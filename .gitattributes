@@ -1,0 +1,2 @@
+# Hash-pinned upstream legal texts must retain original line endings and whitespace.
+packaging/licenses/sources/** -text -whitespace
