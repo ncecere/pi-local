@@ -69,6 +69,9 @@ type Config struct {
 	DemoTokensPerSecond string
 	// Supervisor timings; zero values take the supervisor's defaults.
 	IdleTimeout, ReapInterval, StopGrace time.Duration
+	// MemoryIdle is how long a conversation is quiet after a reply before it is read for suggestions (default 10
+	// minutes; tests make it short).
+	MemoryIdle time.Duration
 	// Secrets is where provider keys go (default: the OS keychain).
 	Secrets secrets.Store
 }
@@ -101,6 +104,8 @@ type App struct {
 	Judge *judge.Service
 	// Memory is what agents know about the person, and each agent's own notes.
 	Memory *memory.Store
+	// idle holds the conversations waiting out their idle time before suggestions are read from them.
+	idle idleWatch
 	// Templates are the New agent gallery's starting points, built-in and the person's.
 	Templates *templates.Store
 	// Skills are the shared skills (<data>/skills); an agent's own are in its folder.
@@ -279,6 +284,12 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	a.Search = search.New(db)
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
+		// A conversation quiet for ten minutes after a reply is read for suggestions (when the person turned them on).
+		if c.Deleted {
+			a.watchIdle(c.AgentID, &threads.Thread{ThreadID: c.ThreadID}, true)
+		} else if c.Thread != nil {
+			a.watchIdle(c.AgentID, c.Thread, false)
+		}
 		if c.Thread != nil && !c.Thread.Busy {
 			a.recordReplyError(c.AgentID, c.Thread)
 			// A reply ended: its scheduled run (if any) is done, and its text is kept searchable.
@@ -374,6 +385,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			a.Elicitations.ForgetAgent(c.AgentID)
 			a.Schedules.ForgetAgent(context.Background(), c.AgentID)
 			a.Search.Forget(context.Background(), c.AgentID, "")
+			a.Memory.ForgetThread(context.Background(), c.AgentID, "")
 			if err := a.Teams.RemoveAgent(context.Background(), c.AgentID); err != nil {
 				slog.Warn("removing a deleted agent from its teams", "agent", c.AgentID, "err", err)
 			}
@@ -917,6 +929,7 @@ func baseEnv(dataDir string) map[string]string {
 
 // Close stops every agent gracefully (work in flight stays pending in its storage) and closes everything.
 func (a *App) Close() {
+	a.closeIdle()
 	if a.Backups != nil {
 		a.Backups.Close()
 	}

@@ -1,12 +1,19 @@
 import type { Context } from "@earendil-works/chord/context";
 import { runAuthor } from "./author.ts";
-import { defineExtension, defineTool, type Extension, section, Type } from "./facade.ts";
+import { CompactionTask, defineExtension, defineTool, type Extension, hook, section, Type } from "./facade.ts";
+import { type Complete, extractFacts, hasPerson, turnsOf } from "./memory-extract.ts";
+import { buildMessages } from "./view.ts";
 
 /**
  * Memory (MEMORY=on): what the agent knows about the person and about its own job, kept by the app.
  *
  *  - Every turn, two sections: "about_you" (the person's basics and the facts this agent may see) and "your_notes"
  *    (what this agent learned about its own work). Read from the gateway, cached briefly.
+ *  - `search_conversations`: the agent's own past conversations, through the app's message search (never another
+ *    agent's: the app answers for the agent the runtime's key belongs to).
+ *  - Before pi compacts a long conversation, what is about to be summarized is read for facts about the person (one
+ *    small request to the agent's model, only when the person turned suggestions on), and saved as suggestions, so a
+ *    fact isn't lost to the summary. Extraction is bounded and failures never prevent the compaction.
  *  - `remember`, `recall`, `forget`. Whether the person started the run (not a schedule, not another agent) goes with
  *    each call: the app only saves facts about the person as known when they said them themselves, in a run they
  *    started; anything else waits for them as a suggestion.
@@ -24,6 +31,8 @@ export type MemoryOptions = {
 	fetch?: typeof fetch;
 	/** How long the sections are reused (default 3 s); a remember or forget refreshes them. */
 	cacheMs?: number;
+	/** A one-off request to the agent's model, for suggestions before a compaction (none: no suggestions). */
+	complete?: Complete;
 };
 
 const CATEGORIES = ["preferences", "people", "projects", "work", "health", "family", "finances", "home", "interests"] as const;
@@ -78,8 +87,39 @@ export function memoryExtension(options: MemoryOptions): Extension {
 		return author === undefined || author.kind === "user";
 	};
 
+	// Finish the bounded extraction before the summary can replace its source; a failure must not block compaction.
+	const suggestBeforeCompaction = async (entries: Parameters<typeof buildMessages>[0], conversationId: number) => {
+		const complete = options.complete;
+		if (!complete) return;
+		const signal = AbortSignal.timeout(90_000);
+		try {
+			const turns = turnsOf(buildMessages(entries));
+			if (!hasPerson(turns)) return;
+			const threadId = await options.threadOf(conversationId).catch(() => undefined);
+			if (!threadId) return;
+			// The app checks the conversation's origin AND budget before any auxiliary model request.
+			const switched = await call<{ enabled: boolean }>("GET", `/memory/suggestions?thread=${encodeURIComponent(threadId)}`, undefined, signal);
+			if (!switched.ok || !switched.data.enabled) return;
+			const { aboutYou } = await context();
+			const known = aboutYou.split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2));
+			const facts = await extractFacts(complete, turns, known, signal);
+			if (!facts || facts.length === 0) return;
+			await call("POST", "/memory/suggest", { threadId, trigger: "compaction", facts }, signal);
+		} catch {
+			// No valid extraction, or app/model unavailable: compaction still proceeds.
+		}
+	};
+
 	return defineExtension({
 		name: MEMORY_EXTENSION,
+		hooks: [
+			hook(CompactionTask, {
+				beforeCompact: async (compaction, api) => {
+					await suggestBeforeCompaction(compaction.entries, api.conversationId as unknown as number);
+					return undefined;
+				},
+			}),
+		],
 		sections: [
 			section("about_you", async () => {
 				const { aboutYou } = await context();
@@ -159,6 +199,32 @@ export function memoryExtension(options: MemoryOptions): Extension {
 						for (const n of notes) lines.push(`- (${n.id}) ${n.text}`);
 					}
 					return text(lines.join("\n"));
+				},
+			}),
+			defineTool({
+				name: "search_conversations",
+				description:
+					"Search your own past conversations with the person, by words: what was said, decided or asked before. Returns snippets with each conversation's title and date. Only your conversations, never another agent's.",
+				parameters: Type.Object({
+					query: Type.String({ description: "The words to look for, in a few words." }),
+					limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, description: "How many conversations (default 5)." })),
+				}),
+				replay: "safe",
+				execute: async (args, _api, ctx: Context) => {
+					const res = await call<{ results: { threadId: string; title: string; date: string; snippet: string }[] }>(
+						"POST",
+						"/memory/conversations",
+						{ query: args.query, limit: args.limit ?? 5 },
+						ctx.abortSignal,
+					);
+					if (!res.ok) return text(res.message, true);
+					const { results } = res.data;
+					if (results.length === 0) return text("No conversation of yours matches.");
+					return text(
+						[`${results.length} ${results.length === 1 ? "conversation matches" : "conversations match"} (matching words are in **bold**):`]
+							.concat(results.map((r) => `- "${r.title || "Untitled"}" (${r.date}, thread ${r.threadId}): ${r.snippet.replace(/\s+/g, " ")}`))
+							.join("\n"),
+					);
 				},
 			}),
 			defineTool({

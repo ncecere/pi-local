@@ -8,6 +8,7 @@ import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { useAgent, useAgentThreads } from '~/hooks/use-agents';
 import { useAddFact, useDeleteFact, useUpdateFact } from '~/hooks/use-memory';
+import { formatDay } from '~/lib/dates';
 import { categoryLabel, groupFacts } from '~/lib/memory';
 import { cn } from '~/lib/utils';
 
@@ -42,15 +43,72 @@ export function FactOrigin({ fact }: { fact: Fact }) {
   );
 }
 
-function ExternalBadge({ fact }: { fact: Fact }) {
-  if (fact.trust !== 'external') return null;
+/** Where a fact's words came from: what the person said, what an agent concluded, or outside text. */
+export const TRUST_LABELS = {
+  said: 'You said it',
+  inferred: 'An agent inferred it',
+  external: 'From outside text',
+} as const;
+
+const TRUST_HINTS = {
+  said: 'You told an agent this, or you wrote it here.',
+  inferred:
+    'An agent concluded this from a conversation. You decide whether it is true by accepting it.',
+  external:
+    "It came from a web page, an email, a file or a tool's result, not from you. Agents don't see it until you accept it, and it never joins what they always know.",
+} as const;
+
+/** The trust label, on every fact in every list. Outside text is the one that warns. */
+export function TrustLabel({ fact }: { fact: Fact }) {
+  const trust = fact.trust in TRUST_LABELS ? fact.trust : 'inferred';
   return (
     <span
-      title="It came from a web page, an email, a file or a tool's result, not from you. Agents don't see it until you accept it, and it never joins what they always know."
-      className="rounded-full bg-[var(--warning)]/15 px-2 py-0.5 text-[0.6875rem] font-medium text-[var(--warning)]"
+      title={TRUST_HINTS[trust]}
+      className={cn(
+        'rounded-full px-2 py-0.5 text-[0.6875rem] font-medium',
+        trust === 'external'
+          ? 'bg-[var(--warning)]/15 text-[var(--warning)]'
+          : 'bg-[var(--bg-control)] text-[var(--text-secondary)]',
+      )}
     >
-      From outside text
+      {TRUST_LABELS[trust]}
     </span>
+  );
+}
+
+/** What a change was, from the version before it and the one after: "Changed from "…" on Oct 21". */
+function changeText(
+  before: { text: string; category: string; at: number },
+  after: { text: string; category: string },
+) {
+  const day = formatDay(before.at);
+  if (before.text !== after.text) return `Changed from “${clip(before.text, 80)}” on ${day}`;
+  return `Moved from ${categoryLabel(before.category)} on ${day}`;
+}
+
+/** Under a fact: its last change, and the earlier ones when there are any. */
+export function FactHistory({ fact }: { fact: Fact }) {
+  const history = fact.history ?? [];
+  if (history.length === 0) return null;
+  // history[i] is what it was before the change at history[i].at; the version after it is history[i - 1], or the fact.
+  const lines = history.map((entry, i) => changeText(entry, i === 0 ? fact : history[i - 1]!));
+  const [latest, ...earlier] = lines;
+  return (
+    <div className="mt-1 text-xs text-[var(--text-muted)]" data-testid="fact-history">
+      <p>{latest}</p>
+      {earlier.length > 0 && (
+        <details className="mt-0.5">
+          <summary className="cursor-pointer">
+            {earlier.length === 1 ? '1 earlier change' : `${earlier.length} earlier changes`}
+          </summary>
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {earlier.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
   );
 }
 
@@ -179,8 +237,9 @@ function FactRow({ fact, categories }: { fact: Fact; categories: readonly string
         </p>
         <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--text-muted)]">
           <FactOrigin fact={fact} />
-          <ExternalBadge fact={fact} />
+          <TrustLabel fact={fact} />
         </p>
+        <FactHistory fact={fact} />
       </div>
       <div className="flex shrink-0 items-center">
         <Button
@@ -301,8 +360,9 @@ function SuggestionRow({ fact, categories }: { fact: Fact; categories: readonly 
           <span>{categoryLabel(fact.category)}</span>
           <span aria-hidden="true">·</span>
           <FactOrigin fact={fact} />
-          <ExternalBadge fact={fact} />
+          <TrustLabel fact={fact} />
         </p>
+        <FactHistory fact={fact} />
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-1.5">
         <Button

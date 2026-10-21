@@ -110,6 +110,12 @@ type Hit struct {
 
 // Search finds conversations with every word of q (each word matching the start of a word), best first.
 func (s *Store) Search(ctx context.Context, q string, limit int) ([]Hit, error) {
+	return s.SearchAgent(ctx, "", q, limit)
+}
+
+// SearchAgent is Search within one agent's conversations (agentID "": everyone's). An agent's own search tool uses
+// it with its own ID, so it never reads another agent's conversations.
+func (s *Store) SearchAgent(ctx context.Context, agentID, q string, limit int) ([]Hit, error) {
 	terms := Terms(q)
 	if len(terms) == 0 {
 		return []Hit{}, nil
@@ -121,7 +127,7 @@ func (s *Store) Search(ctx context.Context, q string, limit int) ([]Hit, error) 
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT i.agent_id, i.thread_id, snippet(message_index, 3, char(1), char(2), '…', 16), COALESCE(m.indexed_at, 0)
 		FROM message_index i LEFT JOIN message_index_meta m ON m.agent_id = i.agent_id AND m.thread_id = i.thread_id
-		WHERE message_index MATCH ? ORDER BY rank LIMIT ?`, strings.Join(parts, " "), limit)
+		WHERE message_index MATCH ? AND (? = '' OR i.agent_id = ?) ORDER BY rank LIMIT ?`, strings.Join(parts, " "), agentID, agentID, limit)
 	if err != nil {
 		return nil, err
 	}

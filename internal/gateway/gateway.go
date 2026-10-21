@@ -83,6 +83,22 @@ type Memory interface {
 	Remember(ctx context.Context, agentID string, in RememberInput) (map[string]any, error)
 	Recall(ctx context.Context, agentID, query string, limit int) (map[string]any, error)
 	Forget(ctx context.Context, agentID, id string, present bool) error
+	// ExtractionAllowed checks the switch, conversation origin, memory and budget before any model request.
+	ExtractionAllowed(ctx context.Context, agentID, threadID string) bool
+	// Suggest saves facts the agent's model found in a conversation as suggestions (before a compaction).
+	Suggest(ctx context.Context, agentID string, in SuggestInput) (map[string]any, error)
+	// SearchConversations searches the agent's own conversations, never another agent's.
+	SearchConversations(ctx context.Context, agentID, query string, limit int) (map[string]any, error)
+}
+
+// SuggestInput is facts an agent's model found about the person, with the conversation they came from.
+type SuggestInput struct {
+	ThreadID string `json:"threadId"`
+	Trigger  string `json:"trigger"` // compaction
+	Facts    []struct {
+		Text     string `json:"text"`
+		Category string `json:"category"`
+	} `json:"facts"`
 }
 
 // RememberInput is the remember tool's call, with what the runtime knows about the run (present: the person started
@@ -423,7 +439,8 @@ func (h *Handler) serveAsks(w http.ResponseWriter, r *http.Request, caller strin
 	}
 }
 
-// serveMemory: GET /memory/context → {aboutYou, notes}; POST /memory/remember, /memory/recall, /memory/forget.
+// serveMemory: GET /memory/context → {aboutYou, notes}; POST /memory/remember, /memory/recall, /memory/forget;
+// GET /memory/suggestions → {enabled}; POST /memory/suggest, /memory/conversations (search_conversations).
 func (h *Handler) serveMemory(w http.ResponseWriter, r *http.Request, agentID string) {
 	failWith := func(err error) {
 		var me interface{ HTTPStatus() (int, string, string) }
@@ -462,6 +479,33 @@ func (h *Handler) serveMemory(w http.ResponseWriter, r *http.Request, agentID st
 			return
 		}
 		res, err := h.Memory.Recall(r.Context(), agentID, in.Query, in.Limit)
+		if err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, res)
+	case r.Method == http.MethodGet && r.URL.Path == "/memory/suggestions":
+		ok(w, map[string]bool{"enabled": h.Memory.ExtractionAllowed(r.Context(), agentID, r.URL.Query().Get("thread"))})
+	case r.Method == http.MethodPost && r.URL.Path == "/memory/suggest":
+		var in SuggestInput
+		if !decode(w, r, &in) {
+			return
+		}
+		res, err := h.Memory.Suggest(r.Context(), agentID, in)
+		if err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, res)
+	case r.Method == http.MethodPost && r.URL.Path == "/memory/conversations":
+		var in struct {
+			Query string `json:"query"`
+			Limit int    `json:"limit"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		res, err := h.Memory.SearchConversations(r.Context(), agentID, in.Query, in.Limit)
 		if err != nil {
 			failWith(err)
 			return

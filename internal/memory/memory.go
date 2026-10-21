@@ -57,7 +57,19 @@ type Fact struct {
 	SourceThread *string `json:"sourceThread"`
 	CreatedAt    int64   `json:"createdAt"`
 	UpdatedAt    int64   `json:"updatedAt"`
+	// History: what it said before each change of its text or category, newest first ("Changed from … on Oct 21").
+	History []Revision `json:"history"`
 }
+
+// Revision is what a fact was before it changed.
+type Revision struct {
+	Text     string `json:"text"`
+	Category string `json:"category"`
+	At       int64  `json:"at"` // when it changed (Unix ms)
+}
+
+// maxHistory is how many past versions a fact keeps.
+const maxHistory = 20
 
 // Note is something an agent learned about its own job.
 type Note struct {
@@ -98,6 +110,7 @@ const (
 // Store keeps both kinds.
 type Store struct {
 	db      *sql.DB
+	factMu  sync.Mutex // serialize duplicate checks and inserts across idle, compaction and remember
 	notesMu sync.Mutex
 	now     func() time.Time
 	// OnChange is told when the person's memory or an agent's notes change (agentID "" for the person's).
@@ -176,6 +189,7 @@ func scanFact(row interface{ Scan(...any) error }) (*Fact, error) {
 		return nil, err
 	}
 	f.Pinned = pinned != 0
+	f.History = []Revision{}
 	if agent.Valid {
 		f.SourceAgent = &agent.String
 	}
@@ -208,7 +222,37 @@ func (s *Store) Facts(ctx context.Context, status string) ([]*Fact, error) {
 		out = append(out, f)
 	}
 	rows.Close()
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, s.attachHistory(ctx, out)
+}
+
+// attachHistory fills the facts' history (one query, after the facts' rows are closed).
+func (s *Store) attachHistory(ctx context.Context, facts []*Fact) error {
+	if len(facts) == 0 {
+		return nil
+	}
+	byID := make(map[string]*Fact, len(facts))
+	for _, f := range facts {
+		byID[f.ID] = f
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT memory_id, text, category, changed_at FROM user_memory_history ORDER BY changed_at DESC, id DESC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var r Revision
+		if err := rows.Scan(&id, &r.Text, &r.Category, &r.At); err != nil {
+			return err
+		}
+		if f, ok := byID[id]; ok {
+			f.History = append(f.History, r)
+		}
+	}
+	return rows.Err()
 }
 
 // Fact reads one.
@@ -217,7 +261,22 @@ func (s *Store) Fact(ctx context.Context, id string) (*Fact, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return f, err
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT text, category, changed_at FROM user_memory_history WHERE memory_id = ? ORDER BY changed_at DESC, id DESC`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r Revision
+		if err := rows.Scan(&r.Text, &r.Category, &r.At); err != nil {
+			return nil, err
+		}
+		f.History = append(f.History, r)
+	}
+	return f, rows.Err()
 }
 
 // FactInput is a fact to save.
@@ -236,6 +295,8 @@ type FactInput struct {
 // AddFact saves a fact. The same text in the same category isn't saved twice (the existing one is returned, made
 // active if this one would be).
 func (s *Store) AddFact(ctx context.Context, in FactInput) (*Fact, error) {
+	s.factMu.Lock()
+	defer s.factMu.Unlock()
 	text, err := cleanText(in.Text)
 	if err != nil {
 		return nil, err
@@ -300,6 +361,7 @@ func (s *Store) UpdateFact(ctx context.Context, id string, ch FactChange) (*Fact
 	if err != nil {
 		return nil, err
 	}
+	before := Revision{Text: f.Text, Category: f.Category}
 	if ch.Category != nil {
 		if !slices.Contains(Categories, *ch.Category) {
 			return nil, bad("invalid_category", "A category is one of: %s.", strings.Join(Categories, ", "))
@@ -335,6 +397,17 @@ func (s *Store) UpdateFact(ctx context.Context, id string, ch FactChange) (*Fact
 		tx.ExecContext(ctx, `DELETE FROM user_memory_index WHERE id = ?`, id)
 		tx.ExecContext(ctx, `INSERT INTO user_memory_index (id, text) VALUES (?, ?)`, id, f.Text)
 	}
+	// What it said before, when its words or category changed (not for a pin or an accept).
+	if f.Text != before.Text || f.Category != before.Category {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO user_memory_history (memory_id, text, category, changed_at) VALUES (?, ?, ?, ?)`,
+			id, before.Text, before.Category, s.now().UnixMilli()); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM user_memory_history WHERE memory_id = ? AND id NOT IN
+			(SELECT id FROM user_memory_history WHERE memory_id = ? ORDER BY changed_at DESC, id DESC LIMIT ?)`, id, id, maxHistory); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -352,6 +425,7 @@ func (s *Store) DeleteFact(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	s.db.ExecContext(ctx, `DELETE FROM user_memory_index WHERE id = ?`, id)
+	s.db.ExecContext(ctx, `DELETE FROM user_memory_history WHERE memory_id = ?`, id)
 	s.OnChange("")
 	return nil
 }
@@ -362,6 +436,7 @@ func (s *Store) EraseFacts(ctx context.Context) error {
 		return err
 	}
 	s.db.ExecContext(ctx, `DELETE FROM user_memory_index`)
+	s.db.ExecContext(ctx, `DELETE FROM user_memory_history`)
 	s.db.ExecContext(ctx, `DELETE FROM settings WHERE key = 'about_me'`)
 	s.OnChange("")
 	return nil

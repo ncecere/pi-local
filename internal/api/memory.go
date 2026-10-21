@@ -11,6 +11,7 @@ import (
 func (a *API) memoryRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/you", a.getYou)
 	m.HandleFunc("PUT /api/you/basics", a.putBasics)
+	m.HandleFunc("PUT /api/you/settings", a.putYouSettings)
 	m.HandleFunc("GET /api/you/memories", a.listFacts)
 	m.HandleFunc("POST /api/you/memories", a.addFact)
 	m.HandleFunc("PATCH /api/you/memories/{id}", a.updateFact)
@@ -36,11 +37,34 @@ func memoryFailure(w http.ResponseWriter, err error) {
 // getYou: the About me card (or its defaults), whether it was saved, and the categories.
 func (a *API) getYou(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{
-		"basics":     a.Memory.GetBasics(a.MemoryDefaults()),
-		"saved":      a.Memory.HasBasics(),
-		"categories": memory.Categories,
-		"shareable":  memory.Shareable,
+		"basics":      a.Memory.GetBasics(a.MemoryDefaults()),
+		"saved":       a.Memory.HasBasics(),
+		"categories":  memory.Categories,
+		"shareable":   memory.Shareable,
+		"suggestions": a.suggestionSettings(),
 	})
+}
+
+// suggestionSettings: whether agents suggest facts from conversations, and whether fast judgments filter them.
+func (a *API) suggestionSettings() map[string]bool {
+	return map[string]bool{"enabled": a.Memory.SuggestionsOn(), "judged": a.Judge != nil && a.Judge.On("memory")}
+}
+
+// putYouSettings: the one system-wide switch for suggestions from conversations.
+func (a *API) putYouSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Suggestions *bool `json:"suggestions"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	if in.Suggestions != nil {
+		if err := a.Memory.SetSuggestions(*in.Suggestions); err != nil {
+			memoryFailure(w, err)
+			return
+		}
+	}
+	ok(w, a.suggestionSettings())
 }
 
 func (a *API) putBasics(w http.ResponseWriter, r *http.Request) {

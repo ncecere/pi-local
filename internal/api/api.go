@@ -1166,6 +1166,9 @@ func (a *API) deleteThread(w http.ResponseWriter, r *http.Request, ag *agents.Ag
 	if a.Search != nil {
 		a.Search.Forget(r.Context(), ag.ID, t)
 	}
+	if a.Memory != nil {
+		a.Memory.ForgetThread(r.Context(), ag.ID, t)
+	}
 	ok(w, map[string]bool{"ok": true})
 }
 
