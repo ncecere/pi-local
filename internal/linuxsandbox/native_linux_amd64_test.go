@@ -353,30 +353,25 @@ func TestNativeSupervisorChild(t *testing.T) {
 	}
 }
 func descendants(root int) ([]int, error) {
-	var out []int
-	queue := []int{root}
-	seen := map[int]bool{root: true}
-	for len(queue) > 0 {
-		pid := queue[0]
-		queue = queue[1:]
-		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range strings.Fields(string(raw)) {
-			n, err := strconv.Atoi(s)
-			if err != nil || n <= 1 || seen[n] {
-				return nil, fmt.Errorf("unexpected fixture descendant")
+	return fixtureDescendants("/proc", root)
+}
+
+// namespacePID reads only fixture process identity, never environment or argv.
+func namespacePID(pid int) (int, error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, fmt.Errorf("fixture status unavailable")
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "NSpid:" {
+			n, err := strconv.Atoi(fields[len(fields)-1])
+			if err == nil && n > 0 {
+				return n, nil
 			}
-			seen[n] = true
-			out = append(out, n)
-			queue = append(queue, n)
-		}
-		if len(out) > 32 {
-			return nil, fmt.Errorf("fixture tree too large")
 		}
 	}
-	return out, nil
+	return 0, fmt.Errorf("fixture namespace identity unavailable")
 }
 func TestNativeNamespaceCleanup(t *testing.T) {
 	f := nativeSetup(t)
@@ -386,7 +381,7 @@ while :; do
  while read -r key value tail; do if test "$key" = PPid:; then parent=$value; fi; done < /proc/$$/status
  test "$parent" = 1 && break
 done
-printf 'escaped-ready\n'
+printf 'escaped-ready %s\n' "$$"
 exec /bin/sleep 60
 `
 	if err := os.WriteFile(f.p.TempDir+"/daemon.sh", []byte(daemon), 0600); err != nil {
@@ -424,23 +419,31 @@ exec /bin/sleep 60
 				t.Fatal(err)
 			}
 			defer func() { _ = cmd.Process.Kill() }()
-			ready := make(chan error, 1)
+			type readiness struct {
+				pid int
+				err error
+			}
+			ready := make(chan readiness, 1)
 			go func() {
 				scanner := bufio.NewScanner(pipe)
 				for scanner.Scan() {
-					if scanner.Text() == "escaped-ready" {
-						ready <- nil
+					fields := strings.Fields(scanner.Text())
+					if len(fields) == 2 && fields[0] == "escaped-ready" {
+						pid, err := strconv.Atoi(fields[1])
+						ready <- readiness{pid, err}
 						_, _ = io.Copy(io.Discard, pipe)
 						return
 					}
 				}
-				ready <- fmt.Errorf("no readiness marker")
+				ready <- readiness{err: fmt.Errorf("no readiness marker")}
 			}()
+			escapedPID := 0
 			select {
-			case err := <-ready:
-				if err != nil {
-					t.Fatalf("fixture did not start: %v %s", err, stderr.String())
+			case r := <-ready:
+				if r.err != nil || r.pid <= 1 {
+					t.Fatal("fixture did not provide escaped descendant readiness")
 				}
+				escapedPID = r.pid
 			case <-ctx.Done():
 				t.Fatal("fixture readiness timeout")
 			}
@@ -449,7 +452,7 @@ exec /bin/sleep 60
 				t.Fatal(err)
 			}
 			if len(pids) < 3 {
-				t.Fatalf("did not observe actual escaped namespace tree: %v", pids)
+				t.Fatal("did not observe minimum escaped namespace tree")
 			}
 			var handles []int
 			defer func() {
@@ -458,12 +461,43 @@ exec /bin/sleep 60
 					unix.Close(fd)
 				}
 			}()
+			escapedCount, initCount := 0, 0
+			escapedGroup, escapedSession, initGroup, initSession := 0, 0, 0, 0
 			for _, pid := range pids {
+				nsPID, err := namespacePID(pid)
+				if err != nil {
+					t.Fatal(err) // Do not silently lose a previously observed child.
+				}
+				if nsPID == escapedPID || nsPID == 1 {
+					group, err := unix.Getpgid(pid)
+					if err != nil {
+						t.Fatal("fixture process group unavailable")
+					}
+					session, err := unix.Getsid(pid)
+					if err != nil {
+						t.Fatal("fixture session unavailable")
+					}
+					if nsPID == 1 {
+						initCount++
+						initGroup, initSession = group, session
+					} else {
+						escapedCount++
+						escapedGroup, escapedSession = group, session
+					}
+				}
 				fd, err := unix.PidfdOpen(pid, 0)
 				if err != nil {
 					t.Fatal(err)
 				}
 				handles = append(handles, fd)
+			}
+			if escapedCount != 1 || initCount != 1 {
+				t.Fatal("escaped setsid descendant or namespace init missing from observed pidfd set")
+			}
+			// Compare with namespace init, NOT the host-side caller: bwrap already
+			// creates a session, so comparing only with the caller is insufficient.
+			if escapedGroup == initGroup || escapedSession == initSession {
+				t.Fatal("escaped descendant did not leave the original sandbox group/session")
 			}
 			if err := cmd.Process.Kill(); err != nil {
 				t.Fatal(err)
