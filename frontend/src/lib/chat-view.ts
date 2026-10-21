@@ -208,8 +208,8 @@ interface Reply {
   message: AgentUIMessage;
   /** All occurrences, keyed by stable source identity, not reusable provider ID. */
   tools: Map<string, DynamicToolUIPart>;
-  /** Compatibility for old DTOs without identities: only this assistant step's calls. */
-  round: Map<string, string>;
+  /** Step-local presentation fallback, never approvals. null means duplicate/ambiguous provider ID. */
+  round: Map<string, string | null>;
   /** What the steps recorded, accumulated: merged into the reply's metadata after each step. */
   recorded: Pick<ReplyMetadata, 'at' | 'model' | 'usage' | 'stopReason'>;
 }
@@ -469,9 +469,12 @@ function addAssistantStep(reply: Reply, message: ChatAssistantMessage) {
   if (message.thinking) parts.push({ type: 'reasoning', text: message.thinking, state: 'done' });
   if (message.text) parts.push({ type: 'text', text: message.text, state: 'done' });
   reply.round.clear();
-  for (const call of message.toolCalls ?? []) {
-    const key = call.instanceId ?? `${message.id}/tool/${encodeURIComponent(call.id)}`;
-    if (!call.instanceId) reply.round.set(call.id, key);
+  for (const [index, call] of (message.toolCalls ?? []).entries()) {
+    const source = call.instanceId ?? `${message.id}/tool/${encodeURIComponent(call.id)}`;
+    const key = reply.tools.has(source) ? `${source}/duplicate/${index}` : source;
+    // Results can lack task provenance even when their assistant call has a source identity. Only an
+    // unambiguous call in THIS step may supply that missing link; approvals never use this index.
+    reply.round.set(call.id, reply.round.has(call.id) ? null : key);
     const metadata = {
       ...(call.taskId ? { taskId: call.taskId } : {}),
       ...(call.startedAt !== undefined ? { startedAt: call.startedAt, endedAt: call.endedAt } : {}),
@@ -480,8 +483,12 @@ function addAssistantStep(reply: Reply, message: ChatAssistantMessage) {
       type: 'dynamic-tool',
       toolName: call.name,
       toolCallId:
-        call.instanceId ??
-        ([...reply.tools.values()].some((part) => part.toolCallId === call.id) ? key : call.id),
+        key !== source
+          ? key
+          : (call.instanceId ??
+            ([...reply.tools.values()].some((part) => part.toolCallId === call.id)
+              ? key
+              : call.id)),
       state: 'input-available',
       input: call.arguments ?? {},
       ...(Object.keys(metadata).length > 0 ? { toolMetadata: metadata } : {}),
@@ -530,7 +537,7 @@ function addToolResult(reply: Reply, message: ChatToolMessage) {
   const base = {
     type: 'dynamic-tool' as const,
     toolName: existing?.toolName ?? message.name ?? 'tool',
-    toolCallId: existing?.toolCallId ?? message.instanceId ?? message.toolCallId,
+    toolCallId: existing?.toolCallId ?? message.instanceId ?? id,
     input: existing?.input ?? {},
     ...(metadata ? { toolMetadata: metadata } : {}),
   };
