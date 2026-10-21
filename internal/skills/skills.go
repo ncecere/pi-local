@@ -128,7 +128,7 @@ func (s *Store) List() []Skill {
 		if strings.HasPrefix(e.Name(), ".") || !ValidName(e.Name()) {
 			continue
 		}
-		if info, err := os.Stat(filepath.Join(s.Root, e.Name())); err != nil || !info.IsDir() {
+		if info, err := os.Lstat(filepath.Join(s.Root, e.Name())); err != nil || !info.IsDir() {
 			continue
 		}
 		out = append(out, s.summary(e.Name()))
@@ -160,12 +160,16 @@ func (s *Store) Has(name string) bool {
 func (s *Store) summary(name string) Skill {
 	dir := filepath.Join(s.Root, name)
 	sk := Skill{Name: name}
-	raw, err := os.ReadFile(filepath.Join(dir, File))
-	if err != nil {
-		sk.Problem = "It has no SKILL.md."
-	} else if _, description, _, err := check(string(raw)); err != nil {
-		sk.Problem = err.Error()
-		data, _ := frontmatter.Parse(string(raw))
+	raw, truncated, err := s.ReadFile(name, File)
+	if err != nil || truncated {
+		sk.Problem = "It needs a readable SKILL.md inside its folder (at most 256 KB)."
+	} else if declared, description, _, err := check(raw); err != nil || declared != name {
+		if err != nil {
+			sk.Problem = err.Error()
+		} else {
+			sk.Problem = "SKILL.md's name must match its folder."
+		}
+		data, _ := frontmatter.Parse(raw)
 		sk.Description = strings.TrimSpace(data["description"])
 	} else {
 		sk.Description = description
@@ -211,12 +215,12 @@ func (s *Store) Get(name string) (*Detail, error) {
 		return nil, ErrNotFound
 	}
 	dir := filepath.Join(s.Root, name)
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 		return nil, ErrNotFound
 	}
 	d := &Detail{Skill: s.summary(name), Folder: dir}
-	if raw, err := os.ReadFile(filepath.Join(dir, File)); err == nil {
-		_, d.Body = frontmatter.Parse(string(raw))
+	if raw, _, err := s.ReadFile(name, File); err == nil {
+		_, d.Body = frontmatter.Parse(raw)
 	}
 	d.Items, _ = walk(dir)
 	if d.Items == nil {
@@ -234,18 +238,22 @@ func (s *Store) ReadFile(name, rel string) (content string, truncated bool, err 
 	if rel == "" || strings.ContainsRune(rel, 0) || path.IsAbs(rel) || strings.HasPrefix(rel, "/") {
 		return "", false, bad("invalid_path", "Give a file's path inside the skill.")
 	}
-	dir, err := filepath.EvalSymlinks(filepath.Join(s.Root, name))
+	if strings.Contains(rel, "\\") || slicesContainParent(rel) {
+		return "", false, bad("invalid_path", "That file is outside the skill.")
+	}
+	dir := filepath.Join(s.Root, name)
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return "", false, ErrNotFound
+	}
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return "", false, ErrNotFound
 	}
-	real, err := filepath.EvalSymlinks(filepath.Join(dir, filepath.FromSlash(rel)))
-	if err != nil {
-		return "", false, &Error{Status: http.StatusNotFound, Code: "not_found", Message: "File not found"}
-	}
-	if r, err := filepath.Rel(dir, real); err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+	defer root.Close()
+	f, err := root.Open(filepath.FromSlash(rel))
+	if errors.Is(err, os.ErrInvalid) || (err != nil && strings.Contains(err.Error(), "escapes")) {
 		return "", false, bad("invalid_path", "That file is outside the skill.")
 	}
-	f, err := os.Open(real)
 	if err != nil {
 		return "", false, &Error{Status: http.StatusNotFound, Code: "not_found", Message: "File not found"}
 	}
@@ -290,14 +298,21 @@ type entry struct {
 // archive has been checked, and only regular files and folders are ever made (a link or a path that climbs out of the
 // folder refuses the archive).
 func (s *Store) AddZip(data []byte, replace bool) (*Skill, error) {
+	if len(data) > MaxZipBytes {
+		return nil, bad("too_large", "A skill's zip is at most 25 MB.")
+	}
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, bad("invalid_archive", "That isn't a zip file.")
 	}
+	if len(zr.File) > 1000 {
+		return nil, bad("too_large", "A skill's zip has at most 1000 entries, including folders.")
+	}
 	var entries []entry
+	seen := map[string]bool{}
 	for _, f := range zr.File {
 		name := f.Name
-		if strings.ContainsAny(name, "\\\x00") || strings.HasPrefix(name, "/") {
+		if strings.ContainsAny(name, "\\\x00:") || strings.HasPrefix(name, "/") || slicesContainParent(name) {
 			return nil, bad("invalid_archive", "The zip has a file name that isn't allowed (%q).", name)
 		}
 		clean := path.Clean(strings.TrimSuffix(name, "/"))
@@ -307,7 +322,7 @@ func (s *Store) AddZip(data []byte, replace bool) (*Skill, error) {
 		if clean == ".." || strings.HasPrefix(clean, "../") {
 			return nil, bad("invalid_archive", "The zip has a file outside its folder (%q).", name)
 		}
-		if f.Mode()&os.ModeSymlink != 0 {
+		if !f.Mode().IsRegular() && !f.Mode().IsDir() {
 			return nil, bad("invalid_archive", "The zip has a link (%s); skills can only hold plain files.", clean)
 		}
 		if hidden(clean) {
@@ -316,6 +331,11 @@ func (s *Store) AddZip(data []byte, replace bool) (*Skill, error) {
 		if f.FileInfo().IsDir() {
 			continue
 		}
+		key := strings.ToLower(clean)
+		if seen[key] {
+			return nil, bad("invalid_archive", "The zip repeats a file name (%s).", clean)
+		}
+		seen[key] = true
 		entries = append(entries, entry{rel: clean, file: f})
 	}
 	// Where SKILL.md is: the top, or the single folder everything is in.
@@ -372,6 +392,7 @@ func (s *Store) AddZip(data []byte, replace bool) (*Skill, error) {
 		return nil, bad("too_large", "A skill is at most %d MB in all.", MaxTotalBytes>>20)
 	}
 	var skillMD []byte
+	var actual int
 	contents := make(map[string][]byte, len(files))
 	for _, e := range files {
 		rc, err := e.file.Open()
@@ -383,10 +404,17 @@ func (s *Store) AddZip(data []byte, replace bool) (*Skill, error) {
 		if err != nil || len(b) > MaxFileBytes {
 			return nil, bad("invalid_archive", "The zip is damaged, or %s is too large.", e.rel)
 		}
+		actual += len(b)
+		if actual > MaxTotalBytes {
+			return nil, bad("too_large", "A skill is at most 20 MB in all.")
+		}
 		contents[e.rel] = b
 		if e.rel == File {
 			skillMD = b
 		}
+	}
+	if len(skillMD) > MaxViewBytes {
+		return nil, bad("too_large", "SKILL.md is at most 256 KB.")
 	}
 	name, description, _, err := check(string(skillMD))
 	if err != nil {
@@ -429,6 +457,15 @@ func (s *Store) AddZip(data []byte, replace bool) (*Skill, error) {
 	}
 	n, size := walk(final)
 	return &Skill{Name: name, Description: description, Files: len(n), Bytes: size}, nil
+}
+
+func slicesContainParent(p string) bool {
+	for _, segment := range strings.Split(p, "/") {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // hidden says whether a path has a hidden or macOS-metadata segment.

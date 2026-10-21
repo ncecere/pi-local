@@ -868,6 +868,110 @@ type WebSettings = {
 | `PUT /api/settings/web` | Body `{provider, url?, apiKey?}`. `apiKey` left out keeps the stored key; `""` removes it. `url` left out keeps the stored one; `""` clears it. `provider: ""` turns search off (and removes the key and address). Answers `WebSettings`. Errors: `400 invalid_provider`, `400 invalid_key` ("Paste the API key from Brave Search."), `400 invalid_url`. |
 | `POST /api/settings/web/test` | Body `{query?}` (default "Pi Local test search"). One search with the saved settings: `{results: [{title, url, snippet}]}` (at most 3). `409 not_set_up`; `502 search_failed` with a message for people. |
 
+## Skills (v0.4)
+
+A skill is a folder with `SKILL.md` at its top:
+
+```markdown
+---
+name: release-notes
+description: Write release notes from a changelog.
+---
+
+Group changes by area. Read references/style.md first.
+```
+
+`name` is 1–64 lowercase letters or digits separated by single dashes; it must match the installed folder's name.
+`description` is required (at most 1,024 characters): it tells the agent when to read the instructions. Front matter
+accepts plain or quoted values and indented `>` / `|` blocks. Other metadata is ignored. `SKILL.md` is at most 256 KiB.
+A folder made by hand with invalid instructions is listed with a `problem` and isn't offered to the model.
+
+- **Own skills**: `<agentDir>/skills/<name>/`, always on for that agent only.
+- **Shared skills**: `<data>/skills/<name>/`, off until picked for an agent. `Agent.skills: string[]` (also
+  `agent.yaml` `skills: [release-notes]`) is that agent's selection. Create and PATCH accept `skills`; invalid names
+  or more than 100 entries give `400 invalid_skills`. Duplicate names are kept once. Use the dedicated PUT below to
+  check existence too.
+- The runtime lists up to 100 available skills (name, description and location) in the system prompt, own skills first;
+  an own skill wins over a shared one of the same name. Instructions aren't loaded until needed. Changes to existing
+  skill files are read on the next turn; changing the selection restarts an awake agent.
+- The read-only `skill` tool takes `{name, file?}`. With no `file` it reads the instructions and lists supporting files;
+  otherwise it reads a relative file inside that skill. It works **without workspace `read` permission**, and grants
+  no workspace, write or shell access. Traversal, absolute paths and symlinks escaping the skill are refused, including
+  a linked `SKILL.md`; linked skill folders aren't used. Text results are bounded to 200 KiB. Scripts in a skill aren't
+  run by importing or reading it; running one still needs the agent's shell permission and approvals.
+
+```ts
+type Skill = { name: string; description: string; problem?: string; fileCount: number; bytes: number };
+type SkillDetail = Skill & { body: string; folder: string; files: {path: string; size: number}[] };
+type AgentSkills = { own: Skill[]; shared: (Skill & {enabled: boolean})[]; enabled: string[];
+  missing: string[]; folder: string }; // missing: selected shared names no longer present
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/skills` | `{skills: (Skill & {usedBy: {id, name}[]})[], folder}`: shared skills, by name. |
+| `POST /api/skills[?replace=true]` | Raw zip bytes, at most 25 MiB (send an ArrayBuffer, not a Blob). `201 Skill` with `usedBy`. `409 exists` unless replacement was requested. |
+| `GET /api/skills/{name}` | `{skill: SkillDetail, usedBy: {id, name}[]}`. `body` omits front matter. |
+| `GET /api/skills/{name}/file?path=` | `{path, content, truncated}`: a text file, at most 256 KiB; `400 invalid_path` or `binary_file`, `404 not_found`. |
+| `DELETE /api/skills/{name}` | `{ok: true}`. Deletes its folder and removes the selection from every agent that used it. |
+| `GET /api/agents/{a}/skills` | `AgentSkills`. |
+| `PUT /api/agents/{a}/skills` | Body `{enabled: string[]}` replaces the shared selection; answers `Agent`. `400 unknown_skill` unless a name exists or is already selected (so missing names can be removed). |
+| `POST /api/agents/{a}/skills[?replace=true]` | The same zip import, into the agent's own folder. `201 Skill`. |
+| `GET /api/agents/{a}/skills/{name}` | `{skill: SkillDetail}`: an own skill only. |
+| `GET /api/agents/{a}/skills/{name}/file?path=` | Same bounded text answer for an own skill. |
+| `DELETE /api/agents/{a}/skills/{name}` | `{ok: true}`: removes an own skill. |
+
+An import has `SKILL.md` at the zip's top, or in the single folder holding everything. The front matter names the
+installed folder. Limits: 300 files, 5 MiB per file, 20 MiB expanded in all, 1,000 zip entries including folders.
+Absolute paths, parent segments, backslashes, drive names, duplicate/case-alias file names, symbolic links and special
+files are refused. Hidden files and `__MACOSX` are ignored. The complete archive is checked before installation; a
+refusal changes nothing. Errors: `400 invalid_archive`, `invalid_skill`, `too_large`; an upload over 25 MiB is
+`413 too_large`. The Skills tab's folder picker zips the selected folder before sending it (also skipping
+`node_modules`); the server applies the same import validation. Own skills have no separate enable switch: remove
+one to stop using it.
+
+## Prompt library and slash commands (v0.4)
+
+Saved prompts are Markdown files in `<data>/prompts/<id>.md`, with front matter `title` and optional `description`,
+then the prompt text. A file without front matter uses its first `# Heading` as the title (otherwise its filename).
+The API generates a stable slug ID, adding `-2`, etc. for duplicate titles; editing the title keeps the ID. Imports
+always create new prompts, never replace existing ones.
+
+```ts
+type LibraryPrompt = { id: string; title: string; description: string; body: string;
+  placeholders: string[]; updatedAt: string }; // ISO 8601; placeholders once each, in order
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/prompts` | `{prompts: LibraryPrompt[]}`, by title. |
+| `POST /api/prompts` | Body `{title, description?, body}`. `201 LibraryPrompt`. |
+| `GET /api/prompts/{id}` | `LibraryPrompt`, or `404 not_found`. |
+| `PUT /api/prompts/{id}` | Body `{title, description?, body}` replaces all fields; `LibraryPrompt`. |
+| `DELETE /api/prompts/{id}` | `{ok: true}`, or `404 not_found`. |
+| `POST /api/prompts/import?name=<filename>` | Raw Markdown or zip bytes (ArrayBuffer, not Blob), at most 8 MiB. `201 {prompts: LibraryPrompt[], skipped: number}`. Invalid prompt files in a multi-file import are skipped; a single invalid prompt is an error. Zip paths and links are validated; at most 1,000 entries and 8 MiB expanded Markdown. |
+| `GET /api/prompts/{id}/export` | A Markdown download, `<id>.md`. |
+| `GET /api/prompts/export` | A zip of all Markdown prompt files, `pi-local-prompts.zip`. |
+| `POST /api/prompts/export-save` | Desktop Save dialog: `{path}` or `{cancelled: true}`; `501 not_supported` in a browser (download GET instead). |
+
+Limits: 500 prompts, title 100 characters, description 300, body 20,000; title and body are required. Errors:
+`400 invalid_prompt`, `empty_file`, `invalid_archive`, `too_large`; `409 too_many` when the library is full.
+Settings → Prompts provides add, edit, delete, import and export. Both shared skills and prompts are included in
+backups/restores; own skills are included with their agent folder.
+
+In the composer, `/` at the start opens the command/prompt menu. Typing filters it; Up/Down wrap the selection,
+Enter or Tab chooses, Escape closes it without changing the text. Choosing a prompt fills the message box, never
+sends it. `{{name}}` placeholders (letters, digits, spaces, dashes and underscores, up to 40 characters) are asked for
+inline: Enter advances, Enter in the last field fills the box, Escape cancels. Empty fields remain as placeholders.
+Built-ins appear only where applicable:
+
+- `/new`: new conversation with this agent (not on the new-conversation page).
+- `/model`: opens the conversation's model picker, when model choice is enabled.
+- `/stop`: stops a reply in progress.
+- `/remember`, `/forget`: fill a memory request for the person to finish and send (absent when memory is off).
+- `/search`, `/remind`: fill a web-search or reminder request when the agent has that capability.
+- `/prompts`: opens Settings → Prompts. Built-ins precede library prompts if names collide; no command erases history.
+
 ## Memory (v0.2)
 
 What agents know about the person, and what each agent learned about its own work. Everything stays on this computer
@@ -1057,8 +1161,8 @@ those):
 ```
 manifest.json                      what it is, see below
 app.db                             VACUUM INTO: whole and compact
-templates/…
-agents/<id>/agent.yaml, memory.json, state.sqlite, workspace/…, tmp/attachments/…
+templates/…, skills/…, prompts/…
+agents/<id>/agent.yaml, memory.json, state.sqlite, skills/…, workspace/…, tmp/attachments/…
 ```
 
 - **Never secrets.** Provider keys, MCP variable and header values and sign-ins are in the OS keychain, which isn't
@@ -1077,7 +1181,7 @@ agents/<id>/agent.yaml, memory.json, state.sqlite, workspace/…, tmp/attachment
   never deleted by the app.
 - **Before an update.** Installing an update makes a `before-update` backup after the archive is verified and before
   anything is replaced.
-- **Restore** replaces `app.db`, `agents/` and `templates/`. The running app holds app.db open, so it happens at the
+- **Restore** replaces `app.db`, `agents/`, `templates/`, `skills/` and `prompts/`. The running app holds app.db open, so it happens at the
   next start: the request is written to `<data>/restore-pending.json` and the app restarts (the desktop app
   relaunches itself; a build that can't says `canRestart: false` and the person quits and opens it). As it starts,
   before app.db is opened, the backup is unpacked into `<data>/restore-staging` and checked (the zip's names, a SQLite

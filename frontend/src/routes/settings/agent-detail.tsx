@@ -13,6 +13,7 @@ import { McpTab } from '~/components/agent-manager/mcp-tab';
 import { MemoryTab } from '~/components/agent-manager/memory-tab';
 import { OverviewTab } from '~/components/agent-manager/overview-tab';
 import { SchedulesTab } from '~/components/agent-manager/schedules-tab';
+import { SkillsTab } from '~/components/agent-manager/skills-tab';
 import { ToolsTab } from '~/components/agent-manager/tools-tab';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
@@ -26,6 +27,7 @@ type TabId =
   | 'overview'
   | 'tools'
   | 'mcp'
+  | 'skills'
   | 'kind'
   | 'memory'
   | 'can-ask'
@@ -38,6 +40,7 @@ const TAB_IDS: readonly string[] = [
   'overview',
   'tools',
   'mcp',
+  'skills',
   'kind',
   'memory',
   'can-ask',
@@ -87,6 +90,7 @@ export function SettingsAgentDetailPage({
     { id: 'overview', label: 'Overview' },
     { id: 'tools', label: 'Tools' },
     { id: 'mcp', label: 'MCP' },
+    { id: 'skills', label: 'Skills' },
     ...(hasKindSettings(agent.agentKind)
       ? [{ id: 'kind' as const, label: `${agentKindLabel(agent)} settings` }]
       : []),
@@ -188,6 +192,7 @@ export function SettingsAgentDetailPage({
             }}
           />
         )}
+        {current === 'skills' && <SkillsTab agent={agent} />}
         {current === 'kind' && <KindSettingsTab agent={agent} />}
         {current === 'memory' && <MemoryTab agent={agent} />}
         {current === 'can-ask' && <CanAskTab agent={agent} agents={agents.data} />}

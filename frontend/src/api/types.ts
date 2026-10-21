@@ -87,6 +87,68 @@ export interface Agent {
   memory?: AgentMemory;
   /** Its monthly budget; null (or absent from an older backend): none. */
   budget?: AgentBudget | null;
+  /** The shared skills it uses, by name (its own skills are always on). Absent from an older backend (none). */
+  skills?: string[];
+}
+
+// ── Skills and the prompt library (docs/api.md, Skills and Prompts) ─────────────────────────
+
+/** A skill: a folder with a SKILL.md. */
+export interface Skill {
+  /** The folder's name: lowercase letters, digits and dashes. */
+  name: string;
+  description: string;
+  /** Why an agent can't use it (a folder made by hand without a description); absent when fine. */
+  problem?: string;
+  fileCount: number;
+  bytes: number;
+}
+
+/** A shared skill in a list: with the agents that use it. */
+export interface SharedSkill extends Skill {
+  usedBy: AgentRef[];
+}
+
+export interface SkillFile {
+  path: string;
+  size: number;
+}
+
+/** One skill, to view: its instructions (SKILL.md without its front matter) and files. */
+export interface SkillDetail extends Skill {
+  body: string;
+  /** Where it is on this computer. */
+  folder: string;
+  files: SkillFile[];
+}
+
+/** `GET /api/agents/{id}/skills`. */
+export interface AgentSkills {
+  own: Skill[];
+  shared: (Skill & { enabled: boolean })[];
+  /** The shared skills it uses (names). */
+  enabled: string[];
+  /** Enabled names that no longer exist in the shared folder. */
+  missing: string[];
+  folder: string;
+}
+
+/** A saved prompt in the library. */
+export interface LibraryPrompt {
+  /** The file's name without .md. */
+  id: string;
+  title: string;
+  description: string;
+  body: string;
+  /** The {{names}} in the body, once each, in order. */
+  placeholders: string[];
+  updatedAt: string;
+}
+
+export interface PromptInput {
+  title: string;
+  description: string;
+  body: string;
 }
 
 /** A monthly spending limit (an agent's `budget`, or the app's in Settings → Usage), in US dollars. */

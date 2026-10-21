@@ -7,8 +7,11 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
+  useState,
 } from 'react';
+import { PlaceholderForm, SlashMenu } from '~/components/chat/slash-menu';
 import { FILLED_FOCUS_RING, FOCUS_RING } from '~/components/ui/focus-ring';
 import { AGENT_MESSAGE_MAX_LENGTH } from '~/hooks/use-agent-thread';
 import { pastedFilesOf } from '~/lib/attachments';
@@ -20,6 +23,7 @@ import {
   sendKeyShortcuts,
   steerKeyLabel,
 } from '~/lib/send-keys';
+import { filterCommands, type SlashCommand, slashQuery } from '~/lib/slash-commands';
 import { cn } from '~/lib/utils';
 import { useInvertSend } from '~/providers/theme-provider';
 
@@ -59,6 +63,11 @@ interface ComposerProps {
   hasExtra?: boolean;
   /** Sending waits for this (files still uploading); said under the field. */
   holdSend?: string | null;
+  /**
+   * Slash commands: typing `/` at the start of the message opens a menu of these (arrow keys and Enter, Tab or a click
+   * choose, Escape closes it). Absent: `/` is only text.
+   */
+  commands?: readonly SlashCommand[];
 }
 
 /**
@@ -84,6 +93,7 @@ export const Composer = memo(function Composer({
   onPasteFiles,
   hasExtra = false,
   holdSend = null,
+  commands,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const apple = isApplePlatform();
@@ -119,8 +129,80 @@ export const Composer = memo(function Composer({
     onPasteFiles(files);
   }
 
+  // Slash commands: the menu is open while the message is only `/` and what is being typed after it, and something
+  // matches. Escape closes it until the text changes.
+  const listId = useId();
+  const [active, setActive] = useState(0);
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  useEffect(() => {
+    setDismissedAt((current) => (current === value ? current : null));
+  }, [value]);
+  const [filling, setFilling] = useState<SlashCommand | null>(null);
+  const query = commands && !disabled && !filling ? slashQuery(value) : null;
+  const matches = useMemo(
+    () => (query === null ? [] : filterCommands(commands ?? [], query)),
+    [commands, query],
+  );
+  const menuOpen = matches.length > 0 && dismissedAt !== value;
+  const shownActive = Math.min(active, Math.max(matches.length - 1, 0));
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new query starts at the top
+  useEffect(() => setActive(0), [query]);
+  // After a fill, the cursor goes to the end of the text.
+  const caretAtEnd = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: value is what the fill changed
+  useLayoutEffect(() => {
+    const node = textareaRef.current;
+    if (!caretAtEnd.current || !node) return;
+    caretAtEnd.current = false;
+    node.focus({ preventScroll: true });
+    node.setSelectionRange(node.value.length, node.value.length);
+  }, [value]);
+  const fillBox = (text: string) => {
+    caretAtEnd.current = true;
+    onChange(text);
+    // The text may equal what is there: the effect above only runs on a change, so also place the cursor now.
+    const node = textareaRef.current;
+    if (node && node.value === text) {
+      node.focus({ preventScroll: true });
+      node.setSelectionRange(text.length, text.length);
+    }
+  };
+  function choose(command: SlashCommand) {
+    if (command.fields && command.fields.length > 0) {
+      onChange('');
+      setFilling(command);
+    } else if (command.run) {
+      onChange('');
+      command.run();
+    } else fillBox(command.text ?? '');
+  }
+
   const canSteer = working && Boolean(onSteer);
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (menuOpen && !event.nativeEvent.isComposing) {
+      const plainEnter =
+        event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const step = event.key === 'ArrowDown' ? 1 : -1;
+        setActive((shownActive + step + matches.length) % matches.length);
+        return;
+      }
+      if (plainEnter || (event.key === 'Tab' && !event.shiftKey)) {
+        event.preventDefault();
+        choose(matches[shownActive]!);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setDismissedAt(value);
+        return;
+      }
+    }
     if (canSteer && isSteerKey(event)) {
       event.preventDefault();
       if (canSubmit && !event.repeat) onSteer?.();
@@ -135,8 +217,30 @@ export const Composer = memo(function Composer({
 
   return (
     <div className="mx-auto w-full max-w-[47rem] px-6 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:px-3 md:pb-3">
-      <div className="rounded-[1.25rem] border border-[var(--border-strong)] bg-[var(--bg-control)] px-4 pb-4 pt-5 focus-within:outline focus-within:outline-1 focus-within:-outline-offset-1 focus-within:outline-[var(--accent-bright)]">
+      <div className="relative rounded-[1.25rem] border border-[var(--border-strong)] bg-[var(--bg-control)] px-4 pb-4 pt-5 focus-within:outline focus-within:outline-1 focus-within:-outline-offset-1 focus-within:outline-[var(--accent-bright)]">
+        {menuOpen && (
+          <SlashMenu
+            id={listId}
+            commands={matches}
+            active={shownActive}
+            onActive={setActive}
+            onChoose={choose}
+          />
+        )}
         {tray}
+        {filling && (
+          <PlaceholderForm
+            command={filling}
+            onCancel={() => {
+              setFilling(null);
+              textareaRef.current?.focus({ preventScroll: true });
+            }}
+            onDone={(text) => {
+              setFilling(null);
+              fillBox(text);
+            }}
+          />
+        )}
         <textarea
           ref={textareaRef}
           rows={1}
@@ -148,6 +252,13 @@ export const Composer = memo(function Composer({
           disabled={disabled}
           aria-label="Message input"
           dir="auto"
+          {...(menuOpen
+            ? {
+                'aria-controls': listId,
+                'aria-autocomplete': 'list' as const,
+                'aria-activedescendant': `${listId}-${shownActive}`,
+              }
+            : {})}
           aria-invalid={tooLong || undefined}
           aria-describedby={
             [tooLong && lengthNoteId, working && length > 0 && queueNoteId, holdSend && holdNoteId]

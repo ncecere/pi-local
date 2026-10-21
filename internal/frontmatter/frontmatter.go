@@ -18,19 +18,12 @@ func Parse(raw string) (data map[string]string, body string) {
 	if !strings.HasPrefix(src, "---\n") {
 		return data, src
 	}
-	end := strings.Index(src[3:], "\n---")
-	if end < 0 {
+	end := delimiter.FindStringIndex(src[4:])
+	if end == nil {
 		return data, src
 	}
-	end += 3
-	head := ""
-	if end > 4 {
-		head = src[4:end]
-	}
-	body = ""
-	if nl := strings.Index(src[end+1:], "\n"); nl >= 0 {
-		body = src[end+1+nl+1:]
-	}
+	head := src[4 : 4+end[0]]
+	body = src[4+end[1]:]
 	var key, style string
 	var parts []string
 	finish := func() {
@@ -38,7 +31,7 @@ func Parse(raw string) (data map[string]string, body string) {
 			return
 		}
 		sep := " "
-		if style == "|" || style == "|-" {
+		if strings.HasPrefix(style, "|") {
 			sep = "\n"
 		}
 		value := strings.TrimSpace(strings.Join(parts, sep))
@@ -54,6 +47,9 @@ func Parse(raw string) (data map[string]string, body string) {
 		key = ""
 	}
 	for _, line := range strings.Split(head, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
 		if m := keyLine.FindStringSubmatch(line); m != nil {
 			finish()
 			key = m[1]
@@ -66,7 +62,7 @@ func Parse(raw string) (data map[string]string, body string) {
 					parts = []string{m[2]}
 				}
 			}
-		} else if key != "" && strings.TrimSpace(line) != "" {
+		} else if key != "" && strings.TrimSpace(line) != "" && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) {
 			parts = append(parts, strings.TrimSpace(line))
 		}
 	}
@@ -75,6 +71,7 @@ func Parse(raw string) (data map[string]string, body string) {
 }
 
 var (
+	delimiter  = regexp.MustCompile(`(?m)^---[ \t]*(?:\n|$)`)
 	keyLine    = regexp.MustCompile(`^([A-Za-z0-9_-]+):[ \t]*(.*)$`)
 	blockStyle = regexp.MustCompile(`^[>|][+-]?$`)
 )

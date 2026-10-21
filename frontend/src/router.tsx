@@ -148,6 +148,10 @@ const settingsChildren = [
     lazyRouteComponent(() => import('~/routes/settings/activity'), 'SettingsActivityPage'),
   ),
   settingsPage(
+    '/settings/prompts',
+    lazyRouteComponent(() => import('~/routes/settings/prompts'), 'SettingsPromptsPage'),
+  ),
+  settingsPage(
     '/settings/backups',
     lazyRouteComponent(() => import('~/routes/settings/backups'), 'SettingsBackupsPage'),
   ),

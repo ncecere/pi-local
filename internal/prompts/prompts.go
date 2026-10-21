@@ -196,6 +196,9 @@ func Parse(raw []byte, fallbackTitle string) (Input, error) {
 
 func (s *Store) read(id string) (*Prompt, error) {
 	file := filepath.Join(s.dir, id+".md")
+	if info, err := os.Lstat(file); err != nil || !info.Mode().IsRegular() || info.Size() > 4*MaxBodyChars+8192 {
+		return nil, ErrNotFound
+	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
 		return nil, ErrNotFound
@@ -277,11 +280,20 @@ func Slug(title string) string {
 func (s *Store) write(id string, in Input) error {
 	p := Prompt{ID: id, Title: in.Title, Description: in.Description, Body: in.Body}
 	file := filepath.Join(s.dir, id+".md")
-	tmp := file + ".tmp"
-	if err := os.WriteFile(tmp, Marshal(p), 0o600); err != nil {
+	tmp, err := os.CreateTemp(s.dir, ".prompt-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, file)
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(Marshal(p))
+	closeErr := tmp.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(tmp.Name(), file)
 }
 
 func (s *Store) freeID(title string) string {
@@ -289,7 +301,7 @@ func (s *Store) freeID(title string) string {
 	id := base
 	for n := 2; ; n++ {
 		// "export" is a route (GET /api/prompts/export), never a prompt's ID.
-		if _, err := os.Stat(filepath.Join(s.dir, id+".md")); os.IsNotExist(err) && id != "export" {
+		if _, err := os.Lstat(filepath.Join(s.dir, id+".md")); os.IsNotExist(err) && id != "export" {
 			return id
 		}
 		id = fmt.Sprintf("%s-%d", base, n)
@@ -374,7 +386,22 @@ func (s *Store) Import(raw []byte, name string) (imported []Prompt, skipped int,
 		if zerr != nil {
 			return nil, 0, bad("invalid_archive", "That isn't a zip file.")
 		}
+		if len(zr.File) > 1000 {
+			return nil, 0, bad("too_large", "A prompt zip has at most 1000 entries.")
+		}
+		var expanded uint64
 		for _, f := range zr.File {
+			if strings.HasPrefix(f.Name, "/") || strings.ContainsAny(f.Name, "\\\x00:") || f.Mode()&os.ModeSymlink != 0 {
+				return nil, 0, bad("invalid_archive", "The zip has an unsafe file name or a link.")
+			}
+			for _, segment := range strings.Split(f.Name, "/") {
+				if segment == ".." {
+					return nil, 0, bad("invalid_archive", "The zip has a path outside its folder.")
+				}
+			}
+			if !f.Mode().IsRegular() && !f.Mode().IsDir() {
+				return nil, 0, bad("invalid_archive", "The zip must hold plain files.")
+			}
 			base := path.Base(f.Name)
 			if f.FileInfo().IsDir() || strings.HasPrefix(base, ".") || strings.Contains(f.Name, "__MACOSX/") || !strings.HasSuffix(strings.ToLower(base), ".md") {
 				continue
@@ -393,6 +420,10 @@ func (s *Store) Import(raw []byte, name string) (imported []Prompt, skipped int,
 			if rerr != nil {
 				skipped++
 				continue
+			}
+			expanded += uint64(len(b))
+			if expanded > MaxImportBytes {
+				return nil, 0, bad("too_large", "The prompt zip expands to more than 8 MB.")
 			}
 			items = append(items, item{base, b})
 		}

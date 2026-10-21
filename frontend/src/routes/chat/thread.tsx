@@ -36,6 +36,7 @@ import { useBudgets } from '~/hooks/use-budgets';
 import { type ChatScrollTarget, useChatScroll } from '~/hooks/use-chat-scroll';
 import { useElicitationsByThread } from '~/hooks/use-elicitations';
 import { useModelChoice } from '~/hooks/use-model-choice';
+import { useSlashCommands } from '~/hooks/use-slash-commands';
 import { budgetNotice } from '~/lib/budget';
 import { isPendingMessage, type ReplyMetadata } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
@@ -213,6 +214,19 @@ function ThreadConversation({
   // their callbacks (they are memoized).
   const navigate = useNavigate();
   const fork = useForkThread();
+  // Slash commands in the message box: /new starts another conversation with this agent, /model opens the picker.
+  const [modelOpen, setModelOpen] = useState(false);
+  const stopReply = session.stop;
+  const slashCommands = useSlashCommands({
+    agent,
+    working: busy,
+    onNew: useCallback(
+      () => void navigate({ to: '/', search: { agent: agentId } }),
+      [navigate, agentId],
+    ),
+    onModel: useCallback(() => setModelOpen(true), []),
+    onStop: useCallback(() => void stopReply(), [stopReply]),
+  });
   const forkState = useRef({ session, fork, navigate });
   forkState.current = { session, fork, navigate };
   const backToOriginal = useCallback(
@@ -504,6 +518,7 @@ function ThreadConversation({
             onSubmit={() => sendWithFiles()}
             onSteer={() => sendWithFiles(true)}
             onStop={() => void session.stop()}
+            commands={slashCommands}
             tray={
               <>
                 {/* Auto picked the agent: said by the composer (in sight) until the person sends again. */}
@@ -551,6 +566,8 @@ function ThreadConversation({
                 onModel={modelChoice.pickModel}
                 onThinking={modelChoice.pickThinking}
                 disabled={agent ? !agent.enabled : false}
+                open={modelOpen}
+                onOpenChange={setModelOpen}
               />
             }
           />

@@ -1,4 +1,4 @@
-import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import { defineExtension, defineTool, type Extension, section, Type } from "./facade.ts";
@@ -69,18 +69,17 @@ export function parseSkillSources(raw: string | undefined): SkillSource[] {
 export function parseFrontMatter(text: string): { data: Record<string, string>; body: string } {
 	const source = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
 	if (!source.startsWith("---\n")) return { data: {}, body: source };
-	const end = source.indexOf("\n---", 3);
-	if (end < 0) return { data: {}, body: source };
-	const after = source.indexOf("\n", end + 1);
-	const head = source.slice(4, end);
-	const body = after < 0 ? "" : source.slice(after + 1);
+	const end = /^---[ \t]*(?:\n|$)/m.exec(source.slice(4));
+	if (!end) return { data: {}, body: source };
+	const head = source.slice(4, 4 + end.index);
+	const body = source.slice(4 + end.index + end[0].length);
 	const data: Record<string, string> = {};
 	let key: string | undefined;
 	let style = "";
 	let parts: string[] = [];
 	const finish = () => {
 		if (key === undefined) return;
-		let value = style === "|" || style === "|-" ? parts.join("\n") : parts.join(" ");
+		let value = style.startsWith("|") ? parts.join("\n") : parts.join(" ");
 		value = value.trim();
 		if ((value.startsWith('"') && value.endsWith('"') && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)) {
 			const quote = value[0]!;
@@ -91,6 +90,7 @@ export function parseFrontMatter(text: string): { data: Record<string, string>; 
 		key = undefined;
 	};
 	for (const line of head.split("\n")) {
+		if (line.trimStart().startsWith("#")) continue;
 		const m = /^([A-Za-z0-9_-]+):[ \t]*(.*)$/.exec(line);
 		if (m && !/^\s/.test(line)) {
 			finish();
@@ -103,7 +103,7 @@ export function parseFrontMatter(text: string): { data: Record<string, string>; 
 				style = "";
 				parts = rest === "" ? [] : [rest];
 			}
-		} else if (key !== undefined && line.trim() !== "") {
+		} else if (key !== undefined && line.trim() !== "" && /^[ \t]/.test(line)) {
 			parts.push(line.trim());
 		}
 	}
@@ -137,19 +137,26 @@ export async function listSkills(sources: readonly SkillSource[]): Promise<Skill
 			entries = source.names.filter((n) => SKILL_NAME.test(n));
 		} else {
 			try {
-				entries = (await readdir(source.root, { withFileTypes: true })).filter((e) => e.isDirectory() || e.isSymbolicLink()).map((e) => e.name);
+				entries = (await readdir(source.root, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
 			} catch {
 				continue;
 			}
 		}
 		for (const name of entries.sort()) {
-			if (found.has(name) || !SKILL_NAME.test(name)) continue;
+			if (found.has(name) || name.length > 64 || !SKILL_NAME.test(name)) continue;
 			const dir = join(source.root, name);
+			if (!(await lstat(dir).catch(() => undefined))?.isDirectory()) continue;
 			const file = join(dir, SKILL_FILE);
-			const head = await readHead(file);
+			const realDir = await realpath(dir).catch(() => undefined);
+			const realFile = await realpath(file).catch(() => undefined);
+			if (!realDir || !realFile || !inside(realDir, realFile)) continue;
+			const info = await stat(realFile).catch(() => undefined);
+			if (!info?.isFile() || info.size > 256 * 1024) continue;
+			const head = await readHead(realFile);
 			if (head === undefined) continue;
-			const description = parseFrontMatter(head).data.description?.trim();
-			if (!description) continue;
+			const data = parseFrontMatter(head).data;
+			const description = data.description?.trim();
+			if (!description || [...description].length > MAX_DESCRIPTION || data.name?.trim() !== name) continue;
 			found.set(name, { name, description: description.slice(0, MAX_DESCRIPTION), dir, file });
 		}
 	}
@@ -188,7 +195,9 @@ async function filesOf(dir: string, limit: number): Promise<{ files: string[]; m
 	const files: string[] = [];
 	const queue = [""];
 	let more = false;
+	let visited = 0;
 	while (queue.length > 0) {
+		if (++visited > 1000) return { files, more: true };
 		const rel = queue.shift()!;
 		let entries;
 		try {
@@ -201,8 +210,8 @@ async function filesOf(dir: string, limit: number): Promise<{ files: string[]; m
 			const path = rel ? `${rel}/${e.name}` : e.name;
 			if (e.isDirectory()) queue.push(path);
 			else if (e.isFile() && path !== SKILL_FILE) {
-				if (files.length >= limit) more = true;
-				else files.push(path);
+				if (files.length >= limit) return { files, more: true };
+				files.push(path);
 			}
 		}
 	}
@@ -232,25 +241,22 @@ export function skillsExtension(options: SkillsOptions): Extension {
 					if (!skill) {
 						return text(`There is no skill "${args.name}".${all.length ? ` Your skills: ${all.map((s) => s.name).join(", ")}.` : " You have no skills."}`, true);
 					}
-					if (args.file === undefined || args.file === "" || args.file === SKILL_FILE) {
-						const raw = await readFile(skill.file, "utf8").catch(() => undefined);
-						if (raw === undefined) return text(`Could not read ${skill.file}.`, true);
-						const { body } = parseFrontMatter(raw);
-						const { files, more } = await filesOf(skill.dir, MAX_LISTED_FILES);
-						const out = [`Skill: ${skill.name}`, `Folder: ${skill.dir} (paths in the skill are relative to it)`, "", body.trim()];
-						if (files.length > 0) out.push("", `Other files in this skill (read with skill name="${skill.name}" file=...):`, ...files.map((f) => `- ${f}`), ...(more ? ["- …"] : []));
-						return text(out.join("\n"));
-					}
-					return readSkillFile(skill, args.file);
+					return readSkillFile(skill, args.file || SKILL_FILE);
 				},
 			}),
 		],
 	});
 }
 
+function inside(dir: string, file: string): boolean {
+	const rel = relative(dir, file);
+	return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
 async function readSkillFile(skill: Skill, file: string) {
 	if (file.includes("\0")) return text("A path can't contain a NUL character.", true);
 	if (isAbsolute(file)) return text(`Give the file's path relative to the skill's folder, not ${file}.`, true);
+	if (file.includes("\\") || file.split("/").includes("..")) return text(`${file} is outside the skill's folder; only its own files can be read.`, true);
 	let dir: string;
 	let real: string;
 	try {
@@ -260,7 +266,7 @@ async function readSkillFile(skill: Skill, file: string) {
 		return text(`${file} isn't in the skill "${skill.name}".`, true);
 	}
 	const rel = relative(dir, real);
-	if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return text(`${file} is outside the skill's folder; only its own files can be read.`, true);
+	if (!inside(dir, real)) return text(`${file} is outside the skill's folder; only its own files can be read.`, true);
 	const info = await stat(real).catch(() => undefined);
 	if (!info?.isFile()) return text(`${file} isn't a file in the skill "${skill.name}".`, true);
 	const handle = await open(real, "r");
@@ -270,6 +276,13 @@ async function readSkillFile(skill: Skill, file: string) {
 		const data = buffer.subarray(0, bytesRead);
 		if (data.subarray(0, 8192).includes(0)) return text(`${file} is a binary file (${info.size} bytes). Run it or open it from the shell if you need it: ${join(skill.dir, file)}`);
 		const note = info.size > MAX_FILE_BYTES ? `\n\n[Shown the first ${MAX_FILE_BYTES / 1024} KB of ${Math.round(info.size / 1024)} KB.]` : "";
+		if (file === SKILL_FILE) {
+			const { body } = parseFrontMatter(data.toString("utf8"));
+			const { files, more } = await filesOf(dir, MAX_LISTED_FILES);
+			const out = [`Skill: ${skill.name}`, `Folder: ${skill.dir} (paths in the skill are relative to it)`, "", body.trim() + note];
+			if (files.length > 0) out.push("", `Other files in this skill (read with skill name="${skill.name}" file=...):`, ...files.map((f) => `- ${f}`), ...(more ? ["- …"] : []));
+			return text(out.join("\n"));
+		}
 		return text(`${basename(skill.dir)}/${rel.split(sep).join("/")}:\n\n${data.toString("utf8")}${note}`);
 	} finally {
 		await handle.close().catch(() => {});

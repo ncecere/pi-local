@@ -17,6 +17,8 @@ func TestParse(t *testing.T) {
 		{"colon in a plain value", "---\ndescription: Use when: forms\n---\nb", map[string]string{"description": "Use when: forms"}, "b"},
 		{"crlf and bom", "\uFEFF---\r\nname: a\r\ndescription: d\r\n---\r\nb", map[string]string{"name": "a", "description": "d"}, "b"},
 		{"empty header", "---\n---\nbody", map[string]string{}, "body"},
+		{"comments", "---\nname: a\n# explanation\ndescription: |+\n  first\n  second\n---   \nbody", map[string]string{"name": "a", "description": "first\nsecond"}, "body"},
+		{"delimiter must be a line", "---\nname: a\n---not-a-delimiter\ndescription: d\n---\nbody", map[string]string{"name": "a", "description": "d"}, "body"},
 		{"none", "# Title\n", map[string]string{}, "# Title\n"},
 		{"unterminated", "---\nname: a\n", map[string]string{}, "---\nname: a\n"},
 	}

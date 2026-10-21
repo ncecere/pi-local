@@ -42,6 +42,8 @@ export const ModelPicker = memo(function ModelPicker({
   onModel,
   onThinking,
   disabled = false,
+  open,
+  onOpenChange,
 }: {
   value: ModelChoice;
   /** The agent's own model, when the agent is known (not with Auto in a new chat). */
@@ -49,6 +51,9 @@ export const ModelPicker = memo(function ModelPicker({
   onModel: (modelId: string, reasoning: boolean) => void;
   onThinking: (thinking: string) => void;
   disabled?: boolean;
+  /** Controlled open state, for `/model` in the composer to open the menu. Absent: it opens itself. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const on = useFeature('modelPerConversation');
   const catalog = useAgentCatalog(on);
@@ -76,7 +81,7 @@ export const ModelPicker = memo(function ModelPicker({
   const label = choiceLabel(name, value.thinking, reasoning);
 
   return (
-    <DropdownMenu>
+    <DropdownMenu {...(open !== undefined ? { open, onOpenChange } : {})}>
       <DropdownMenuTrigger
         disabled={disabled}
         title="Model for this conversation"

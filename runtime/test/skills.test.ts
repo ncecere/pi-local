@@ -40,6 +40,9 @@ describe("skill front matter", () => {
 		expect(parseFrontMatter("description: 'it''s fine'\n").data).toEqual({});
 		expect(parseFrontMatter("# no front matter\n").body).toBe("# no front matter\n");
 		expect(parseFrontMatter("---\nunterminated: yes\n").data).toEqual({});
+		expect(parseFrontMatter("---\nname: a\n# explanation\n---not-a-delimiter\ndescription: |+\n  first\n  second\n---   \nbody")).toEqual({
+			data: { name: "a", description: "first\nsecond" }, body: "body",
+		});
 	});
 });
 
@@ -73,6 +76,19 @@ describe("listing skills", () => {
 		]);
 		expect(skills[0]!.file).toBe(join(own, "alpha", "SKILL.md"));
 		expect(await listSkills([{ root: join(own, "nowhere") }])).toEqual([]);
+	});
+
+	it("rejects missing or mismatched names and symlink escapes, including SKILL.md itself", async () => {
+		const root = await tempAgentDir(cleanup);
+		const outside = await tempAgentDir(cleanup);
+		skill(outside, "secret", "name: secret\ndescription: Outside instructions.");
+		skill(root, "no-name", "description: Missing name.");
+		skill(root, "wrong-name", "name: other\ndescription: Wrong name.");
+		symlinkSync(join(outside, "secret"), join(root, "linked-folder"));
+		mkdirSync(join(root, "linked-file"));
+		symlinkSync(join(outside, "secret", "SKILL.md"), join(root, "linked-file", "SKILL.md"));
+		expect(await listSkills([{ root }])).toEqual([]);
+		expect(await listSkills([{ root, names: ["linked-folder", "linked-file"] }])).toEqual([]);
 	});
 
 	it("writes the prompt with name, description and location, escaped; nothing without skills", () => {
@@ -143,6 +159,7 @@ describe("an agent with skills", () => {
 			"scripts/run.sh": "echo hi",
 		});
 		writeFileSync(join(dir, "blob.bin"), Buffer.from([1, 2, 0, 3]));
+		writeFileSync(join(dir, "large.txt"), "x".repeat(210 * 1024));
 		symlinkSync(join(outside, "secret.txt"), join(dir, "link.txt"));
 		symlinkSync(outside, join(dir, "linkdir"));
 		skill(root, "other", "name: other\ndescription: Another.", "Other skill body\n");
@@ -156,10 +173,11 @@ describe("an agent with skills", () => {
 			toolCall("skill", { name: "forms", file: join(outside, "secret.txt") }, { id: "c6" }),
 			toolCall("skill", { name: "forms", file: "blob.bin" }, { id: "c7" }),
 			toolCall("skill", { name: "nope" }, { id: "c8" }),
+			toolCall("skill", { name: "forms", file: "large.txt" }, { id: "c9" }),
 			answer("done"),
 		);
 		await agent.send("t1", "go");
-		const [main, file, up, link, linkdir, absolute, binary, unknown] = await toolResults(agent, "t1");
+		const [main, file, up, link, linkdir, absolute, binary, unknown, large] = await toolResults(agent, "t1");
 		expect(main?.isError).toBeFalsy();
 		expect(main?.text).toContain(`Folder: ${dir}`);
 		expect(main?.text).toContain("Step one: read references/fields.md.");
@@ -175,5 +193,9 @@ describe("an agent with skills", () => {
 		expect(binary?.text).toContain("binary file");
 		expect(unknown?.isError).toBe(true);
 		expect(unknown?.text).toContain("Your skills: forms, other");
+		expect(large?.isError).toBeFalsy();
+		// The harness may apply its own tighter output limit after the skill's 200 KB bound.
+		expect(large?.text).toMatch(/Shown the first 200 KB|Output truncated/);
+		expect(large!.text.length).toBeLessThan(201 * 1024);
 	}, 30_000);
 });
