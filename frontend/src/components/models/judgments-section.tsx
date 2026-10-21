@@ -14,7 +14,7 @@ import {
   useSaveJudgments,
   useTestJudgments,
 } from '~/hooks/use-judgments';
-import { useSecretsHome } from '~/hooks/use-session';
+import { useSecretsKept } from '~/hooks/use-session';
 import { cn } from '~/lib/utils';
 
 /** What each use does; the ones without `ready` aren't built yet. */
@@ -46,12 +46,12 @@ const textOfUse = (use: string) =>
  */
 export function JudgmentsSection() {
   const info = useJudgments();
-  const home = useSecretsHome();
+  const kept = useSecretsKept();
   return (
     <SettingsSection title="Fast judgments">
       <p className="-mt-2 text-sm text-[var(--text-muted)]">
         Optional. Quick decisions by a System One model (TypeSafe Jev). The text being judged is
-        sent to the service below. The key is kept in {home}.
+        sent to the service below. The key is {kept}.
       </p>
       {info.isError ? (
         <div className="flex flex-col items-start gap-3">
@@ -223,7 +223,13 @@ function JudgmentsForm({ info }: { info: JudgmentsInfo }) {
             variant="secondary"
             className="h-10 shrink-0"
             disabled={models.isPending}
-            onClick={() => models.mutate()}
+            // The address and key as typed (the key only when it was): the list needn't wait for a save.
+            onClick={() =>
+              models.mutate({
+                ...(url.trim() ? { url: url.trim() } : {}),
+                ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+              })
+            }
           >
             {models.isPending ? <Spinner className="size-4 text-current" /> : <Download />}
             Load models
@@ -309,9 +315,7 @@ function JudgmentsForm({ info }: { info: JudgmentsInfo }) {
           Test
         </Button>
         <span id={`${id}-test-hint`} className="text-xs text-[var(--text-muted)]">
-          {dirty
-            ? 'Save first, then test.'
-            : 'Asks the service one question with the saved settings.'}
+          {dirty ? 'Save to test' : 'Asks the service one question with the saved settings.'}
         </span>
       </div>
 

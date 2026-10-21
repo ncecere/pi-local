@@ -64,25 +64,68 @@ function asksFirst(tool: string, patterns: readonly string[]): boolean {
   });
 }
 
-/** What an agent made from the template gets, in a few words each. */
-export function templateChips(template: AgentTemplate, locale?: string): string[] {
-  const chips: string[] = [];
+/** One thing an agent made from the template gets: a few words, and a sentence for its tooltip. */
+export interface TemplateChip {
+  label: string;
+  /** "Web: can search the web and read pages". */
+  title: string;
+}
+
+/** What an agent made from the template gets, each with what it means. */
+export function templateChipDetails(template: AgentTemplate, locale?: string): TemplateChip[] {
+  const chips: TemplateChip[] = [];
   const web = templateWeb(template);
-  if (web.search || web.fetch) chips.push('Web');
+  if (web.search || web.fetch)
+    chips.push({
+      label: 'Web',
+      title: `Web: can ${
+        web.search && web.fetch
+          ? 'search the web and read pages'
+          : web.search
+            ? 'search the web'
+            : 'read web pages'
+      }`,
+    });
   const tools = template.workspace?.tools ?? [];
   if (tools.some((tool) => tool === 'read' || tool === 'write' || tool === 'edit'))
-    chips.push('Files');
-  if (tools.includes('bash'))
-    chips.push(
-      asksFirst('bash', template.approvals?.tools ?? [])
-        ? 'Runs commands (asks first)'
-        : 'Runs commands',
-    );
-  if (template.schedule) chips.push(`Schedule: ${shortSchedule(template.schedule.cron, locale)}`);
-  if (template.schedules?.agentMade) chips.push('Sets its own reminders');
-  if ((template.mcp?.length ?? 0) > 0) chips.push('Uses your connected apps');
+    chips.push({
+      label: 'Files',
+      title: tools.some((tool) => tool === 'write' || tool === 'edit')
+        ? 'Files: can read and change files in its project folder'
+        : 'Files: can read files in its project folder',
+    });
+  if (tools.includes('bash')) {
+    const asks = asksFirst('bash', template.approvals?.tools ?? []);
+    chips.push({
+      label: asks ? 'Runs commands (asks first)' : 'Runs commands',
+      title: asks
+        ? 'Runs commands: can run commands on this computer, and asks you before each one'
+        : 'Runs commands: can run commands on this computer without asking you',
+    });
+  }
+  if (template.schedule) {
+    const when = shortSchedule(template.schedule.cron, locale);
+    chips.push({
+      label: `Schedule: ${when}`,
+      title: `Schedule: starts a conversation by itself, ${when}`,
+    });
+  }
+  if (template.schedules?.agentMade)
+    chips.push({
+      label: 'Sets its own reminders',
+      title: 'Sets its own reminders: can schedule itself to run later',
+    });
+  if ((template.mcp?.length ?? 0) > 0)
+    chips.push({
+      label: 'Uses your connected apps',
+      title: 'Uses your connected apps: can use the tools of the apps you connected (MCP servers)',
+    });
   return chips;
 }
+
+/** What an agent made from the template gets, in a few words each. */
+export const templateChips = (template: AgentTemplate, locale?: string): string[] =>
+  templateChipDetails(template, locale).map((chip) => chip.label);
 
 /** It works best with a web search service set up. */
 export const needsWebSearch = (template: Pick<AgentTemplate, 'needs'>) =>

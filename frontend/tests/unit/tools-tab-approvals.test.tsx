@@ -114,6 +114,29 @@ describe('Tools tab: turning tools on', () => {
     expect(radio("Don't ask").checked).toBe(true);
   });
 
+  it('offers no approvals choice while the agent has no file or command tools', async () => {
+    fakeBackend();
+    view = await renderWithQuery(
+      <ToolsTab
+        agent={agent({
+          workspace: { tools: [], folder: '', dir: '/data/agents/ag_rex/workspace' },
+        })}
+      />,
+    );
+    // Nothing is selected, and nothing can be: there is nothing to ask about yet.
+    for (const label of ["Don't ask", 'Ask for commands', 'Ask first']) {
+      expect(radio(label).checked).toBe(false);
+      expect(radio(label).disabled).toBe(true);
+    }
+    expect(document.body.textContent).toContain('No file or command tools');
+
+    // Turning one on brings the choice back, with the recommended one chosen.
+    await toggle(checkbox('Run commands'));
+    expect(radio('Ask first').disabled).toBe(false);
+    expect(radio('Ask first').checked).toBe(true);
+    expect(document.body.textContent).not.toContain('No file or command tools');
+  });
+
   it('decides by the rule', () => {
     const base = { on: true, preset: 'none' as const, presetChosen: false, savedApprovals: [] };
     expect(preselectsAskFirst(base)).toBe(true);

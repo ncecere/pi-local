@@ -280,15 +280,8 @@ function ScheduleRow({
           >
             {run.isPending ? <Spinner className="size-4" /> : <Zap />}
           </Button>
-          {isDone(schedule) ? (
-            // A one-time schedule that has fired: nothing to pause or resume.
-            <span
-              className="px-2 text-xs font-medium text-[var(--text-muted)]"
-              title="It has run, and won't run again."
-            >
-              Done
-            </span>
-          ) : (
+          {/* A one-time schedule that has fired has nothing to pause or resume: its "Done" badge says the rest. */}
+          {!isDone(schedule) && (
             <Button
               variant="ghost"
               size="icon-sm"

@@ -163,8 +163,8 @@ function SaveTemplateDialog({ agent, onClose }: { agent: Agent; onClose: () => v
         <DialogHeader>
           <DialogTitle>Save as template</DialogTitle>
           <DialogDescription>
-            New agents can start from it: its instructions, tools and approvals. Not its memory or
-            conversations.
+            New agents can start from it: its instructions, tools and approvals. Not its schedules,
+            memory or conversations.
           </DialogDescription>
         </DialogHeader>
         <form

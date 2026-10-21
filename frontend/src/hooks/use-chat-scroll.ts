@@ -59,11 +59,18 @@ function userMessageCount(messages: UIMessage[]): number {
 
 /**
  * Whether the transcript now holds a question that was just sent, given how
- * many user messages it held before: one more, and not a steer (a message sent
- * into the reply in progress, which is no new question to pin).
+ * many user messages it held before: one more, and not a message sent while
+ * the agent was already working. That is no new question to pin: a steer joins
+ * the reply in progress, a queued message runs after it, and in both the reply
+ * being read must stay where it is (`workingBefore`).
  */
-export function sentQuestion(messages: UIMessage[], countBefore: number): boolean {
+export function sentQuestion(
+  messages: UIMessage[],
+  countBefore: number,
+  workingBefore = false,
+): boolean {
   if (userMessageCount(messages) <= countBefore) return false;
+  if (workingBefore) return false;
   const last = messages.findLast((message) => message.role === 'user');
   return (last?.metadata as ReplyMetadata | undefined)?.steer !== true;
 }
@@ -78,9 +85,10 @@ export function sentQuestion(messages: UIMessage[], countBefore: number): boolea
  *   reply stays in sight once it fills the screen. The spacer shrinks as the
  *   reply grows, so the question stays put until the reply reaches the bottom.
  * - Scrolling up stops following; `jumpToLatest` resumes it.
- * - Steering (a message sent into the reply in progress) is not a new
- *   question: nothing is pinned and the view stays as it is, at the bottom if
- *   it was there (so the reply keeps streaming in sight), where it was if not.
+ * - A message sent while the agent works (steered into the reply, or queued
+ *   after it) is not a new question: nothing is pinned and the view stays as
+ *   it is, at the bottom if it was there (so the reply keeps streaming in
+ *   sight), where it was if not, with "Jump to latest" to get back.
  *
  * - Opened at a message (conversation search), the view centres that message
  *   instead, highlights it briefly and moves focus to it. Everything else
@@ -121,6 +129,8 @@ export function useChatScroll(
   /** Zero-based position of the pinned question among user messages. */
   const pinnedIndex = useRef<number | null>(null);
   const userCount = useRef<number | null>(null);
+  /** Whether the agent was working when the transcript last changed. */
+  const wasWorking = useRef(false);
   const lastScrollTop = useRef(0);
   const latestMessages = useRef(messages);
   latestMessages.current = messages;
@@ -202,6 +212,8 @@ export function useChatScroll(
   // Decide what each change to the transcript means before the browser paints.
   useLayoutEffect(() => {
     const count = userMessageCount(messages);
+    const workingBefore = wasWorking.current;
+    wasWorking.current = streaming;
     // Nothing yet (or still loading): the first transcript to arrive is the
     // conversation being opened, not a question being sent.
     if (userCount.current === null || userCount.current === 0) {
@@ -209,7 +221,7 @@ export function useChatScroll(
       // question was just sent, so treat it like any other send.
       if (streaming && count > 0) pinnedIndex.current = count - 1;
       following.current = true;
-    } else if (sentQuestion(messages, userCount.current)) {
+    } else if (sentQuestion(messages, userCount.current, workingBefore)) {
       pinnedIndex.current = count - 1;
       following.current = true;
       anchor.current = null;

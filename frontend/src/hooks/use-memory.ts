@@ -52,6 +52,22 @@ export function useFacts() {
   });
 }
 
+/**
+ * Suggestions waiting for a yes (`?status=suggested`), for the badge that says so
+ * outside Settings → You. Under `FACTS_KEY`, so every change to the facts, and the
+ * `memory` live event, refreshes it.
+ */
+export const SUGGESTED_KEY = [...FACTS_KEY, 'suggested'] as const;
+export function useSuggestedFacts() {
+  return useQuery({
+    queryKey: SUGGESTED_KEY,
+    queryFn: () => api.get<Fact[]>(youPath('/memories?status=suggested')),
+    staleTime: 15_000,
+    // A server without the filter lists everything: only suggestions count.
+    select: (facts) => facts.filter((fact) => fact.status === 'suggested'),
+  });
+}
+
 function useFactMutation<V>(request: (variables: V) => Promise<unknown>) {
   const queryClient = useQueryClient();
   return useMutation({

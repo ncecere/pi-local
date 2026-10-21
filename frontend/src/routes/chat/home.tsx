@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { MessageSquare, Sparkles } from 'lucide-react';
+import { MessageSquare, Plus, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type Agent, ApiError, type Attachment, type RouteResult, type Team } from '~/api/client';
 import { AgentAvatar, agentStatusLabel } from '~/components/agent/agent-avatar';
@@ -16,6 +16,7 @@ import { ElicitationList } from '~/components/chat/elicitation-card';
 import { ModelPicker } from '~/components/chat/model-picker';
 import { RouteChooser, type RouteQuestion, routeOptions } from '~/components/chat/route-chooser';
 import { GetStarted } from '~/components/onboarding/get-started';
+import { FOCUS_RING } from '~/components/ui/focus-ring';
 import { writeHandover } from '~/hooks/use-agent-thread';
 import {
   chattable,
@@ -27,6 +28,7 @@ import {
 import { useAttachments } from '~/hooks/use-attachments';
 import { usePendingElicitations } from '~/hooks/use-elicitations';
 import { routeMessage } from '~/hooks/use-judgments';
+import { useYou } from '~/hooks/use-memory';
 import { useModelChoice } from '~/hooks/use-model-choice';
 import { ME_KEY, useCurrentUser } from '~/hooks/use-session';
 import { useTeams } from '~/hooks/use-teams';
@@ -126,7 +128,8 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
 
   const [draft, setDraft] = useState('');
   // The model and thinking level for the new conversation: local until the first message, which carries what changed.
-  const modelChoice = useModelChoice(NO_CHOICE);
+  // A choice made for one agent is not another's: it starts again when the agent (or Auto) changes.
+  const modelChoice = useModelChoice(NO_CHOICE, undefined, auto ? '' : (agent?.id ?? ''));
   const modelChanges = modelChoice.changes;
   // Files for the first message, saved in the chosen agent's workspace.
   const attachments = useAttachments(shown);
@@ -210,7 +213,9 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
     [auto, agent, start, routing, agents, queryClient],
   );
 
-  const firstName = me && greetingName(me.user.name, null);
+  // "Call me" (Settings → You) first, then the first name of the name given there, then the account's.
+  const basics = useYou().data?.basics;
+  const firstName = me && greetingName(basics?.name?.trim() || me.user.name, basics?.addressAs);
   const loading = agentsQuery.isPending;
   // First run: no agents at all (the Get started card shows, and says whether a model is connected).
   const noAgents = agentsQuery.isSuccess && agentsQuery.data.length === 0;
@@ -312,8 +317,16 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
 
           <GetStarted className="mt-7" />
           {!noAgents && (
-            <p className="mt-4 hidden text-sm md:block">
-              <Link to="/settings/agents" className="text-[var(--accent-bright)] hover:underline">
+            <p className="mt-4 hidden md:block">
+              <Link
+                to="/settings/agents"
+                className={cn(
+                  'inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border-strong)] px-2.5 text-sm font-medium',
+                  'text-[var(--accent-bright)] transition-colors hover:bg-[var(--bg-control)] hover:text-[var(--text-primary)]',
+                  FOCUS_RING,
+                )}
+              >
+                <Plus className="size-3.5" aria-hidden="true" />
                 New agent
               </Link>
             </p>

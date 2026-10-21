@@ -12,8 +12,12 @@ import { changesTo, type ModelChoice } from '~/lib/model-choice';
  *
  * `seed` starts a conversation opened from the new chat page with the choice
  * its first message carries; `commit` is called once that message was accepted.
+ *
+ * `scope` names what the choice belongs to (the new chat page's selected
+ * agent): when it changes, the choice is dropped, so one agent's pick never
+ * carries over to another.
  */
-export function useModelChoice(current: ModelChoice, seed?: Partial<ModelChoice>) {
+export function useModelChoice(current: ModelChoice, seed?: Partial<ModelChoice>, scope?: string) {
   const on = useFeature('modelPerConversation');
   /** What the person picked and no message has carried yet. */
   const [choice, setChoice] = useState<ModelChoice | null>(() =>
@@ -21,6 +25,12 @@ export function useModelChoice(current: ModelChoice, seed?: Partial<ModelChoice>
   );
   /** What messages carried, until the conversation's own record says the same. */
   const [carried, setCarried] = useState<Partial<ModelChoice> | null>(null);
+  // A new scope starts from the baseline again (adjusted while rendering, so no stale choice is drawn).
+  const [scopeSeen, setScopeSeen] = useState(scope);
+  if (scopeSeen !== scope) {
+    setScopeSeen(scope);
+    setChoice(null);
+  }
 
   const { modelId, thinking } = current;
   useEffect(() => {

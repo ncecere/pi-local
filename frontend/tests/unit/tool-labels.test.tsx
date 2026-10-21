@@ -242,8 +242,11 @@ describe('steering while a reply streams', () => {
   it('is no new question to pin to the top: the streaming reply stays in sight', () => {
     expect(sentQuestion([user('q1'), reply, user('q2', true)], 1)).toBe(false);
   });
-  it('still pins a question that was sent, and queued ones', () => {
+  it('still pins a question that was sent while the agent was idle', () => {
     expect(sentQuestion([user('q1'), reply, user('q2')], 1)).toBe(true);
+  });
+  it('is no new question either when queued behind a reply that is working', () => {
+    expect(sentQuestion([user('q1'), reply, user('q2')], 1, true)).toBe(false);
   });
   it('is nothing when no message was added', () => {
     expect(sentQuestion([user('q1'), reply], 1)).toBe(false);

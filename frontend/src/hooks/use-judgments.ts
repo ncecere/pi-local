@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type JudgmentsInfo, type JudgmentTest, type RouteResult } from '~/api/client';
+import {
+  ApiError,
+  api,
+  type JudgmentsInfo,
+  type JudgmentTest,
+  type RouteResult,
+} from '~/api/client';
 import { ME_KEY } from '~/hooks/use-session';
 
 /** Fast judgments: the optional System One service (docs/api.md, Fast judgments). */
@@ -41,10 +47,29 @@ export function useSaveJudgments() {
   });
 }
 
-/** The service's models: `502 judge_failed` when it can't be reached. */
+/** The service to list the models of: the form's current values, over the saved ones. */
+export interface JudgmentModelsInput {
+  url?: string;
+  /** Left out: the stored key is used. */
+  apiKey?: string;
+}
+
+/**
+ * The service's models, asked of the address and key typed in the form
+ * (`POST …/models`): `502 judge_failed` when it can't be reached. A server
+ * without that route (`404`/`405`) answers the saved settings' models (`GET`).
+ */
 export function useJudgmentModels() {
   return useMutation({
-    mutationFn: () => api.get<string[]>('/api/settings/judgments/models'),
+    mutationFn: async (input: JudgmentModelsInput = {}) => {
+      try {
+        return await api.post<string[]>('/api/settings/judgments/models', input);
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 404 || error.status === 405))
+          return api.get<string[]>('/api/settings/judgments/models');
+        throw error;
+      }
+    },
   });
 }
 

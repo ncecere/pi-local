@@ -213,7 +213,10 @@ describe('Settings → You', () => {
     await settle();
 
     await click(byLabel('Delete "Prefers short answers"'));
-    expect(toast).toHaveBeenCalledWith('Deleted.');
+    expect(toast).toHaveBeenCalledWith(
+      'Deleted.',
+      expect.objectContaining({ action: expect.objectContaining({ label: 'Undo' }) }),
+    );
     expect(text()).not.toContain('Prefers short answers');
 
     await click(byLabel('Dismiss "Likes tea"'));
@@ -223,6 +226,44 @@ describe('Settings → You', () => {
       '/api/you/memories/um_k1',
       '/api/you/memories/um_s1',
     ]);
+  });
+
+  it('offers Undo after deleting a fact, which adds it again with its category, text and pin', async () => {
+    const pinned = fact({ id: 'um_k2', category: 'work', text: 'Reports to Grace', pinned: true });
+    const { backend, state } = backendWith({ facts: [pinned] });
+    backend.routes['DELETE /api/you/memories/um_k2'] = () => {
+      state.facts = [];
+      return { ok: true };
+    };
+    backend.routes['POST /api/you/memories'] = (body) => {
+      const added = fact({ id: 'um_new', ...(body as object) });
+      state.facts = [added];
+      return added;
+    };
+    view = await renderWithQuery(<SettingsYouPage />);
+    await settle();
+
+    await click(byLabel('Delete "Reports to Grace"'));
+    expect(text()).not.toContain('Reports to Grace');
+    const options = vi
+      .mocked(toast)
+      .mock.calls.find(([message]) => message === 'Deleted.')?.[1] as {
+      action: { label: string; onClick: () => void };
+    };
+    expect(options.action.label).toBe('Undo');
+
+    // The row is gone by now: Undo still works, and says so.
+    options.action.onClick();
+    await settle();
+    expect(backend.calls.filter((call) => call.method === 'POST')).toEqual([
+      {
+        method: 'POST',
+        path: '/api/you/memories',
+        body: { category: 'work', text: 'Reports to Grace', pinned: true },
+      },
+    ]);
+    expect(toast).toHaveBeenCalledWith('Restored.');
+    expect(text()).toContain('Reports to Grace');
   });
 
   it('adds a fact in a category', async () => {

@@ -2,8 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Toaster } from 'sonner';
 import { DocumentBranding } from '~/components/brand/document-branding';
+import { AppToaster } from '~/components/layout/app-toaster';
 import { installExternalLinks } from '~/lib/external-links';
 import { installPrefFlush } from '~/lib/pref-writes';
 import { AppearanceSync } from '~/lib/prefs';
@@ -31,8 +31,7 @@ createRoot(container).render(
         <DocumentBranding router={router} />
         <AppearanceSync />
         <RouterProvider router={router} />
-        {/* Bottom right: clear of the header's controls, the settings tabs and the first message. */}
-        <Toaster theme="dark" position="bottom-right" />
+        <AppToaster router={router} />
       </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,

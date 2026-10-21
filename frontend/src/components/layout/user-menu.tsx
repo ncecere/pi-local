@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { Bot, Settings } from 'lucide-react';
+import { Bot, Lightbulb, Settings } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -8,12 +8,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu';
+import { useSuggestedFacts } from '~/hooks/use-memory';
 import { useCurrentUser } from '~/hooks/use-session';
 import { cn } from '~/lib/utils';
 
 export function UserMenu({ compact = false }: { compact?: boolean }) {
   const { user } = useCurrentUser();
   const name = user.name || 'You';
+  // Suggestions agents made about the person, waiting for a yes in Settings → You.
+  const waiting = useSuggestedFacts().data?.length ?? 0;
+  const waitingText = waiting === 1 ? '1 suggestion waiting' : `${waiting} suggestions waiting`;
   const initials = name
     .split(/\s+/)
     .map((part) => part[0])
@@ -33,11 +37,18 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
       >
         <span
           className={cn(
-            'flex items-center justify-center rounded-full bg-[var(--accent)] text-xs font-semibold text-[var(--accent-foreground)]',
+            'relative flex items-center justify-center rounded-full bg-[var(--accent)] text-xs font-semibold text-[var(--accent-foreground)]',
             compact ? 'size-10' : 'size-8',
           )}
         >
           {initials}
+          {waiting > 0 && (
+            <span
+              aria-hidden="true"
+              data-suggestions-dot=""
+              className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-[var(--warning)] ring-2 ring-[var(--bg-app)]"
+            />
+          )}
         </span>
         <span className={cn('min-w-0 flex-1', compact && 'hidden')}>
           <span className="block truncate text-sm font-medium text-[var(--text-primary)]">
@@ -64,6 +75,14 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
             Settings
           </Link>
         </DropdownMenuItem>
+        {waiting > 0 && (
+          <DropdownMenuItem asChild>
+            <Link to="/settings/you">
+              <Lightbulb />
+              {waitingText}
+            </Link>
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

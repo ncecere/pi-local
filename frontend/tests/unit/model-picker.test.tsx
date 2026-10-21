@@ -145,9 +145,9 @@ describe('The model picker', () => {
     expect(label()).toBe('Quick');
 
     await openMenu();
+    // The agent's own model is the first choice only: not listed again under its provider.
     expect(items().map((candidate) => candidate.textContent?.trim())).toEqual([
       "Agent's model (Quick)",
-      'Quick',
       'Strong',
       'Plain',
     ]);
@@ -156,6 +156,22 @@ describe('The model picker', () => {
     expect(menuText()).not.toContain('Demo');
     expect(menuText()).not.toContain('Old');
     expect(item("Agent's model (Quick)")?.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it("leaves a provider out when the agent's own model is all it has", async () => {
+    const PLAIN = { id: 'lab/plain', name: 'Plain', provider: 'lab' };
+    await showThread(
+      { modelPerConversation: true },
+      { 'GET /api/agents': () => [agent({ model: PLAIN })] },
+    );
+    await openMenu();
+    expect(items().map((candidate) => candidate.textContent?.trim())).toEqual([
+      "Agent's model (Plain)",
+      'Quick',
+      'Strong',
+    ]);
+    expect(menuText()).not.toContain('Lab');
+    expect(item("Agent's model (Plain)")?.getAttribute('aria-checked')).toBe('true');
   });
 
   it('offers thinking only for a model that can think', async () => {
@@ -288,6 +304,57 @@ describe('The model picker in a new chat', () => {
       text: 'Plan a weekend in Lisbon',
       modelId: 'acme/strong',
       thinking: 'high',
+    });
+  });
+
+  describe('with more than one agent', () => {
+    const ALPHA = agent({ id: 'ag_alpha', name: 'Alpha', model: QUICK });
+    const BETA = agent({
+      id: 'ag_beta',
+      name: 'Beta',
+      model: { id: 'lab/plain', name: 'Plain', provider: 'lab' },
+    });
+
+    async function showTwo() {
+      fakeBackend(
+        routes({
+          'GET /api/agents': () => [ALPHA, BETA],
+          'GET /api/agents/ag_alpha/threads': () => [],
+          'GET /api/agents/ag_beta/threads': () => [],
+        }),
+      );
+      view = await renderWithQuery(<ChatHomePage agentId="ag_alpha" />, {
+        features: { modelPerConversation: true },
+      });
+      await settle();
+    }
+    const chip = (name: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>('fieldset button[aria-pressed]')].find(
+        (button) => button.textContent?.trim() === name,
+      );
+
+    it("does not carry one agent's model choice over to another", async () => {
+      await showTwo();
+      expect(label()).toBe('Quick');
+      await choose('Strong');
+      expect(label()).toBe('Strong');
+
+      await click(chip('Beta'));
+      // Beta's own model, not Alpha's pick.
+      expect(label()).toBe('Plain');
+      await send('Plan a weekend in Lisbon');
+      const written = handover();
+      expect(written.agentId).toBe('ag_beta');
+      expect(written).not.toHaveProperty('modelId');
+      expect(written).not.toHaveProperty('thinking');
+    });
+
+    it('starts again on coming back to the first agent, too', async () => {
+      await showTwo();
+      await choose('Strong');
+      await click(chip('Beta'));
+      await click(chip('Alpha'));
+      expect(label()).toBe('Quick');
     });
   });
 

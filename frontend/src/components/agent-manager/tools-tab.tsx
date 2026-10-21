@@ -305,8 +305,8 @@ function ToolsForm({
           <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
             <legend className="mb-2 text-sm font-medium">Before it uses its workspace tools</legend>
             {noTools && (
-              <p className="mb-1 text-xs text-[var(--text-muted)]">
-                It has no workspace tools now; this applies once you turn some on.
+              <p className="mb-1 text-xs text-[var(--text-muted)]" data-approvals-none="">
+                No file or command tools. Turn one on above to choose when it asks.
               </p>
             )}
             {APPROVAL_PRESETS.map((option) => {
@@ -316,17 +316,24 @@ function ToolsForm({
                   key={option.id}
                   htmlFor={inputId}
                   className={cn(
-                    'flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
-                    preset === option.id
-                      ? 'border-[var(--border-strong)] bg-[var(--bg-control)]'
-                      : 'border-[var(--border-subtle)] hover:bg-[var(--bg-control)]/60',
+                    'flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
+                    noTools
+                      ? 'cursor-not-allowed border-[var(--border-subtle)] opacity-60'
+                      : cn(
+                          'cursor-pointer',
+                          preset === option.id
+                            ? 'border-[var(--border-strong)] bg-[var(--bg-control)]'
+                            : 'border-[var(--border-subtle)] hover:bg-[var(--bg-control)]/60',
+                        ),
                   )}
                 >
                   <input
                     id={inputId}
                     type="radio"
                     name={`${id}-preset`}
-                    checked={preset === option.id}
+                    // With no workspace tool there is nothing to ask about: no option is chosen yet.
+                    checked={!noTools && preset === option.id}
+                    disabled={noTools}
                     onChange={() => choosePreset(option.id)}
                     aria-describedby={`${inputId}-hint`}
                     className="mt-0.5 size-4 shrink-0 accent-[var(--accent)]"

@@ -14,7 +14,7 @@ import {
 import { Spinner } from '~/components/ui/spinner';
 import { Switch } from '~/components/ui/switch';
 import { useCreateProvider, useDeleteProvider, useUpdateProvider } from '~/hooks/use-providers';
-import { useSecretsHome } from '~/hooks/use-session';
+import { useSecretsKept } from '~/hooks/use-session';
 import { type HeaderRow, headersFromRows } from '~/lib/models';
 import {
   ConfirmDialog,
@@ -129,7 +129,7 @@ export function AddProviderDialog({
   onCreated: (provider: Provider) => void;
 }) {
   const create = useCreateProvider();
-  const home = useSecretsHome();
+  const kept = useSecretsKept();
   const id = useId();
   const [preset, setPreset] = useState<ProviderPreset | null>(null);
   const [name, setName] = useState('');
@@ -149,7 +149,12 @@ export function AddProviderDialog({
     create.reset();
   };
 
-  const needsKey = preset?.needsKey ?? false;
+  // A server of the person's own (vLLM, llama.cpp) may have no key: only the named services insist on one.
+  const keyOptionalHint =
+    preset?.id === GENERIC_PRESET
+      ? 'Leave empty if the server needs none.'
+      : 'Usually not needed for a server on this computer. Add one if yours asks for it.';
+  const needsKey = (preset?.needsKey ?? false) && preset?.id !== GENERIC_PRESET;
   const defaultBaseUrl = kinds.find((candidate) => candidate.id === kind)?.defaultBaseUrl;
   const dirty = Boolean(preset) && (apiKey !== '' || headerRows.length > 0);
 
@@ -184,7 +189,7 @@ export function AddProviderDialog({
           </DialogTitle>
           <DialogDescription>
             {preset
-              ? `Its key and header values are kept in ${home}, never shown again.`
+              ? `Its key and header values are ${kept}, never shown again.`
               : 'Where your models come from: a model service, or a server on this computer or your network.'}
           </DialogDescription>
         </DialogHeader>
@@ -236,11 +241,7 @@ export function AddProviderDialog({
             <Field
               id={`${id}-key`}
               label={<>API key {!needsKey && <Optional />}</>}
-              hint={
-                needsKey
-                  ? undefined
-                  : 'Usually not needed for a server on this computer. Add one if yours asks for it.'
-              }
+              hint={needsKey ? undefined : keyOptionalHint}
             >
               <input
                 id={`${id}-key`}

@@ -136,7 +136,9 @@ describe('The "Remembered" chip', () => {
         'call_2',
       ),
     );
-    expect(chip()?.textContent).toContain('Remembered: The report is due Fridays');
+    // A note to self is not something learned about the person.
+    expect(chip()?.textContent).toContain('Noted: The report is due Fridays');
+    expect(chip()?.textContent).not.toContain('Remembered');
     await click(undoButton());
     expect(backend.calls).toEqual([
       { method: 'DELETE', path: '/api/agents/ag_rex/memory/an_ef56', body: undefined },
