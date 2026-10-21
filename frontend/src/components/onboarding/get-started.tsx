@@ -7,7 +7,7 @@ import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { useAgentCatalog, useAgents } from '~/hooks/use-agents';
 import { useDetectedServers, useProviders, useSetupProvider } from '~/hooks/use-providers';
-import { useSecretsHome } from '~/hooks/use-session';
+import { useSecretsKept } from '~/hooks/use-session';
 import { DEMO_MODEL_ID, filterDiscovered, onlyDemoModel, splitModelId } from '~/lib/models';
 import { useSkipModel } from '~/lib/onboarding';
 import { cn, plural } from '~/lib/utils';
@@ -173,7 +173,7 @@ function FoundHere({ presets }: { presets: ProviderPreset[] }) {
 /** A provider account: its key, then which of its models agents may use. */
 function KeyedProvider({ preset, existing }: { preset: ProviderPreset; existing?: Provider }) {
   const id = useId();
-  const home = useSecretsHome();
+  const kept = useSecretsKept();
   const connect = useSetupProvider();
   const choose = useSetupProvider();
   const [apiKey, setApiKey] = useState('');
@@ -216,7 +216,9 @@ function KeyedProvider({ preset, existing }: { preset: ProviderPreset; existing?
           </Button>
         </div>
         <p id={`${id}-key-hint`} className="text-xs">
-          {keyStored ? 'A key is stored. Leave this empty to use it. ' : `Kept in ${home}. `}
+          {keyStored
+            ? 'A key is stored. Leave this empty to use it. '
+            : `${kept.charAt(0).toUpperCase()}${kept.slice(1)}. `}
           {preset.signupUrl && <ExternalAnchor href={preset.signupUrl}>Get a key</ExternalAnchor>}
         </p>
         <RequestError error={connect.error} what={preset.name} />

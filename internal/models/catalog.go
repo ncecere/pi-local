@@ -80,7 +80,7 @@ var Presets = []Preset{
 	{ID: "openrouter", Name: "OpenRouter", Kind: "openai-compatible", BaseURL: "https://openrouter.ai/api/v1", NeedsKey: true, Note: "Many providers' models through one key from openrouter.ai.", SignupURL: "https://openrouter.ai/keys", KeyCheckPath: "/key"},
 	{ID: "cliproxyapi", Name: "CLIProxyAPI", Kind: "anthropic-compatible", BaseURL: "http://127.0.0.1:8317", NeedsKey: true, Note: "CLIProxyAPI on this computer: Claude (and other CLI subscriptions) through one local endpoint. The key is one of the api-keys in its config.yaml."},
 	{ID: "litellm", Name: "LiteLLM", Kind: "openai-compatible", BaseURL: "http://localhost:4000/v1", NeedsKey: true, Note: "A LiteLLM proxy: its URL and a virtual key."},
-	{ID: "other", Name: "OpenAI-compatible", Kind: "openai-compatible", BaseURL: "", NeedsKey: true, Note: "Any server with an OpenAI- or Anthropic-compatible API (vLLM, Together, Groq …)."},
+	{ID: "other", Name: "OpenAI-compatible", Kind: "openai-compatible", BaseURL: "", NeedsKey: false, Note: "Any server with an OpenAI- or Anthropic-compatible API (vLLM, Together, Groq …). A key if the server needs one."},
 }
 
 // Provider is an account at a model service.

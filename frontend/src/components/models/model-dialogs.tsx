@@ -432,7 +432,7 @@ export function DiscoverDialog({ provider, onClose }: { provider: Provider; onCl
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-2xl flex-col">
         <DialogHeader>
-          <DialogTitle>Find {provider.name} models</DialogTitle>
+          <DialogTitle>Add models from {provider.name}</DialogTitle>
           <DialogDescription>
             The models {provider.name} lists. Choose the ones your agents may use; you can change
             each one's details after.

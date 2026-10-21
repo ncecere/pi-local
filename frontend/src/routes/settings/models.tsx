@@ -23,7 +23,7 @@ import {
   useSetupProvider,
   useUpdateProvider,
 } from '~/hooks/use-providers';
-import { useSecretsHome } from '~/hooks/use-session';
+import { useSecretsKept } from '~/hooks/use-session';
 import { usePageTitle } from '~/lib/document-title';
 import { formatPrice, formatTokens, groupModelsByProvider, kindName } from '~/lib/models';
 import { cn, plural } from '~/lib/utils';
@@ -386,7 +386,7 @@ type Open =
  */
 export function SettingsModelsPage() {
   usePageTitle('Models · Settings');
-  const home = useSecretsHome();
+  const kept = useSecretsKept();
   const providers = useProviders();
   const catalog = useAgentCatalog();
   const removeModel = useDeleteModel();
@@ -435,7 +435,7 @@ export function SettingsModelsPage() {
       <SettingsSection title="Providers">
         <p className="-mt-2 text-sm text-[var(--text-muted)]">
           The services your agents' models come from: an account at OpenAI or Anthropic, or a model
-          server such as Ollama or LM Studio. Keys are kept in {home}.
+          server such as Ollama or LM Studio. Keys are {kept}.
         </p>
         {list.length > 0 ? (
           <ul className="divide-y divide-[var(--border-subtle)] rounded-xl border border-[var(--border-subtle)]">

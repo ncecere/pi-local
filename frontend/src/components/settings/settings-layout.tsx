@@ -5,6 +5,7 @@ import type { FeatureId } from '~/api/client';
 import { SkipLink } from '~/components/layout/skip-link';
 import { ThemeMenu } from '~/components/layout/theme-menu';
 import { Button } from '~/components/ui/button';
+import { useSuggestedFacts } from '~/hooks/use-memory';
 import { useCurrentUser } from '~/hooks/use-session';
 import { INBOX_SHORTCUTS, shortcutLabel } from '~/lib/inbox-shortcuts';
 import {
@@ -154,6 +155,9 @@ function SectionNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
   const features = useCurrentUser().features ?? {};
   const TABS = ALL_TABS.filter((tab) => !tab.feature || features[tab.feature]);
+  // Suggestions agents made about the person wait on the You tab for a yes.
+  const waiting = useSuggestedFacts().data?.length ?? 0;
+  const waitingOn = (tab: Tab) => (tab.to === '/settings/you' ? waiting : 0);
   const current = TABS.find((tab) => isActive(tab, pathname)) ?? ALL_TABS[0]!;
   // A window too narrow for every tab scrolls the row: keep the current one in view.
   const track = useRef<HTMLDivElement>(null);
@@ -183,6 +187,21 @@ function SectionNav({ pathname }: { pathname: string }) {
               )}
             >
               {tab.label}
+              {waitingOn(tab) > 0 && (
+                <>
+                  <span
+                    aria-hidden="true"
+                    data-suggestions-badge=""
+                    className="ml-1.5 inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[0.6875rem] font-semibold leading-[1.125rem] text-[var(--accent-foreground)]"
+                  >
+                    {waitingOn(tab)}
+                  </span>
+                  <span className="sr-only">
+                    , {waitingOn(tab) === 1 ? '1 suggestion' : `${waitingOn(tab)} suggestions`}{' '}
+                    waiting
+                  </span>
+                </>
+              )}
             </Link>
           );
         })}
@@ -196,6 +215,7 @@ function SectionNav({ pathname }: { pathname: string }) {
         {TABS.map((tab) => (
           <option key={tab.to} value={tab.to}>
             {tab.label}
+            {waitingOn(tab) > 0 ? ` (${waitingOn(tab)})` : ''}
           </option>
         ))}
       </select>

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AgentTemplate, ApiError } from '../../src/api/client';
 import type { AgentCatalog } from '../../src/hooks/use-agents';
 import { AGENT_NAMES, randomAgentName } from '../../src/lib/agent-names';
-import { shortSchedule, templateChips } from '../../src/lib/templates';
+import { shortSchedule, templateChipDetails, templateChips } from '../../src/lib/templates';
 import { AgentDialog } from '../../src/routes/settings/agents';
 import {
   buttonByText,
@@ -258,6 +258,28 @@ describe('new agent dialog: the templates gallery', () => {
     await openDialog();
     expect(chips()).toEqual(['Web']);
     expect(text()).not.toContain('Works best with web search');
+  });
+
+  it('explains each chip in a tooltip', () => {
+    expect(templateChipDetails(PLANNER).map((chip) => chip.title)).toEqual([
+      'Web: can search the web and read pages',
+      'Sets its own reminders: can schedule itself to run later',
+    ]);
+    expect(templateChipDetails(CODING).map((chip) => chip.label)).toEqual(templateChips(CODING));
+    expect(templateChipDetails(CODING)[2]?.title).toBe(
+      'Runs commands: can run commands on this computer, and asks you before each one',
+    );
+    expect(templateChipDetails({ ...MINE, web: { search: true, fetch: false } })[0]?.title).toBe(
+      'Web: can search the web',
+    );
+  });
+
+  it("shows the explanation as each chip's title", async () => {
+    fakeBackend({ 'GET /api/settings/web': () => ({ ...WEB_OFF, provider: 'brave' }) });
+    await openDialog();
+    const chip = document.querySelector('[aria-label^="What "] li');
+    expect(chip?.textContent).toBe('Web');
+    expect(chip?.getAttribute('title')).toBe('Web: can search the web and read pages');
   });
 
   it('describes each template in chips', () => {

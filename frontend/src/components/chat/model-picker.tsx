@@ -55,7 +55,12 @@ export const ModelPicker = memo(function ModelPicker({
   // The catalog says which models can think (`reasoning`).
   const catalogModels = catalog.data?.models;
   const models = useMemo(() => pickableModels(catalogModels), [catalogModels]);
-  const groups = useMemo(() => groupModelsByProvider(models), [models]);
+  // The agent's own model is the first choice ("Agent's model (X)"): not listed again under its provider.
+  const agentModelId = agentModel?.id;
+  const groups = useMemo(
+    () => groupModelsByProvider(models.filter((model) => model.id !== agentModelId)),
+    [models, agentModelId],
+  );
   if (!on || !catalogModels) return null;
 
   const chosen = value.modelId ? models.find((model) => model.id === value.modelId) : undefined;
@@ -95,7 +100,9 @@ export const ModelPicker = memo(function ModelPicker({
       >
         <DropdownMenuLabel>Model</DropdownMenuLabel>
         <DropdownMenuRadioGroup
-          value={gone ? AGENT_MODEL : value.modelId || AGENT_MODEL}
+          value={
+            gone || !value.modelId || value.modelId === agentModelId ? AGENT_MODEL : value.modelId
+          }
           onValueChange={(next) => {
             const id = next === AGENT_MODEL ? '' : next;
             const model = id

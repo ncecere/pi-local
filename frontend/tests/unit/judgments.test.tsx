@@ -179,4 +179,75 @@ describe('Settings → Models: fast judgments', () => {
     expect(select.tagName).toBe('SELECT');
     expect([...select.options].map((option) => option.value)).toEqual(['jev-1.14.0', 'jev-1.15.0']);
   });
+
+  it('loads the models of the address and key as typed, before anything is saved', async () => {
+    const backend = fakeBackend({
+      'GET /api/settings/judgments': () => info(),
+      'POST /api/settings/judgments/models': () => ['self-1', 'self-2'],
+    });
+    view = await renderWithQuery(<JudgmentsSection />);
+    await settle();
+    await typeInto(fieldByLabel('Service address'), ' https://jev.internal ');
+    await typeInto(fieldByLabel('API key'), ' typed-key ');
+    await click(buttonByText('Load models'));
+    expect(backend.calls.filter((call) => call.path.endsWith('/models'))).toEqual([
+      {
+        method: 'POST',
+        path: '/api/settings/judgments/models',
+        body: { url: 'https://jev.internal', apiKey: 'typed-key' },
+      },
+    ]);
+    const select = fieldByLabel('Model') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.value)).toEqual([
+      'jev-1.14.0',
+      'self-1',
+      'self-2',
+    ]);
+  });
+
+  it('leaves the key out when none was typed, and shows why the service refused', async () => {
+    const backend = fakeBackend({
+      'GET /api/settings/judgments': () => info({ hasKey: true }),
+      'POST /api/settings/judgments/models': () => {
+        throw new ApiError(502, 'judge_failed', 'The service refused the key.');
+      },
+    });
+    view = await renderWithQuery(<JudgmentsSection />);
+    await settle();
+    await click(buttonByText('Load models'));
+    expect(backend.calls.filter((call) => call.path.endsWith('/models'))[0]?.body).toEqual({
+      url: 'https://api.typesafe.ai',
+    });
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      'The service refused the key.',
+    );
+  });
+
+  it('falls back to the saved settings where the server cannot list for typed ones', async () => {
+    const backend = fakeBackend({
+      'GET /api/settings/judgments': () => info(),
+      'GET /api/settings/judgments/models': () => ['saved-1'],
+    });
+    view = await renderWithQuery(<JudgmentsSection />);
+    await settle();
+    await click(buttonByText('Load models'));
+    expect(backend.calls.map((call) => `${call.method} ${call.path}`).slice(-2)).toEqual([
+      'POST /api/settings/judgments/models',
+      'GET /api/settings/judgments/models',
+    ]);
+    const select = fieldByLabel('Model') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.value)).toContain('saved-1');
+  });
+
+  it('says "Save to test" while the form has unsaved changes', async () => {
+    fakeBackend({ 'GET /api/settings/judgments': () => info({ hasKey: true }) });
+    view = await renderWithQuery(<JudgmentsSection />);
+    await settle();
+    expect(text()).toContain('Asks the service one question with the saved settings.');
+    expect(buttonByText('Test')?.disabled).toBe(false);
+    await typeInto(fieldByLabel('Service address'), 'https://jev.internal');
+    expect(text()).toContain('Save to test');
+    expect(text()).not.toContain('Save first');
+    expect(buttonByText('Test')?.disabled).toBe(true);
+  });
 });

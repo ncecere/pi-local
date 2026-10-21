@@ -44,7 +44,8 @@ export function RememberChip({ part, agentId }: { part: ToolPart; agentId?: stri
   const [gone, setGone] = useState(() => (saved ? undone.has(saved.id) : false));
   if (!saved) return null;
   const suggested = saved.kind === 'suggested';
-  const label = suggested ? 'Suggested' : 'Remembered';
+  // An agent's note to itself is not something it learned about the person.
+  const label = suggested ? 'Suggested' : saved.kind === 'note' ? 'Noted' : 'Remembered';
   const canUndo = saved.kind !== 'note' || Boolean(agentId);
 
   const markGone = () => {
@@ -68,7 +69,7 @@ export function RememberChip({ part, agentId }: { part: ToolPart; agentId?: stri
         <>
           <span className={cn('min-w-0 truncate')} title={saved.text || undefined}>
             <span className="font-medium text-[var(--text-primary)]">{label}:</span>{' '}
-            {saved.text || (saved.kind === 'note' ? 'a note' : 'something about you')}
+            {saved.text || (saved.kind === 'note' ? 'a note to self' : 'something about you')}
           </span>
           {suggested && (
             <>

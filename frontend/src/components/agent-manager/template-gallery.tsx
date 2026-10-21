@@ -37,7 +37,7 @@ import {
 } from '~/components/ui/dropdown-menu';
 import { Spinner } from '~/components/ui/spinner';
 import { useDeleteTemplate, useExportTemplate, useImportTemplate } from '~/hooks/use-templates';
-import { groupTemplates, needsWebSearch, templateChips } from '~/lib/templates';
+import { groupTemplates, needsWebSearch, templateChipDetails } from '~/lib/templates';
 import { cn } from '~/lib/utils';
 
 /** The lucide icons templates may name; anything else gets a sparkle. */
@@ -192,7 +192,7 @@ function TemplateCard({
           <span className="block font-medium">{template.name}</span>
           {template.description && (
             <span
-              className="block truncate text-xs text-[var(--text-muted)]"
+              className="line-clamp-2 text-xs text-[var(--text-muted)]"
               title={template.description}
             >
               {template.description}
@@ -300,7 +300,7 @@ export function TemplateSummary({
   /** Null: not known. */
   webSearchReady: boolean | null;
 }) {
-  const chips = templateChips(template);
+  const chips = templateChipDetails(template);
   const hint = needsWebSearch(template) && webSearchReady === false;
   if (chips.length === 0 && !hint) return null;
   return (
@@ -309,10 +309,11 @@ export function TemplateSummary({
         <ul aria-label={`What ${template.name} brings`} className="flex flex-wrap gap-1.5">
           {chips.map((chip) => (
             <li
-              key={chip}
+              key={chip.label}
+              title={chip.title}
               className="rounded-full bg-[var(--bg-control)] px-2.5 py-0.5 text-xs text-[var(--text-secondary)]"
             >
-              {chip}
+              {chip.label}
             </li>
           ))}
         </ul>

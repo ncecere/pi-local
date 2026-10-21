@@ -48,6 +48,13 @@ const NAMED_TOOLS = new Set([
   'forget',
   'ask_agent',
   'list_agents',
+  'ask_person',
+  'todo',
+  'notify_person',
+  'bash',
+  'read',
+  'write',
+  'edit',
 ]);
 
 /** The activity a step counts as. */
@@ -106,6 +113,20 @@ function activityPhrases(steps: readonly WorkStep[]): string[] {
         return count === 1 ? 'asked an agent' : `asked agents ${count} times`;
       case 'list_agents':
         return 'looked up agents to ask';
+      case 'ask_person':
+        return count === 1 ? 'asked you a question' : `asked you ${count} questions`;
+      case 'todo':
+        return `updated the checklist${times(count)}`;
+      case 'notify_person':
+        return `notified you${times(count)}`;
+      case 'bash':
+        return `ran ${counted(count, 'a command', 'commands')}`;
+      case 'read':
+        return `read ${counted(count, 'a file', 'files')}`;
+      case 'write':
+        return `wrote ${counted(count, 'a file', 'files')}`;
+      case 'edit':
+        return `edited ${counted(count, 'a file', 'files')}`;
       default:
         return `used ${group[0]?.label ?? 'a tool'}${times(count)}`;
     }

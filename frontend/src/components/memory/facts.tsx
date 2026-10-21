@@ -131,7 +131,15 @@ function FactRow({ fact, categories }: { fact: Fact; categories: readonly string
   const [editing, setEditing] = useState(false);
   const update = useUpdateFact();
   const remove = useDeleteFact();
+  const add = useAddFact();
   const name = `"${clip(fact.text)}"`;
+  // Deleting is for good on the server; Undo adds the same fact again (pinned as it was).
+  // The row is gone by then, so the outcome is read from the promises, not from this component.
+  const restore = () =>
+    void add.mutateAsync({ category: fact.category, text: fact.text, pinned: fact.pinned }).then(
+      () => toast('Restored.'),
+      (error) => toast.error(errorMessage(error, 'Not restored.')),
+    );
   if (editing)
     return (
       <li className="px-4 py-3">
@@ -210,10 +218,11 @@ function FactRow({ fact, categories }: { fact: Fact; categories: readonly string
           title="Delete"
           disabled={remove.isPending}
           onClick={() =>
-            remove.mutate(fact.id, {
-              onSuccess: () => toast('Deleted.'),
-              onError: (error) => toast.error(errorMessage(error, 'Not deleted.')),
-            })
+            void remove.mutateAsync(fact.id).then(
+              () =>
+                toast('Deleted.', { duration: 8000, action: { label: 'Undo', onClick: restore } }),
+              (error) => toast.error(errorMessage(error, 'Not deleted.')),
+            )
           }
         >
           <Trash2 />

@@ -863,6 +863,12 @@ function InboxRow({
   // Right-click opens the row's menu, as t3code's context menu.
   const [menuOpen, setMenuOpen] = useState(false);
   const confirmButton = useRef<HTMLButtonElement>(null);
+  // The conversation that opens (an edit or a branch makes a new one) is brought into view: where
+  // the list already shows it, nothing moves.
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (active) rowRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [active]);
   useEffect(() => {
     if (!confirming) return;
     // The menu that asked is gone: keep focus on the question. (The menu, closing, would
@@ -934,6 +940,7 @@ function InboxRow({
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click is a mouse shortcut for the row's "…" button, which keyboards reach.
     <div
+      ref={rowRef}
       data-focus-row=""
       onContextMenu={(event) => {
         event.preventDefault();

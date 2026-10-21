@@ -21,13 +21,13 @@ afterEach(() => {
   restoreTransport();
 });
 
-const IN_MEMORY = 'kept in memory for this session (development server)';
+const IN_MEMORY = 'kept only until this server stops';
 const IN_KEYCHAIN = 'kept in the system keychain';
 
 describe('where secrets are kept', () => {
   it('names the place', () => {
     expect(secretsHome(true)).toBe('the system keychain');
-    expect(secretsHome(false)).toBe('memory for this session (development server)');
+    expect(secretsHome(false)).toBe('memory until this server stops');
   });
 
   it('says the keychain by default, and while the server has not said otherwise', async () => {

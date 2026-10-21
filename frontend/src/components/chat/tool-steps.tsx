@@ -3,6 +3,7 @@ import type { UIMessage } from 'ai';
 import {
   ArrowUpRight,
   Ban,
+  Bell,
   Brain,
   Check,
   ChevronDown,
@@ -15,6 +16,7 @@ import {
   ListChecks,
   LoaderCircle,
   type LucideIcon,
+  MessageCircleQuestion,
   MessagesSquare,
   Search,
   ShieldAlert,
@@ -30,6 +32,7 @@ import { type AskStep, askStepOf, askSummary, type ListAgentsStep } from '~/lib/
 import { approvalOutcome } from '~/lib/approvals';
 import { approvalOf, toolDetailsOf, toolDetailsOmittedOf, toolOutputText } from '~/lib/chat-view';
 import { formatDuration } from '~/lib/reply-meta';
+import { askPersonStepOf, humanStepName } from '~/lib/step-names';
 import { asTodoList, type TodoList } from '~/lib/thread-documents';
 import { cn } from '~/lib/utils';
 import { isToolPart, summarizeToolPart, type ToolStepSummary } from '~/shared';
@@ -89,6 +92,14 @@ export function agentToolStep(part: ToolPart): ToolStepSummary {
   const ask = askStepOf(part);
   if (ask && (step.state === 'running' || step.state === 'done' || step.state === 'error'))
     return { ...step, summary: askSummary(ask, step.state) };
+  // A question the person declined reads as declined, not as a tool that was used.
+  const declined =
+    step.state === 'done' && askPersonStepOf(part)?.outcome?.kind === 'declined'
+      ? { ...step, state: 'declined' as const }
+      : step;
+  // The agent's own tools read as what they did: "Ran ls", "Asked you: …", "Updated the checklist".
+  const human = humanStepName(part, declined.state);
+  if (human) return { ...declined, summary: human };
   const hint = inputHint(part.input);
   const target = hint ? ` · ${clip(hint)}` : '';
   const summary =
@@ -109,6 +120,8 @@ export function agentToolStep(part: ToolPart): ToolStepSummary {
  */
 export function toolIconOf(name: string): LucideIcon {
   const id = name.toLowerCase();
+  if (id === 'ask_person') return MessageCircleQuestion;
+  if (id === 'notify_person') return Bell;
   if (/web|fetch|http|url|brows|crawl/.test(id)) return Globe;
   if (/bash|shell|exec|terminal|command|run_|^run$|sh$/.test(id)) return SquareTerminal;
   if (/grep|search|find|glob|lookup|query/.test(id)) return Search;
@@ -445,18 +458,30 @@ function StepLine({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
   const approval = approvalOf(part);
   if (ask && !approval) return <AskLine part={part} step={step} ask={ask} />;
   const todo = todoOf(part);
-  const hint = todo ? todoProgress(todo.items) : hintOf(part);
+  // The step in words ("Ran ls -la"), which also say how it went: no label, "failed" or "Declined" beside it.
+  const human = humanStepName(part, step.state);
+  const hint = todo ? todoProgress(todo.items) : human ? null : hintOf(part);
   const took = toolDuration(part);
   return (
     <>
       <StepIcon part={part} step={step} />
-      <span className="shrink-0 font-medium text-[var(--text-secondary)]">{step.label}</span>
+      {human ? (
+        <span
+          className="min-w-0 truncate font-medium text-[var(--text-secondary)]"
+          title={human}
+          data-step-name=""
+        >
+          {human}
+        </span>
+      ) : (
+        <span className="shrink-0 font-medium text-[var(--text-secondary)]">{step.label}</span>
+      )}
       {hint && (
         <span className="min-w-0 truncate font-mono text-[0.75rem]" title={hint}>
           {hint}
         </span>
       )}
-      {step.state === 'error' && (
+      {step.state === 'error' && !human && (
         <span className="shrink-0 text-[var(--danger-on-tint)]">failed</span>
       )}
       {took !== null && (
@@ -464,7 +489,7 @@ function StepLine({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
           {formatDuration(took)}
         </span>
       )}
-      {step.state === 'declined' && <span className="shrink-0">Declined</span>}
+      {step.state === 'declined' && !human && <span className="shrink-0">Declined</span>}
       {approval ? (
         <ApprovalOutcome approval={approval} className="shrink-0 max-w-[50%]" />
       ) : (
@@ -592,6 +617,8 @@ function ToolDetails({ part }: { part: ToolPart }) {
   const meta = part as { toolMetadata?: unknown };
   const details = toolDetailsOf(meta);
   const omitted = toolDetailsOmittedOf(meta);
+  // An `ask_person` call's details are its question and outcome: the row already says both.
+  if (part.toolName === 'ask_person') return null;
   if (details === undefined && !omitted) return null;
   if (details === undefined)
     return (
