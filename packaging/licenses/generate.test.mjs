@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFileSync, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { writeBuildReceipt } from './build-receipt.mjs';
 import { assertNamedCoverage, assertTestOnlyExcluded, generate, installedPackages, noticeFiles, npmNotices, pinnedFiles, requireTerms, sha256 } from './generate.mjs';
@@ -107,9 +108,15 @@ test('the test-only exclusion fails closed on bundled inputs, stale artifacts or
   assert.throws(() => assertTestOnlyExcluded(dir, ['runtime']), /Missing release build receipt/);
 });
 
-test('packaging uses frozen installs and assembles notices after Node LICENSE, before any codesign', () => {
+test('packaging hydrates locked Go modules before build and offline notices, before any codesign', () => {
   const shell = fs.readFileSync(path.join(root, 'packaging/macos/package.sh'), 'utf8');
   const generator = shell.indexOf('node packaging/licenses/generate.mjs');
+  const download = shell.indexOf('\ngo mod download\n');
+  const build = shell.indexOf('\ngo build ');
+  assert.ok(download > 0, 'online go mod download must hydrate even unlinked explicit requirements');
+  assert.ok(download < build && build < generator, 'hydrate before build and offline assembly');
+  assert.match(shell, /go_modules_before="\$\(shasum -a 256 go\.mod go\.sum\)"/);
+  assert.match(shell, /if \[ "\$go_modules_before" != "\$\(shasum -a 256 go\.mod go\.sum\)" \]; then[\s\S]*?exit 1/);
   assert.ok(generator > shell.indexOf('"$APP/Contents/Resources/node-LICENSE"'));
   assert.ok(generator < shell.indexOf('codesign --force'));
   // Corepack must see each project's packageManager before pnpm starts; --dir from the root is too late.
@@ -117,6 +124,79 @@ test('packaging uses frozen installs and assembles notices after Node LICENSE, b
   assert.match(shell, /\(cd frontend && pnpm install --frozen-lockfile\)/);
   assert.doesNotMatch(shell, /pnpm --dir (?:runtime|frontend) install/);
   assert.match(shell, /third-party" --node-version "\$NODE_VERSION" "\$GO_NOTICE_ARCH"/);
+});
+
+test('cold Go cache needs all explicit requirements before offline verification', (t) => {
+  const dir = fs.mkdtempSync(path.join(cache, 'notice-go-test-'));
+  t.after(() => {
+    // Go extracts read-only module directories; make only this disposable tree removable.
+    function writable(base) {
+      fs.chmodSync(base, 0o700);
+      for (const e of fs.readdirSync(base, { withFileTypes: true })) if (e.isDirectory()) writable(path.join(base, e.name));
+    }
+    writable(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const app = path.join(dir, 'app');
+  const proxy = path.join(dir, 'proxy');
+  fs.mkdirSync(app);
+  // Resolve the installed compiler outside the repository; never download a toolchain.
+  const env = { ...process.env, GOENV: 'off', GOWORK: 'off', GOTOOLCHAIN: 'local', GOFLAGS: '',
+    GOPATH: path.join(dir, 'gopath'), GOMODCACHE: path.join(dir, 'seed-cache'),
+    GOPROXY: pathToFileURL(proxy).href, GOSUMDB: 'off', GOPRIVATE: '', GONOPROXY: '', GONOSUMDB: '', CGO_ENABLED: '0' };
+  const goroot = execFileSync('go', ['env', 'GOROOT'], { cwd: dir, env, encoding: 'utf8' }).trim();
+  const go = path.join(goroot, 'bin/go');
+  env.GOROOT = goroot;
+  function run(command, args, cwd = app, overrides = {}) {
+    return spawnSync(command, args, { cwd, env: { ...env, ...overrides }, encoding: 'utf8', timeout: 120000 });
+  }
+  function pass(result) {
+    assert.equal(result.error, undefined, result.error?.message);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return result.stdout;
+  }
+  // Both archives are our own MIT fixtures, with the canonical module@version ZIP prefix.
+  for (const name of ['used', 'unused']) {
+    const module = `example.test/${name}`;
+    const mod = `module ${module}\n\ngo 1.20\n`;
+    const zipRoot = path.join(dir, `zip-${name}`);
+    const prefix = `${module}@v1.0.0`;
+    write(zipRoot, `${prefix}/go.mod`, mod);
+    write(zipRoot, `${prefix}/LICENSE`, mit);
+    write(zipRoot, `${prefix}/${name}.go`, `package ${name}\nconst Value = 1\n`);
+    write(proxy, `${module}/@v/v1.0.0.mod`, mod);
+    write(proxy, `${module}/@v/v1.0.0.info`, JSON.stringify({ Version: 'v1.0.0', Time: '2024-01-01T00:00:00Z' }));
+    write(proxy, `${module}/@v/list`, 'v1.0.0\n');
+    pass(run('zip', ['-q', '-D', '-r', path.join(proxy, `${module}/@v/v1.0.0.zip`), prefix], zipRoot));
+  }
+  write(app, 'go.mod', 'module example.test/app\n\ngo 1.20\n\nrequire example.test/used v1.0.0\n\nrequire example.test/unused v1.0.0 // indirect\n');
+  write(app, 'main.go', 'package main\nimport "example.test/used"\nfunc main() { println(used.Value) }\n');
+  const lockedMod = fs.readFileSync(path.join(app, 'go.mod'));
+  pass(run(go, ['mod', 'download', 'all'])); // Seed full checksums, not the cache under test.
+  assert.deepEqual(fs.readFileSync(path.join(app, 'go.mod')), lockedMod);
+  const lockedSum = fs.readFileSync(path.join(app, 'go.sum'));
+  assert.match(lockedSum.toString(), /example\.test\/unused v1\.0\.0 h1:/);
+  env.GOMODCACHE = path.join(dir, 'cold-cache');
+  fs.mkdirSync(env.GOMODCACHE);
+  assert.deepEqual(fs.readdirSync(env.GOMODCACHE), []);
+  pass(run(go, ['build', '-mod=readonly', '-o', path.join(dir, 'app-binary'), '.']));
+  assert.equal(fs.existsSync(path.join(env.GOMODCACHE, 'example.test/used@v1.0.0')), true);
+  assert.equal(fs.existsSync(path.join(env.GOMODCACHE, 'cache/download/example.test/unused/@v/v1.0.0.mod')), false);
+  const offline = { GOPROXY: 'off', GOSUMDB: 'off' };
+  const before = run(go, ['mod', 'verify'], app, offline);
+  assert.equal(before.error, undefined);
+  assert.notEqual(before.status, 0, 'build alone must not satisfy offline verification');
+  assert.match(before.stdout + before.stderr, /example\.test\/unused@v1\.0\.0/);
+  assert.match(before.stdout + before.stderr, /module lookup disabled by GOPROXY=off/);
+  t.diagnostic('Before hydration: offline verify failed for unused@v1.0.0 with GOPROXY=off');
+  pass(run(go, ['mod', 'download'])); // Same ordinary online phase as package.sh, via file:// only.
+  assert.match(pass(run(go, ['mod', 'verify'], app, offline)), /all modules verified/);
+  const deps = pass(run(go, ['list', '-mod=readonly', '-deps', '.'], app, offline));
+  assert.ok(deps.split('\n').includes('example.test/used'));
+  assert.ok(!deps.split('\n').includes('example.test/unused'));
+  assert.deepEqual(fs.readFileSync(path.join(app, 'go.mod')), lockedMod);
+  assert.deepEqual(fs.readFileSync(path.join(app, 'go.sum')), lockedSum);
+  t.diagnostic('After hydration: offline verify and readonly deps list passed; go.mod/go.sum unchanged');
 });
 
 const nodeLicense = process.env.NOTICE_TEST_NODE_LICENSE;

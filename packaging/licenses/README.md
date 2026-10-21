@@ -3,6 +3,9 @@
 `packaging/macos/package.sh` installs both pnpm projects with frozen lockfiles, builds the runtime and frontend,
 and assembles `Contents/Resources/third-party` **before any codesign command**. Notice generation is offline;
 it does not run the app, access the Keychain, or sign anything. It refuses an existing output directory.
+Before the Go build, packaging runs online `go mod download` for all explicit pinned requirements, including
+modules not linked on Darwin. It fails if this changes `go.mod` or `go.sum`. This cache hydration is separate
+from offline assembly, which retains `GOPROXY=off`, `GOSUMDB=off`, and checksum verification.
 
 The generator copies complete files verbatim, labels them by ecosystem/package/version, and records SHA-256
 hashes and source references in `index.json`. Original Node LICENSE, Pi Local LICENSE, and the Pi adaptation
