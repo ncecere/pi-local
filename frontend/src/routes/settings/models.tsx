@@ -5,6 +5,7 @@ import { errorMessage, type Model, type Provider, type ProviderKind } from '~/ap
 import { ConfirmDialog, ErrorNotice, RequestError } from '~/components/models/fields';
 import { JudgmentsSection } from '~/components/models/judgments-section';
 import { DiscoverDialog, ModelDialog } from '~/components/models/model-dialogs';
+import { PerConversationSection } from '~/components/models/per-conversation-section';
 import { AddProviderDialog, EditProviderDialog } from '~/components/models/provider-dialogs';
 import { WebSearchSection } from '~/components/models/web-search-section';
 import { SettingsRow, SettingsSection } from '~/components/settings/settings-layout';
@@ -414,6 +415,8 @@ export function SettingsModelsPage() {
         <DetectedServers onAdded={(provider) => expand(provider.id)} />
         <DefaultModel catalog={catalog.data} defaultModelId={defaultModelId} />
       </SettingsSection>
+
+      <PerConversationSection />
 
       <SettingsSection title="Providers">
         <p className="-mt-2 text-sm text-[var(--text-muted)]">

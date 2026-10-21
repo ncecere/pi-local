@@ -13,6 +13,7 @@ import {
   asResearchSource,
   asResearchSources,
   asStatusCounts,
+  asTodoList,
   asTriageItem,
   asTriageQueue,
   formatJson,
@@ -20,6 +21,7 @@ import {
   type ResearchPlan,
   type ResearchSource,
   statusLabel,
+  type TodoItem,
   type TriageItem,
 } from '~/lib/thread-documents';
 import { cn } from '~/lib/utils';
@@ -253,6 +255,54 @@ export function TriageQueueView({ items }: { items: TriageItem[] }) {
   );
 }
 
+const TODO_ICON: Record<string, { icon: LucideIcon; className: string }> = {
+  pending: { icon: Circle, className: 'text-[var(--text-faint)]' },
+  doing: {
+    icon: LoaderCircle,
+    className: 'text-[var(--accent-bright)] motion-safe:animate-spin',
+  },
+  done: { icon: Check, className: 'text-[var(--success,var(--accent-bright))]' },
+};
+
+/** How many of a checklist's items are done: "2 of 5 done". */
+export const todoProgress = (items: readonly TodoItem[]) =>
+  `${items.filter((item) => item.status === 'done').length} of ${items.length} done`;
+
+/** The agent's checklist: what is done, what it is doing now, what is left. */
+export function TodoChecklistView({ items }: { items: TodoItem[] }) {
+  if (items.length === 0) return <p className="text-xs text-[var(--text-muted)]">No items yet.</p>;
+  return (
+    <div className="space-y-2" data-todo="">
+      <p className="text-xs text-[var(--text-muted)]">{todoProgress(items)}</p>
+      <ul className="space-y-1.5">
+        {items.map((item, index) => {
+          const { icon: Icon, className } = TODO_ICON[item.status] ?? TODO_ICON.pending!;
+          const done = item.status === 'done';
+          return (
+            <li
+              // biome-ignore lint/suspicious/noArrayIndexKey: items have no ID; the list is replaced whole
+              key={index}
+              className="flex gap-2 text-xs"
+              data-todo-status={item.status}
+            >
+              <Icon className={cn('mt-0.5 size-3.5 shrink-0', className)} aria-hidden="true" />
+              <p
+                className={cn(
+                  'min-w-0 break-words leading-snug text-[var(--text-primary)]',
+                  done && 'text-[var(--text-muted)] line-through',
+                )}
+              >
+                <span className="sr-only">{statusLabel(item.status)}: </span>
+                {item.text}
+              </p>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /** A document's value: the known kinds drawn, anything else (or a shape not recognised) as JSON. */
 export function DocumentValue({ kind, value }: { kind: string; value: unknown }) {
   if (kind === 'research.plan') {
@@ -267,6 +317,10 @@ export function DocumentValue({ kind, value }: { kind: string; value: unknown })
     const queue = asTriageQueue(value);
     if (queue) return <TriageQueueView items={queue.items} />;
   }
+  if (kind === 'todo') {
+    const list = asTodoList(value);
+    if (list) return <TodoChecklistView items={list.items} />;
+  }
   return <JsonView value={value} />;
 }
 
@@ -279,6 +333,10 @@ export function ToolDetailsView({ toolName, details }: { toolName: string; detai
   if (toolName === 'research_plan' || toolName === 'research_step') {
     const plan = asResearchPlan(details);
     if (plan) return <ResearchPlanView plan={plan} />;
+  }
+  if (toolName === 'todo') {
+    const list = asTodoList(details);
+    if (list) return <TodoChecklistView items={list.items} />;
   }
   if (toolName === 'research_source') {
     const source = asResearchSource(details);

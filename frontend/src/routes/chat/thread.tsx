@@ -17,6 +17,7 @@ import { ElicitationList } from '~/components/chat/elicitation-card';
 import { preloadMarkdownRenderer, useMarkdownRendererReady } from '~/components/chat/markdown';
 import { textOf } from '~/components/chat/message-content';
 import { MessageList } from '~/components/chat/message-list';
+import { ModelPicker } from '~/components/chat/model-picker';
 import { NoReplyNote } from '~/components/chat/reply-outcome-note';
 import { Button } from '~/components/ui/button';
 import { FullPageSpinner } from '~/components/ui/spinner';
@@ -31,6 +32,7 @@ import { useAgent, useAgents, useForkThread, useThreadInfo } from '~/hooks/use-a
 import { useAttachments } from '~/hooks/use-attachments';
 import { type ChatScrollTarget, useChatScroll } from '~/hooks/use-chat-scroll';
 import { useElicitationsByThread } from '~/hooks/use-elicitations';
+import { useModelChoice } from '~/hooks/use-model-choice';
 import { isPendingMessage } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
 import {
@@ -40,6 +42,7 @@ import {
   requestComposerFocus,
   transcriptIdOf,
 } from '~/lib/fork';
+import { choiceOf } from '~/lib/model-choice';
 import { isScheduledThreadId } from '~/lib/schedules';
 import { findSnippetMessage } from '~/lib/search-find';
 import { rememberAgent } from '~/routes/chat/home';
@@ -94,6 +97,24 @@ function ThreadConversation({
   const agent = useAgent(agentId);
   const session = useAgentThread({ agentId, threadId, handover });
   const info = useThreadInfo(agentId, threadId);
+  // The model and thinking level for this conversation, chosen in the composer. A conversation
+  // opened from the new chat page starts with the choice its first message carries.
+  const handoverChoice = useMemo(
+    () => ({
+      ...(handover?.modelId !== undefined ? { modelId: handover.modelId } : {}),
+      ...(handover?.thinking !== undefined ? { thinking: handover.thinking } : {}),
+    }),
+    [handover],
+  );
+  const modelChoice = useModelChoice(choiceOf(info), handoverChoice);
+  const { commit: commitModelChoice } = modelChoice;
+  const handoverAccepted = useRef(false);
+  const accepted = session.accepted;
+  useEffect(() => {
+    if (!accepted || handoverAccepted.current) return;
+    handoverAccepted.current = true;
+    commitModelChoice(handoverChoice);
+  }, [accepted, handoverChoice, commitModelChoice]);
   // MCP servers asking the person something while a tool call of this conversation waits.
   const elicitations = useElicitationsByThread().get(`${agentId}/${threadId}`);
   const title = info?.title;
@@ -159,8 +180,12 @@ function ThreadConversation({
   const drop = useFileDrop(attachments.add, attachments.enabled && Boolean(agent?.enabled));
   const sendWithFiles = (steer = false) => {
     if (attachments.busy) return;
-    void session.send(attachments.compose, { steer }).then((sent) => {
-      if (sent) attachments.clear();
+    // Only what the person changed since the last message goes with this one.
+    const { changes } = modelChoice;
+    void session.send(attachments.compose, { steer, ...changes }).then((sent) => {
+      if (!sent) return;
+      attachments.clear();
+      commitModelChoice(changes);
     });
   };
 
@@ -499,6 +524,15 @@ function ThreadConversation({
                 onSelect={() => undefined}
                 loading={agentsQuery.isPending}
                 locked
+              />
+            }
+            model={
+              <ModelPicker
+                value={modelChoice.shown}
+                agentModel={agent?.model}
+                onModel={modelChoice.pickModel}
+                onThinking={modelChoice.pickThinking}
+                disabled={agent ? !agent.enabled : false}
               />
             }
           />

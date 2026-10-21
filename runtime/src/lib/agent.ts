@@ -209,7 +209,9 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const withPerson = person && !(definition.documents ?? []).some((d) => d.definition.kind === TodoDoc.definition.kind)
 		? { ...definition, documents: [...(definition.documents ?? []), TodoDoc], expose: [...(definition.expose ?? []), TodoDoc] }
 		: definition;
-	const documents = withPerson.documents ?? [];
+	// Made with each conversation: the definition's documents. The checklist isn't: the todo tool makes it when first
+	// written, so a conversation lists it (and the app shows it) only once there is one.
+	const documents = definition.documents ?? [];
 	const exposed = exposedDocuments(withPerson);
 
 	const personWaits = new Set([...PLATFORM_PERSON_WAIT_KINDS, ...(definition.waitsForPerson ?? [])]);

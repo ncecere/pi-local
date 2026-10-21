@@ -368,6 +368,8 @@ type Choice struct {
 	Name         string `json:"name"`
 	Provider     string `json:"provider"`
 	ProviderName string `json:"providerName"`
+	// Reasoning: the model can think (a conversation may choose its thinking level).
+	Reasoning bool `json:"reasoning"`
 }
 
 // Choices lists the models agents may be given: every enabled model of every enabled provider, then the demo model.
@@ -383,7 +385,7 @@ func (c *Catalog) Choices(ctx context.Context) ([]Choice, error) {
 		}
 		for _, m := range p.Models {
 			if m.Enabled {
-				out = append(out, Choice{ID: m.ID, Name: m.Name, Provider: p.ID, ProviderName: p.Name})
+				out = append(out, Choice{ID: m.ID, Name: m.Name, Provider: p.ID, ProviderName: p.Name, Reasoning: m.Reasoning})
 			}
 		}
 	}

@@ -69,6 +69,13 @@ func TestAgentsAskNotifyAndKeepAChecklist(t *testing.T) {
 
 	// todo: a checklist document beside the conversation.
 	h.sendAndWait(agent, "t4", `CALL:todo:{"items":[{"text":"Read the brief","status":"done"},{"text":"Draft","status":"doing"}]}`, "r1")
+	// Listed with the thread only once written (no empty checklist in every conversation).
+	if v := string(h.mustDo("GET", "/api/agents/"+agent+"/threads/t3", nil, 200)); strings.Contains(v, `"todo"`) {
+		t.Fatalf("a thread without a checklist lists one: %s", v)
+	}
+	if v := string(h.mustDo("GET", "/api/agents/"+agent+"/threads/t4", nil, 200)); !strings.Contains(v, `"todo":{"revision"`) {
+		t.Fatalf("the checklist isn't listed: %.400s", v)
+	}
 	doc := string(h.mustDo("GET", "/api/agents/"+agent+"/threads/t4/documents/todo", nil, 200))
 	if !strings.Contains(doc, "Read the brief") || !strings.Contains(doc, `"doing"`) {
 		t.Fatalf("todo document: %s", doc)

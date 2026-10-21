@@ -12,6 +12,7 @@ import { Spinner } from '~/components/ui/spinner';
 import { useAnswerElicitation } from '~/hooks/use-elicitations';
 import { useNow } from '~/hooks/use-now';
 import {
+  choiceField,
   confirmField,
   contentOf,
   expiresLabel,
@@ -19,6 +20,7 @@ import {
   fieldLabel,
   fieldsOf,
   initialValues,
+  isAgentQuestion,
   isRequired,
   missingRequired,
 } from '~/lib/elicitations';
@@ -210,6 +212,10 @@ function FormField({
  * asks, its message (the server's own words, as plain text), its form, and
  * Accept / Decline / Cancel. A lone yes-or-no field (a server confirming
  * before it acts) is one button with that field's title, and Decline.
+ *
+ * An agent's own question (`ask_person`) reads as the agent asking: "{agent}
+ * asks you". A yes/no is Yes and No (No declines), a choice is one button per
+ * option, and anything else is a text field with Send.
  */
 export function ElicitationCard({
   elicitation,
@@ -225,6 +231,8 @@ export function ElicitationCard({
   const answer = useAnswerElicitation();
   const schema = elicitation.requestedSchema;
   const confirm = confirmField(schema);
+  const fromAgent = isAgentQuestion(elicitation);
+  const choices = fromAgent ? choiceField(schema) : null;
   const [values, setValues] = useState<FormValues>(() => initialValues(schema));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [outcome, setOutcome] = useState<Outcome | null>(answered);
@@ -271,6 +279,18 @@ export function ElicitationCard({
       (answer.error.code === 'not_pending' || answer.error.status === 409));
   const confirmSpec = confirm ? schema.properties[confirm] : undefined;
   const pendingAction = busy ? answer.variables?.action : undefined;
+  const pendingChoice = busy ? answer.variables?.content?.[choices?.name ?? ''] : undefined;
+  const asker = fromAgent
+    ? elicitation.agentName || elicitation.serverName
+    : elicitation.serverName;
+  const outcomeText = (done: Exclude<Outcome, 'gone'>) =>
+    fromAgent && confirm
+      ? done === 'accept'
+        ? 'Answered yes'
+        : done === 'decline'
+          ? 'Answered no'
+          : OUTCOME_TEXT[done]
+      : OUTCOME_TEXT[done];
 
   return (
     <section
@@ -284,8 +304,8 @@ export function ElicitationCard({
           aria-hidden="true"
         />
         <p id={titleId} className="min-w-0 flex-1 text-sm font-medium text-[var(--text-primary)]">
-          {elicitation.serverName} asks
-          {elicitation.tool && (
+          {fromAgent ? `${asker} asks you` : `${asker} asks`}
+          {!fromAgent && elicitation.tool && (
             <span className="font-normal text-[var(--text-muted)]">
               {' '}
               while running <span className="font-mono">{elicitation.tool}</span>
@@ -298,13 +318,13 @@ export function ElicitationCard({
         className={MESSAGE}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolled region must be reachable by keyboard
         tabIndex={0}
-        aria-label={`${elicitation.serverName}'s message`}
+        aria-label={fromAgent ? `${asker}'s question` : `${asker}'s message`}
       >
         {elicitation.message}
       </section>
 
       <form className="flex flex-col gap-3" onSubmit={accept} noValidate>
-        {!confirm && fieldsOf(schema).length > 0 && (
+        {!confirm && !choices && fieldsOf(schema).length > 0 && (
           <fieldset className="m-0 flex flex-col gap-3 border-0 p-0" disabled={closed || busy}>
             <legend className="sr-only">Your answer</legend>
             {fieldsOf(schema).map(([name, field], index) => (
@@ -344,43 +364,68 @@ export function ElicitationCard({
             ) : (
               <X className="size-3.5" aria-hidden="true" />
             )}
-            {OUTCOME_TEXT[outcome]}
+            {outcomeText(outcome)}
           </p>
         ) : (
           !gone && (
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="submit"
-                size="sm"
-                variant="primary"
-                data-elicitation-accept=""
-                disabled={busy || closed || (!confirm && missing.length > 0)}
-                title={
-                  !confirm && missing.length > 0 ? 'Fill in the required fields first' : undefined
-                }
-              >
-                {pendingAction === 'accept' ? (
-                  <Spinner className="size-3.5 text-current" />
-                ) : (
-                  <Check />
-                )}
-                {confirm && confirmSpec ? fieldLabel(confirm, confirmSpec) : 'Accept'}
-              </Button>
+              {choices ? (
+                choices.options.map((option) => (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    data-elicitation-choice={option.value}
+                    disabled={busy || closed}
+                    onClick={() => send('accept', { [choices.name]: option.value })}
+                  >
+                    {pendingChoice === option.value && (
+                      <Spinner className="size-3.5 text-current" />
+                    )}
+                    {option.label}
+                  </Button>
+                ))
+              ) : (
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="primary"
+                  data-elicitation-accept=""
+                  disabled={busy || closed || (!confirm && missing.length > 0)}
+                  title={
+                    !confirm && missing.length > 0 ? 'Fill in the required fields first' : undefined
+                  }
+                >
+                  {pendingAction === 'accept' ? (
+                    <Spinner className="size-3.5 text-current" />
+                  ) : (
+                    <Check />
+                  )}
+                  {fromAgent
+                    ? confirm
+                      ? 'Yes'
+                      : 'Send'
+                    : confirm && confirmSpec
+                      ? fieldLabel(confirm, confirmSpec)
+                      : 'Accept'}
+                </Button>
+              )}
               <Button
                 type="button"
                 size="sm"
-                variant="secondary"
+                variant={choices ? 'ghost' : 'secondary'}
                 disabled={busy || closed}
                 onClick={() => send('decline')}
               >
                 {pendingAction === 'decline' ? (
                   <Spinner className="size-3.5 text-current" />
                 ) : (
-                  <X />
+                  !choices && <X />
                 )}
-                Decline
+                {fromAgent && confirm ? 'No' : 'Decline'}
               </Button>
-              {!confirm && (
+              {!confirm && !choices && (
                 <Button
                   type="button"
                   size="sm"

@@ -51,6 +51,16 @@ export function isElicitation(value: unknown): value is McpElicitation {
   );
 }
 
+/** The first line of a question's message, clipped: what a toast says under its title. */
+export function firstLineOf(message: string, max = 100): string {
+  const line =
+    message
+      .split('\n')
+      .map((part) => part.trim())
+      .find(Boolean) ?? '';
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
 /** One line for an elicitation in a list: "Microsoft 365: Send this email to …". */
 export function elicitationHeadline(elicitation: Pick<McpElicitation, 'serverName' | 'message'>) {
   const line =
@@ -94,6 +104,32 @@ export function confirmField(schema: ElicitationSchema | undefined): string | nu
   const fields = fieldsOf(schema);
   const only = fields[0];
   return fields.length === 1 && only && only[1].type === 'boolean' ? only[0] : null;
+}
+
+/**
+ * An agent's own question (`ask_person`): an elicitation from the agent itself,
+ * not from an MCP server. Its card reads "{agent} asks you".
+ */
+export const isAgentQuestion = (elicitation: Pick<McpElicitation, 'server' | 'tool'>) =>
+  elicitation.server === 'agent' && elicitation.tool === 'ask_person';
+
+/**
+ * A question with one required field that is a choice from a list (the agent's
+ * `choices`): its name and the options, each with the label people read.
+ */
+export function choiceField(
+  schema: ElicitationSchema | undefined,
+): { name: string; options: { value: string; label: string }[] } | null {
+  const fields = fieldsOf(schema);
+  const only = fields[0];
+  if (fields.length !== 1 || !only) return null;
+  const [name, field] = only;
+  if (field.type !== 'string' || !field.enum || field.enum.length === 0) return null;
+  const names = field.enumNames?.length === field.enum.length ? field.enumNames : null;
+  return {
+    name,
+    options: field.enum.map((value, index) => ({ value, label: names?.[index] || value })),
+  };
 }
 
 /** A field's name for people: its title, or its key. */

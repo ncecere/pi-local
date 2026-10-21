@@ -47,6 +47,8 @@ interface ComposerProps {
   placeholder?: string;
   /** Left of the send button: the agent picker. */
   options?: ReactNode;
+  /** Beside the options: the model and thinking picker. */
+  model?: ReactNode;
   /** Above the message field: attached files (AttachmentTray). */
   tray?: ReactNode;
   /** Before the options: the attach button. */
@@ -76,6 +78,7 @@ export const Composer = memo(function Composer({
   placeholder = 'Message the agent…',
   autoFocus = false,
   options,
+  model,
   tray,
   attach,
   onPasteFiles,
@@ -186,6 +189,7 @@ export const Composer = memo(function Composer({
           <div className="flex min-w-0 flex-1 items-center gap-2">
             {attach}
             {options}
+            {model}
           </div>
 
           {working && onStop && (

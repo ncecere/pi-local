@@ -33,6 +33,7 @@ export type {
   ChatAssistantMessage,
   ChatMessage,
   ChatMessage as ChatViewMessage,
+  ChatSettings,
   ChatTool,
   ChatToolCall,
   ChatToolMessage,
@@ -68,6 +69,7 @@ export type {
   MemoryEvent,
   MemoryNote,
   Model,
+  NotificationEvent,
   Provider,
   ProviderKind,
   ProviderKindId,
@@ -86,6 +88,7 @@ export type {
   Team,
   TeamEvent,
   TemplateCategory,
+  ThinkingLevel,
   ThreadDocument,
   UpdateRelease,
   UpdateStage,
@@ -105,7 +108,8 @@ export type Role = 'admin' | 'user';
 /**
  * Optional features and whether each is on. Locally: `messageSearch` (Phase 7),
  * `folderDialog` (the native folder dialog, desktop app only) and `updates`
- * (this copy can install updates itself), `agentRouting` (fast judgments pick the agent for a new chat).
+ * (this copy can install updates itself), `agentRouting` (fast judgments pick the agent for a new chat),
+ * `modelPerConversation` (the composer's model and thinking picker).
  */
 export type FeatureId =
   | 'agentRouting'
@@ -114,7 +118,8 @@ export type FeatureId =
   | 'messageSearch'
   | 'myUsage'
   | 'folderDialog'
-  | 'updates';
+  | 'updates'
+  | 'modelPerConversation';
 
 /** `GET /api/me`: the one local user. */
 export interface Me {

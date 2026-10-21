@@ -11,6 +11,7 @@ import {
   FilePen,
   FileText,
   Globe,
+  ListChecks,
   LoaderCircle,
   type LucideIcon,
   MessagesSquare,
@@ -22,12 +23,13 @@ import {
 } from 'lucide-react';
 import { useId, useState } from 'react';
 import { ApprovalOutcome } from '~/components/chat/approval-card';
-import { ToolDetailsView } from '~/components/chat/document-views';
+import { TodoChecklistView, ToolDetailsView, todoProgress } from '~/components/chat/document-views';
 import { useAgents } from '~/hooks/use-agents';
 import { type AskStep, askStepOf, askSummary, type ListAgentsStep } from '~/lib/agent-asks';
 import { approvalOutcome } from '~/lib/approvals';
 import { approvalOf, toolDetailsOf, toolDetailsOmittedOf, toolOutputText } from '~/lib/chat-view';
 import { formatDuration } from '~/lib/reply-meta';
+import { asTodoList, type TodoList } from '~/lib/thread-documents';
 import { cn } from '~/lib/utils';
 import { isToolPart, summarizeToolPart, type ToolStepSummary } from '~/shared';
 
@@ -113,6 +115,7 @@ export function toolIconOf(name: string): LucideIcon {
   if (/read|cat|view|open|file|^ls$|list/.test(id)) return FileText;
   if (/time|clock|date|calendar/.test(id)) return Clock;
   if (/memory|remember|recall|note/.test(id)) return Brain;
+  if (/^todo|checklist/.test(id)) return ListChecks;
   return Wrench;
 }
 
@@ -422,12 +425,20 @@ function AskDetails({ ask, step }: { ask: AskStep; step: ToolStepSummary }) {
   );
 }
 
+/** The checklist a finished `todo` call wrote (its `details.items`), or null for any other call. */
+export function todoOf(part: ToolPart): TodoList | null {
+  if (part.toolName !== 'todo') return null;
+  const details = toolDetailsOf(part as { toolMetadata?: unknown });
+  return details === undefined ? null : asTodoList(details);
+}
+
 /** One line for a step: icon, tool, what it acted on, and how it went. */
 function StepLine({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
   const ask = useAskStep(part);
   const approval = approvalOf(part);
   if (ask && !approval) return <AskLine part={part} step={step} ask={ask} />;
-  const hint = hintOf(part);
+  const todo = todoOf(part);
+  const hint = todo ? todoProgress(todo.items) : hintOf(part);
   const took = toolDuration(part);
   return (
     <>
@@ -478,6 +489,7 @@ export function ToolStepRow({ part, step }: { part: ToolPart; step: ToolStepSumm
   const output = toolOutputText(part);
   const hasInputs = isRecord(part.input) ? Object.keys(part.input).length > 0 : part.input != null;
   const ask = useAskStep(part);
+  const todo = todoOf(part);
   const approval = approvalOf(part);
   // How its request ended, when the summary doesn't already say it.
   const outcome =
@@ -515,6 +527,8 @@ export function ToolStepRow({ part, step }: { part: ToolPart; step: ToolStepSumm
         >
           {ask?.kind === 'ask' ? (
             <AskDetails ask={ask} step={step} />
+          ) : todo && step.state === 'done' ? (
+            <TodoChecklistView items={todo.items} />
           ) : (
             <ToolStepBody part={part} step={step} output={output} hasInputs={hasInputs} />
           )}

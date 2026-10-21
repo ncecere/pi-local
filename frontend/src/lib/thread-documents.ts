@@ -49,6 +49,16 @@ export interface TriageQueue {
   items: TriageItem[];
 }
 
+export type TodoStatus = 'pending' | 'doing' | 'done';
+export interface TodoItem {
+  text: string;
+  status: TodoStatus | string;
+}
+/** `todo`: the conversation's checklist, written by the agent's `todo` tool. */
+export interface TodoList {
+  items: TodoItem[];
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -124,10 +134,23 @@ export function asStatusCounts(value: unknown): Record<string, number> | null {
   return value as Record<string, number>;
 }
 
+/** The checklist, or null when the value is not one. */
+export function asTodoList(value: unknown): TodoList | null {
+  if (!isRecord(value) || !Array.isArray(value.items)) return null;
+  if (!value.items.every((item) => isRecord(item) && typeof item.text === 'string')) return null;
+  return {
+    items: (value.items as Record<string, unknown>[]).map((item) => ({
+      text: str(item.text),
+      status: str(item.status) || 'pending',
+    })),
+  };
+}
+
 const TITLES: Record<string, string> = {
   'research.plan': 'Research plan',
   'research.sources': 'Sources',
   'triage.queue': 'Triage queue',
+  todo: 'Checklist',
 };
 
 /** A document's name as people read it: known kinds by name, others as their kind. */

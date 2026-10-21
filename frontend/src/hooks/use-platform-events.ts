@@ -32,9 +32,11 @@ import { SCHEDULES_KEY, scheduleRunsKey } from '~/hooks/use-schedules';
 import { TEAMS_KEY } from '~/hooks/use-teams';
 import { UPDATE_KEY } from '~/hooks/use-update';
 import { applyApprovalEvent } from '~/lib/approvals';
+import { firstLineOf, isAgentQuestion } from '~/lib/elicitations';
 import { setEventsLive } from '~/lib/events-live';
 import { threadKey } from '~/lib/inbox';
 import { applyMcpEvent } from '~/lib/mcp';
+import { showNotification } from '~/lib/notification-toast';
 import { applyRunToHistory, applyScheduleEvent, applyScheduleRun } from '~/lib/schedules';
 import { applyTeamEvent } from '~/lib/teams';
 
@@ -55,6 +57,8 @@ import { applyTeamEvent } from '~/lib/teams';
  *   or its question was answered, cancelled or expired. It updates the pending
  *   list (['elicitations']) in place; a new one not on screen says so in a
  *   toast with a way to it.
+ * - `notification`: an agent's `notify_person`: a toast with an Open button to its
+ *   conversation, unless that conversation is on screen.
  * - `mcp`: an MCP server added, changed, tested, signed in or out, or deleted.
  *   It updates the catalog (['mcp', 'servers']) in place: an OAuth sign-in's
  *   outcome arrives this way.
@@ -193,22 +197,39 @@ export function usePlatformEvents() {
         ? `/agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(threadId)}`
         : null;
       if (path && window.location.pathname === path) return;
-      toast(`${elicitation.serverName} is asking you something`, {
-        id: `elicitation-${elicitation.id}`,
-        duration: 15_000,
-        description: elicitation.agentName,
-        action: {
-          label: 'Show',
-          onClick: () =>
-            void (threadId
-              ? latest.current.navigate({
-                  to: '/agents/$agentId/threads/$threadId',
-                  params: { agentId, threadId },
-                })
-              : latest.current.navigate({ to: '/', search: { agent: agentId } })),
+      // An agent's own question (ask_person) is the agent asking; an MCP server's names the server.
+      const own = isAgentQuestion(elicitation);
+      toast(
+        own
+          ? `${elicitation.agentName} asks you`
+          : `${elicitation.serverName} is asking you something`,
+        {
+          id: `elicitation-${elicitation.id}`,
+          duration: 15_000,
+          description: own ? firstLineOf(elicitation.message) : elicitation.agentName,
+          action: {
+            label: 'Show',
+            onClick: () =>
+              void (threadId
+                ? latest.current.navigate({
+                    to: '/agents/$agentId/threads/$threadId',
+                    params: { agentId, threadId },
+                  })
+                : latest.current.navigate({ to: '/', search: { agent: agentId } })),
+          },
         },
-      });
+      );
     });
+    source.on('notification', (data) =>
+      showNotification(data, {
+        pathname: window.location.pathname,
+        open: (agentId, threadId) =>
+          void latest.current.navigate({
+            to: '/agents/$agentId/threads/$threadId',
+            params: { agentId, threadId },
+          }),
+      }),
+    );
     source.on('mcp', (data) => {
       let event: McpEvent;
       try {

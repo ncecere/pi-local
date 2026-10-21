@@ -409,6 +409,10 @@ export interface AgentThread {
   participants: unknown[];
   /** The agent (and its conversation) that asked in this thread; null when a person started it. */
   calledBy?: CalledBy | null;
+  /** The model the person chose for this conversation; "" or left out: the agent's own. */
+  modelId?: string;
+  /** The thinking level the person chose; "" or left out: the model's default (off). */
+  thinking?: string;
 }
 
 /** Who asked in a conversation: another agent, from one of its own conversations. */
@@ -424,6 +428,16 @@ export interface AgentThreadEvent {
   threadId: string;
   deleted: boolean;
   thread?: AgentThread | null;
+}
+
+/** `GET /api/events` `notification` event: an agent's `notify_person`. */
+export interface NotificationEvent {
+  agentId: string;
+  agentName: string;
+  /** The conversation the agent was in; "" when none. */
+  threadId?: string | null;
+  title: string;
+  message: string;
 }
 
 /** `GET /api/events` `agent` event. */
@@ -599,7 +613,19 @@ export interface CatalogModel {
   name: string;
   provider?: string;
   providerName?: string;
+  /** The model can think before it answers: a thinking level applies. */
+  reasoning?: boolean;
+  enabled?: boolean;
 }
+
+/** `GET /api/settings/chat` (and `PUT`). */
+export interface ChatSettings {
+  modelPerConversation: boolean;
+  thinkingLevels: string[];
+}
+
+/** What a conversation's model choice says: `modelId` "" is the agent's own; `thinking` "" the model's default (off). */
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
 
 /** `409 in_use`'s `details.agents`. */
 export interface AgentRef {

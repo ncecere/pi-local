@@ -80,6 +80,12 @@ export interface Handover {
   existing?: boolean;
   /** Fast judgments picked the agent (Auto in the new-chat picker): the conversation says so. */
   routed?: boolean;
+  /**
+   * The model and thinking level the person changed in the new chat's picker,
+   * sent with the first message. Left out: nothing was chosen.
+   */
+  modelId?: string;
+  thinking?: string;
 }
 
 const HANDOVER_KEY = 'pai.handover';
@@ -161,6 +167,12 @@ const noDeltaFormat = (error: unknown) =>
 export interface SendOptions {
   /** Join the reply in progress after its current step (`whenBusy: "steer"`). */
   steer?: boolean;
+  /**
+   * The model and thinking level the person changed since the last message
+   * (docs/api.md "Model per conversation"). Left out: the conversation keeps what it had.
+   */
+  modelId?: string;
+  thinking?: string;
 }
 
 /**
@@ -466,6 +478,8 @@ export function useAgentThread({
           text: content,
           requestId,
           ...(steer ? { whenBusy: 'steer' } : {}),
+          ...(options.modelId !== undefined ? { modelId: options.modelId } : {}),
+          ...(options.thinking !== undefined ? { thinking: options.thinking } : {}),
         });
         setPending((current) =>
           current.map((message) =>
@@ -530,7 +544,10 @@ export function useAgentThread({
   useEffect(() => {
     if (!handover || handedOver.current) return;
     handedOver.current = true;
-    void submit(handover.text, handover.requestId);
+    void submit(handover.text, handover.requestId, undefined, {
+      ...(handover.modelId !== undefined ? { modelId: handover.modelId } : {}),
+      ...(handover.thinking !== undefined ? { thinking: handover.thinking } : {}),
+    });
   }, [handover, submit]);
 
   const stop = useCallback(async () => {
@@ -611,6 +628,8 @@ export function useAgentThread({
     loadEarlier,
     loadingEarlier,
     earlierError,
+    /** The conversation exists on the platform: an existing one, or a new one whose first message was accepted. */
+    accepted: exists,
     /** The documents the agent exposes for this conversation, by kind, with their revisions. */
     documents: view?.documents,
     draft,

@@ -13,6 +13,7 @@ import {
 } from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
 import { ElicitationList } from '~/components/chat/elicitation-card';
+import { ModelPicker } from '~/components/chat/model-picker';
 import { RouteChooser, type RouteQuestion, routeOptions } from '~/components/chat/route-chooser';
 import { GetStarted } from '~/components/onboarding/get-started';
 import { writeHandover } from '~/hooks/use-agent-thread';
@@ -26,12 +27,14 @@ import {
 import { useAttachments } from '~/hooks/use-attachments';
 import { usePendingElicitations } from '~/hooks/use-elicitations';
 import { routeMessage } from '~/hooks/use-judgments';
+import { useModelChoice } from '~/hooks/use-model-choice';
 import { ME_KEY, useCurrentUser } from '~/hooks/use-session';
 import { useTeams } from '~/hooks/use-teams';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { usePageTitle } from '~/lib/document-title';
 import { focusComposerOnArrival } from '~/lib/focus-after-navigation';
 import { greetingName } from '~/lib/greeting-name';
+import { NO_CHOICE } from '~/lib/model-choice';
 import { chattableTeams } from '~/lib/teams';
 import { cn } from '~/lib/utils';
 
@@ -121,6 +124,9 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   const talkingTo = auto ? 'your agents' : team ? team.name : agent?.name;
 
   const [draft, setDraft] = useState('');
+  // The model and thinking level for the new conversation: local until the first message, which carries what changed.
+  const modelChoice = useModelChoice(NO_CHOICE);
+  const modelChanges = modelChoice.changes;
   // Files for the first message, saved in the chosen agent's workspace.
   const attachments = useAttachments(shown);
   const drop = useFileDrop(attachments.add, attachments.enabled);
@@ -159,6 +165,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
         requestId: crypto.randomUUID(),
         focus: typing,
         ...(routed ? { routed: true } : {}),
+        ...modelChanges,
       });
       rememberAgent(target.id);
       noteNewThread(queryClient, target.id, threadId, content);
@@ -167,7 +174,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
         params: { agentId: target.id, threadId },
       });
     },
-    [agent, navigate, queryClient],
+    [agent, navigate, queryClient, modelChanges],
   );
 
   // Auto: which agent takes the message. Not sure, off (409) or failing: the person is asked.
@@ -387,6 +394,15 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
                 ? `Message ${team.name} (${agent.name})…`
                 : `Message ${agent.name}…`
               : 'No agent to message'
+        }
+        model={
+          <ModelPicker
+            value={modelChoice.shown}
+            agentModel={shown?.model}
+            onModel={modelChoice.pickModel}
+            onThinking={modelChoice.pickThinking}
+            disabled={!agent}
+          />
         }
         options={
           <AgentPicker

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ApiError, type Me } from '../../src/api/client';
-import { httpTransport, type Method, setTransport } from '../../src/api/transport';
+import { httpTransport, type Method, setTransport, type Transport } from '../../src/api/transport';
 import { ME_KEY } from '../../src/hooks/use-session';
 
 /**
@@ -18,10 +18,15 @@ export interface FakeBackend {
   routes: Record<string, Handler>;
 }
 
-export function fakeBackend(routes: Record<string, Handler> = {}): FakeBackend {
+export function fakeBackend(
+  routes: Record<string, Handler> = {},
+  /** How a conversation's event stream behaves (it never answers by default). */
+  stream?: Transport['stream'],
+): FakeBackend {
   const backend: FakeBackend = { calls: [], routes };
   setTransport({
     ...httpTransport,
+    ...(stream ? { stream } : {}),
     channel: () => null,
     async request<T>(method: Method, path: string, body?: unknown): Promise<T> {
       backend.calls.push({ method, path, body });
