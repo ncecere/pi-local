@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
+import type { ToolAnnotations, ToolInfo } from "./approval-rules.ts";
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { McpClient, type McpFetch, type McpTransport, StdioTransport, StreamableHttpTransport, toLlmContent } from "@earendil-works/pi-mcp";
@@ -16,6 +17,9 @@ import {
  * How the runtime reaches one MCP server. The app resolves everything before it starts the runtime: secrets in
  * headers and env, and `${workspace}`-style paths, so the runtime never reads a secret store or a config file.
  */
+/** A tool the platform lists for a server; `annotations` are the server's hints (readOnlyHint, destructiveHint), when it gave them. */
+export type McpToolConfig = { name: string; title?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: unknown };
+
 export type McpServerConfig = {
 	slug: string;
 	name: string;
@@ -33,7 +37,7 @@ export type McpServerConfig = {
 	cwd?: string;
 	env?: Record<string, string>;
 	/** A catalog server's tools; absent for an app's (client) server, whose tools are listed on connect. */
-	tools?: { name: string; title?: string; description?: string; inputSchema?: Record<string, unknown> }[];
+	tools?: McpToolConfig[];
 	thread?: string;
 	client?: boolean;
 	/** The platform's MCP proxy: name each tool call's thread (PDP-Thread), so the platform can say who the call is for. */
@@ -114,6 +118,17 @@ export function appElicitor(base: string, key: string, fetchImpl: typeof fetch =
 			signal.removeEventListener("abort", withdraw);
 		}
 	};
+}
+
+/** The boolean hints of a tool's annotations, nothing else (a server's other fields are none of the policy's business). */
+export function cleanAnnotations(value: unknown): ToolAnnotations | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const out: ToolAnnotations = {};
+	for (const key of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const) {
+		const hint = (value as Record<string, unknown>)[key];
+		if (typeof hint === "boolean") out[key] = hint;
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** A tool call in progress on a connection: whose it is, and its clock (paused while a person answers). */
@@ -327,7 +342,7 @@ type ThreadOf = (conversationId: number) => Promise<string | undefined>;
 function toolsFor(
 	prefix: string,
 	server: McpServerConfig,
-	tools: NonNullable<McpServerConfig["tools"]>,
+	tools: readonly McpToolConfig[],
 	conn: Connection,
 	deferred: boolean,
 	threadOf?: ThreadOf,
@@ -395,6 +410,8 @@ export class AgentMcp {
 	private readonly connections: Connection[] = [];
 	private readonly threadExts = new Map<string, { key: string; extension: Extension; connections: Connection[] }>();
 	private toolSearch: Extension | undefined;
+	/** What the approval rules know of each tool (by its registered name): that it is MCP's, its own name and annotations. */
+	private readonly info = new Map<string, ToolInfo>();
 	/** The thread a conversation belongs to (set once the threads are known); the template's proxied tool calls name it. */
 	threadOf: ThreadOf = async () => undefined;
 	/** Relays the servers' questions to the person (MCP_ELICIT_URL), when the app offers it. */
@@ -421,9 +438,22 @@ export class AgentMcp {
 			const conn = new Connection(server, (input, init) => this.fetchImpl(input, init), oauthStore, this.elicit);
 			this.connections.push(conn);
 			tools.push(...toolsFor("mcp", server, server.tools ?? [], conn, deferred, (id) => this.threadOf(id), this.callTimeoutMs));
+			this.note("mcp", server, server.tools ?? []);
 		}
 		if (tools.length > 0) this.extensions.push(defineExtension({ name: "mcp", tools }));
 		if (deferred) this.extensions.push(this.searchExtension());
+	}
+
+	private note(prefix: string, server: McpServerConfig, tools: readonly McpToolConfig[]): void {
+		for (const tool of tools) {
+			const annotations = cleanAnnotations(tool.annotations);
+			this.info.set(toolName(prefix, server.slug, tool.name), { mcp: true, toolName: tool.name, ...(annotations === undefined ? {} : { annotations }) });
+		}
+	}
+
+	/** What is known of a tool for the approval rules: undefined for a tool that isn't an MCP server's. */
+	toolInfo(name: string): ToolInfo | undefined {
+		return this.info.get(name);
 	}
 
 	/** tool_search, installed the first time a set of tools needs it (a thread's servers may be the first). */
@@ -489,7 +519,7 @@ export class AgentMcp {
 			return undefined;
 		}
 		const connections: Connection[] = [];
-		const listed: { server: McpServerConfig; conn: Connection; tools: NonNullable<McpServerConfig["tools"]> }[] = [];
+		const listed: { server: McpServerConfig; conn: Connection; tools: McpToolConfig[] }[] = [];
 		for (const server of servers) {
 			const conn = new Connection(server, undefined, undefined, this.elicit);
 			connections.push(conn);
@@ -497,12 +527,13 @@ export class AgentMcp {
 				const client = await conn.get();
 				const tools = (await client.listTools())
 					.filter((t) => modelVisible((t as { _meta?: unknown })._meta))
-					.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema as Record<string, unknown> }));
+					.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema as Record<string, unknown>, annotations: (t as { annotations?: unknown }).annotations }));
 				listed.push({ server, conn, tools });
 			} catch (error) {
 				console.error(`[runtime] MCP server ${server.name} of thread ${threadId}:`, (error as Error).message);
 			}
 		}
+		for (const l of listed) this.note("mcpc", l.server, l.tools);
 		const total = listed.reduce((n, l) => n + l.tools.length, 0);
 		const tools = listed.flatMap((l) => toolsFor("mcpc", l.server, l.tools, l.conn, total > DEFER_ABOVE, async () => threadId, this.callTimeoutMs));
 		const extension = defineExtension({ name: `mcp-thread:${threadId}`, tools });

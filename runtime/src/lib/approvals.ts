@@ -13,6 +13,7 @@ import {
 	type ToolHookCall,
 	ToolTask,
 } from "@earendil-works/pi-durable";
+import { changesThings, DENIED_MESSAGE, describeRule, evaluate, parsePolicy, type RulePolicy, type Source, type ToolInfo, toolMatches } from "./approval-rules.ts";
 import { redactArguments } from "./redact.ts";
 import type { ThreadStore } from "./threads.ts";
 import { type Author, type ChatApproval, USER_ENTRY, type ViewApprovals } from "./view.ts";
@@ -41,8 +42,10 @@ export type ApprovalRecord = {
 	tool: string;
 	/** A bounded, redacted view of the arguments (redact.ts). */
 	arguments: unknown;
-	/** Why approval is asked, from an author's hook. */
+	/** Why approval is asked: an author's hook, a rule, or fast judgments. */
 	summary?: string;
+	/** What asked: a built-in rule, one of the person's rules, the profile, the `tools` list, fast judgments, or an author's hook. */
+	source?: AskSource;
 	/** Who the run is for: the author of the message that started it (absent: unattended). */
 	requestedFor?: Author;
 	requestedAt: number;
@@ -54,6 +57,9 @@ export type ApprovalRecord = {
 	reason?: string;
 };
 
+/** What made a call ask: see `Source` (approval-rules.ts); `judge` is fast judgments, `author` an author's hook. */
+export type AskSource = Source | "judge" | "author";
+
 type ApprovalsState = { items: Record<string, ApprovalRecord> };
 
 /** The agent's approval requests, pending and recently resolved. The library's: `pdp.` is reserved for the platform. */
@@ -64,10 +70,15 @@ export const ApprovalsDoc = defineDoc<ApprovalsState & JsonObject>({
 	initial: () => ({ items: {} }),
 });
 
+/** What fast judgments say when they make a call ask. */
+export const JUDGED_RISKY = "Asked because fast judgments thought it could be risky.";
+
 /** What a request asks besides the call itself. */
 export type ApprovalOptions = {
 	/** Shown to the people who decide: why it needs approval, what the agent knows. At most 2,000 characters. */
 	summary?: string;
+	/** What asked (default: an author's hook). */
+	source?: AskSource;
 	/** Two requests for one call with the same key are one request. Default "" (the template's and an author's share it). */
 	key?: string;
 	/** Without a platform only (the test kit): how long until the request is denied. Default the template's. */
@@ -92,33 +103,31 @@ export interface ApprovalRequester {
 	request(call: ToolHookCall, api: HookApi, context: Context, options?: ApprovalOptions): Promise<ApprovalDecision>;
 }
 
-/** The template's approval policy: tool names or `*` patterns, and how long a request waits. */
-export type ApprovalPolicy = { tools: readonly string[]; timeoutMs: number };
+/** The agent's approval policy: its rules and profile (approval-rules.ts), and how long a request waits. */
+export type ApprovalPolicy = RulePolicy & { timeoutMs: number };
 
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const MAX_RESOLVED = 500;
 const MAX_TIMER = 2 ** 31 - 1;
 
-/** The policy in `TOOL_APPROVALS` (JSON `{tools, timeoutSeconds}`); none when absent or malformed. */
+/**
+ * The policy in `TOOL_APPROVALS` (JSON `{profile?, tools?, rules?, builtin?, timeoutSeconds?}`); none when absent or
+ * malformed. Without a profile it is `custom`: the `tools` ask first, as they always did.
+ */
 export function parseApprovalPolicy(raw: string | undefined): ApprovalPolicy {
-	const none: ApprovalPolicy = { tools: [], timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS };
+	const none: ApprovalPolicy = { ...parsePolicy({}), timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS };
 	if (raw === undefined || raw.trim() === "") return none;
 	try {
-		const value = JSON.parse(raw) as { tools?: unknown; timeoutSeconds?: unknown };
-		const tools = Array.isArray(value.tools) ? value.tools.filter((t): t is string => typeof t === "string" && t.length > 0 && t.length <= 200).slice(0, 100) : [];
+		const value = JSON.parse(raw) as { timeoutSeconds?: unknown; profile?: unknown; tools?: unknown; rules?: unknown; builtin?: unknown };
 		const seconds = typeof value.timeoutSeconds === "number" && value.timeoutSeconds > 0 ? value.timeoutSeconds : undefined;
-		return { tools, timeoutMs: seconds === undefined ? DEFAULT_APPROVAL_TIMEOUT_MS : seconds * 1000 };
+		return { ...parsePolicy(value), timeoutMs: seconds === undefined ? DEFAULT_APPROVAL_TIMEOUT_MS : seconds * 1000 };
 	} catch {
 		console.error("[runtime] TOOL_APPROVALS is not valid JSON; no tool needs approval");
 		return none;
 	}
 }
 
-/** Whether a tool name matches a pattern (`*`: any characters). */
-export function toolMatches(pattern: string, name: string): boolean {
-	const re = new RegExp(`^${pattern.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
-	return re.test(name);
-}
+export { toolMatches };
 
 /** A request's ID: from its tool task (durable) and key, so a rerun of the hook finds the same request. */
 export function approvalId(taskId: string | number, key = ""): string {
@@ -149,7 +158,20 @@ export class Approvals implements ApprovalRequester {
 	private reports: Promise<void> = Promise.resolve();
 	private closed = false;
 
-	constructor(readonly policy: ApprovalPolicy) {}
+	/** What the policy knows of a tool besides its name (MCP annotations); set by the agent once its MCP servers are up. */
+	toolInfo: (name: string) => ToolInfo | undefined = () => undefined;
+	/**
+	 * Fast judgments (the platform's `/judge/approval`): whether a call that would run could cause harm or be hard to undo.
+	 * Only ever asks for more approval; a failure is no judgment.
+	 */
+	judge: ((call: ToolHookCall, signal?: AbortSignal) => Promise<boolean>) | undefined;
+
+	constructor(public policy: ApprovalPolicy) {}
+
+	/** Replaces the policy (the platform changed the agent's rules or profile). Calls already waiting keep waiting. */
+	setPolicy(policy: ApprovalPolicy): void {
+		this.policy = policy;
+	}
 
 	/** Connects the requester to the open agent; `gateway` is the platform (absent: decide time-outs here). */
 	async bind(harness: Harness, threads: ThreadStore, gateway?: GatewayCall): Promise<void> {
@@ -160,22 +182,49 @@ export class Approvals implements ApprovalRequester {
 		this.cache = new Map(Object.entries((state as ApprovalsState | undefined)?.items ?? {}).map(([id, r]) => [id, clone(r)]));
 	}
 
-	/** Whether the template marks this tool. */
+	/** Whether the policy can ask or refuse anything at all (rules, built-in rules, a profile that asks, or a tools list). */
+	active(): boolean {
+		const p = this.policy;
+		return p.rules.length > 0 || p.builtin.length > 0 || p.tools.length > 0 || p.profile === "careful" || p.profile === "balanced";
+	}
+
+	/** Whether the policy asks first for this tool whatever its arguments (custom profile's list). */
 	marks(name: string): boolean {
 		return this.policy.tools.some((pattern) => toolMatches(pattern, name));
 	}
 
-	/** The library's extension: asks before every call of a tool the template marks. Selected last in every thread. */
+	/**
+	 * What to do with a call: the rules, the built-ins and the profile decide (approval-rules.ts); then fast judgments may
+	 * ask where those let a call run, never the other way. A call the person allowed by a rule is not judged.
+	 */
+	async verdict(call: ToolHookCall, signal?: AbortSignal): Promise<{ block: string } | { ask: ApprovalOptions } | undefined> {
+		const info = this.toolInfo(call.name);
+		const v = evaluate(this.policy, call.name, call.arguments ?? {}, info);
+		if (v.action === "deny") return { block: DENIED_MESSAGE };
+		if (v.action === "ask") {
+			const summary = v.source === "builtin" ? `Asked because it matches a built-in rule (${describeRule(v.rule!)}).` : v.source === "rule" ? "Asked because of one of your approval rules." : undefined;
+			return { ask: { source: v.source, ...(summary === undefined ? {} : { summary }) } };
+		}
+		if (v.explicit || this.judge === undefined || !changesThings(call.name, info)) return undefined;
+		const risky = await this.judge(call, signal).catch(() => false);
+		return risky ? { ask: { source: "judge", summary: JUDGED_RISKY } } : undefined;
+	}
+
+	/** The library's extension: asks, or refuses, as the policy says. Always selected last in every thread. */
 	extension(): Extension {
 		return defineExtension({
 			name: "pdp-approvals",
 			hooks: [
 				hook(ToolTask, {
 					beforeTool: async (call, api, context) => {
-						// A request already asked stays asked, also after a new version stopped marking the tool.
-						const asked = this.cache.get(approvalId(api.taskId as unknown as number))?.status === "pending";
-						if (!asked && !this.marks(call.name)) return undefined;
-						const decision = await this.request(call, api, context);
+						const id = approvalId(api.taskId as unknown as number);
+						// A request already made for this call stays what it was (a rerun after a restart finds its decision), also
+						// after the policy changed; only a new refusal overrides it.
+						const known = this.cache.has(id);
+						const verdict = await this.verdict(call, context.abortSignal);
+						if (verdict !== undefined && "block" in verdict) return verdict;
+						if (!known && verdict === undefined) return undefined;
+						const decision = await this.request(call, api, context, verdict?.ask ?? {});
 						return decision.approved ? undefined : { block: decision.message };
 					},
 				}),
@@ -442,6 +491,7 @@ export class Approvals implements ApprovalRequester {
 		if (place?.threadId !== undefined) record.threadId = place.threadId;
 		if (place?.requestedFor !== undefined) record.requestedFor = place.requestedFor;
 		if (summary) record.summary = summary;
+		record.source = options.source ?? "author";
 		return record;
 	}
 
@@ -573,6 +623,7 @@ export function chatApproval(r: ApprovalRecord, withArguments: boolean): ChatApp
 		requestedAt: r.requestedAt,
 		...(r.expiresAt === undefined ? {} : { expiresAt: r.expiresAt }),
 		...(r.summary === undefined ? {} : { summary: r.summary }),
+		...(r.source === undefined ? {} : { source: r.source }),
 		...(r.requestedFor === undefined ? {} : { requestedFor: r.requestedFor }),
 		...(r.decidedAt === undefined ? {} : { decidedAt: r.decidedAt }),
 		...(r.decidedBy === undefined ? {} : { decidedBy: r.decidedBy }),

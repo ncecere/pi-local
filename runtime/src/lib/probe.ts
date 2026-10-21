@@ -1,7 +1,7 @@
 import { McpClient } from "@earendil-works/pi-mcp";
 import { authorizeMcp, McpOAuthAuthorizationRequiredError, OAuthCallbackServer } from "@earendil-works/pi-mcp/oauth";
 import type { McpOAuthStateStore } from "@earendil-works/pi-mcp/oauth";
-import { appOAuthStore, createTransport, type McpServerConfig, modelVisible, refreshOnlyStore } from "./mcp.ts";
+import { appOAuthStore, cleanAnnotations, createTransport, type McpServerConfig, modelVisible, refreshOnlyStore } from "./mcp.ts";
 
 /**
  * What the app asks of `runtime.mjs mcp-probe` (one JSON object on stdin):
@@ -29,7 +29,7 @@ export type ProbeEvent =
 			type: "result";
 			serverInfo?: unknown;
 			instructions?: string;
-			tools: { name: string; title?: string; description?: string; inputSchema?: unknown; modelVisible: boolean }[];
+			tools: { name: string; title?: string; description?: string; inputSchema?: unknown; annotations?: unknown; modelVisible: boolean }[];
 	  }
 	| { type: "error"; code: "needs_sign_in" | "connect_failed" | "timeout" | "invalid_request"; message: string; stderr?: string };
 
@@ -108,6 +108,7 @@ export async function probeMcpServer(request: ProbeRequest, emit: (event: ProbeE
 					title: t.title,
 					description: t.description,
 					inputSchema: t.inputSchema,
+					annotations: cleanAnnotations((t as { annotations?: unknown }).annotations),
 					modelVisible: modelVisible((t as { _meta?: unknown })._meta),
 				})),
 			};
