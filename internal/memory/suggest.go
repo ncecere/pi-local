@@ -71,22 +71,22 @@ func CleanCandidates(in []Candidate) []Candidate {
 
 // Extraction is how far a conversation was checked.
 type Extraction struct {
-	Messages int   // messages read
-	ReplyAt  int64 // the thread's last reply then (Unix ms)
+	Cursor  string // stable durable message ID (e<entry>[:<index>])
+	ReplyAt int64  // the thread's last reply then (Unix ms)
 }
 
 // Extracted says how far a conversation was checked (zero when never).
 func (s *Store) Extracted(ctx context.Context, agentID, threadID string) Extraction {
 	var e Extraction
-	s.db.QueryRowContext(ctx, `SELECT messages, reply_at FROM memory_extractions WHERE agent_id = ? AND thread_id = ?`, agentID, threadID).Scan(&e.Messages, &e.ReplyAt)
+	s.db.QueryRowContext(ctx, `SELECT cursor, reply_at FROM memory_extractions WHERE agent_id = ? AND thread_id = ?`, agentID, threadID).Scan(&e.Cursor, &e.ReplyAt)
 	return e
 }
 
-// SetExtracted records that a conversation was checked up to a number of messages.
+// SetExtracted records a successful extraction, including an empty result. Callers hold the thread claim.
 func (s *Store) SetExtracted(ctx context.Context, agentID, threadID string, e Extraction) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO memory_extractions (agent_id, thread_id, messages, reply_at, extracted_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (agent_id, thread_id) DO UPDATE SET messages = excluded.messages, reply_at = excluded.reply_at, extracted_at = excluded.extracted_at`,
-		agentID, threadID, e.Messages, e.ReplyAt, s.now().UnixMilli())
+	_, err := s.db.ExecContext(ctx, `INSERT INTO memory_extractions (agent_id, thread_id, cursor, reply_at, extracted_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (agent_id, thread_id) DO UPDATE SET cursor = excluded.cursor, reply_at = excluded.reply_at, extracted_at = excluded.extracted_at`,
+		agentID, threadID, e.Cursor, e.ReplyAt, s.now().UnixMilli())
 	return err
 }
 

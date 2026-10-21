@@ -1206,8 +1206,10 @@ With it on, agents suggest what a conversation showed about the person, at two m
 - **Before a compaction.** When pi compacts a long conversation (its `beforeCompact` hook), the runtime reads what is
   about to be summarized the same way, and reports the facts to the gateway (`POST /memory/suggest`) before the
   summary is made. This can delay compaction (the extraction has a 90-second timeout); a failure never prevents it.
+  Closing the runtime cancels the extraction's gateway, context and model requests.
   Both triggers check the switch, conversation origin and budget before calling the model, and recheck eligibility
-  before saving.
+  after judgment and immediately before saving. Both share one per-thread claim and persisted durable message-ID
+  watermark: changing transcript length during compaction cannot cause another read of already checked messages.
 
 What comes back is saved as **suggestions**: `trust: "inferred"`, `status: "suggested"`, `sourceAgent` and
 `sourceThread` the conversation. Nothing is ever saved as known, and a suggestion reaches no agent's prompt until the
@@ -1229,7 +1231,7 @@ person accepts it. A fact already saved in the same category is not saved again.
   shortened). Source messages and known facts are untrusted data, not instructions. The extraction request has no
   tools or tool executor. The answer must be `{"facts":[{"text":"…","category":"preferences"}]}` with at most 3
   facts, known categories, non-empty text of at most 300 characters and no extra fields. Code fences, prose, missing
-  fields, invalid items or too many facts fail the entire extraction. Failures do not advance the idle cursor;
+  fields, invalid items or too many facts fail the entire extraction. Failures do not advance the shared cursor;
   a successful empty answer does. A later reply can retry failed extraction; there is no background retry loop.
 
 Settings of the idle wait: `Config.MemoryIdle` (tests); there is no UI for it.
@@ -1244,7 +1246,18 @@ outside text" next to the fact's source. **History.** A fact's earlier versions 
 `recall` and `search_conversations` rank by words (SQLite FTS5).
 
 Routes on the gateway a runtime calls with its key (not the UI's API): `GET /memory/suggestions?thread={id}` →
-`{enabled}` (eligible conversation, memory and suggestions on, budget allows; missing/unknown thread: false); `POST /memory/suggest` `{threadId, trigger: "compaction", facts: [{text, category}]}` → `{saved}`;
+`{enabled}` (eligible conversation, memory and suggestions on, budget allows; missing/unknown thread: false).
+`POST /memory/suggest` has three phases:
+- `{threadId, trigger: "begin"}` → `{enabled, claim, since}`. Acquires the shared idle/compaction claim after the
+  eligibility/budget gate; `enabled: false` also means another extraction is in flight. `since` is a stable durable
+  message ID (`e<entry>[:<index>]`), or empty for the first read, never a message count.
+- `{threadId, trigger: "compaction", claim, cursor, facts: [{text, category}]}` → `{saved}`. Saves suggestions and
+  advances the watermark, including successful empty results. A failed request leaves the cursor unchanged.
+- `{threadId, trigger: "release", claim}` → `{saved: 0}`. Releases a failed/cancelled attempt. Claims expire after five
+  minutes if a runtime disappears without releasing; they are not database transactions.
+
+The idle runtime route accepts `{threadId, since?, known?}` and returns `{facts, cursor}` while the app holds the
+same claim. The unreleased v0.4 memory schema stores this cursor in `memory_extractions`.
 `POST /memory/conversations` `{query, limit?}` → `{results: [{threadId, title, date, snippet}]}`.
 
 ## Knowledge folders (v0.4)

@@ -1,7 +1,7 @@
 import type { Context } from "@earendil-works/chord/context";
 import { runAuthor } from "./author.ts";
 import { CompactionTask, defineExtension, defineTool, type Extension, hook, section, Type } from "./facade.ts";
-import { type Complete, extractFacts, hasPerson, turnsOf } from "./memory-extract.ts";
+import { afterCursor, type Complete, extractFacts, hasPerson, lastCursor, turnsOf } from "./memory-extract.ts";
 import { buildMessages } from "./view.ts";
 
 /**
@@ -67,7 +67,9 @@ export function memoryExtension(options: MemoryOptions): Extension {
 		return { ok: false, message: answer?.error?.message ?? `Memory refused (status ${res.status}).` };
 	}
 
-	const context = () => {
+	const context = (signal?: AbortSignal) => {
+		// A cancellable extraction must not inherit an unrelated cached request's lifetime.
+		if (signal) return call<{ aboutYou: string; notes: string }>("GET", "/memory/context", undefined, signal).then((r) => r.ok ? r.data : { aboutYou: "", notes: "" });
 		const now = Date.now();
 		if (!cached || now - cached.at > cacheMs) {
 			cached = {
@@ -88,25 +90,34 @@ export function memoryExtension(options: MemoryOptions): Extension {
 	};
 
 	// Finish the bounded extraction before the summary can replace its source; a failure must not block compaction.
-	const suggestBeforeCompaction = async (entries: Parameters<typeof buildMessages>[0], conversationId: number) => {
+	const suggestBeforeCompaction = async (entries: Parameters<typeof buildMessages>[0], conversationId: number, ctx: Context) => {
 		const complete = options.complete;
 		if (!complete) return;
-		const signal = AbortSignal.timeout(90_000);
+		const signal = AbortSignal.any([...(ctx.abortSignal ? [ctx.abortSignal] : []), AbortSignal.timeout(90_000)]);
+		let claim = "";
+		let threadId: string | undefined;
 		try {
-			const turns = turnsOf(buildMessages(entries));
-			if (!hasPerson(turns)) return;
-			const threadId = await options.threadOf(conversationId).catch(() => undefined);
-			if (!threadId) return;
-			// The app checks the conversation's origin AND budget before any auxiliary model request.
-			const switched = await call<{ enabled: boolean }>("GET", `/memory/suggestions?thread=${encodeURIComponent(threadId)}`, undefined, signal);
-			if (!switched.ok || !switched.data.enabled) return;
-			const { aboutYou } = await context();
-			const known = aboutYou.split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2));
-			const facts = await extractFacts(complete, turns, known, signal);
-			if (!facts || facts.length === 0) return;
-			await call("POST", "/memory/suggest", { threadId, trigger: "compaction", facts }, signal);
+			threadId = await options.threadOf(conversationId).catch(() => undefined);
+			if (!threadId || signal.aborted) return;
+			// Claim the SAME cursor as idle, after the app's origin/budget gate and before context/model I/O.
+			const begun = await call<{ enabled: boolean; claim: string; since: string }>("POST", "/memory/suggest", { threadId, trigger: "begin" }, signal);
+			if (!begun.ok || !begun.data.enabled) return;
+			claim = begun.data.claim;
+			const messages = afterCursor(buildMessages(entries), begun.data.since);
+			const turns = turnsOf(messages);
+			let facts: Awaited<ReturnType<typeof extractFacts>> = [];
+			if (hasPerson(turns)) {
+				const { aboutYou } = await context(signal);
+				const known = aboutYou.split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2));
+				facts = await extractFacts(complete, turns, known, signal);
+			}
+			if (!facts || signal.aborted) return;
+			await call("POST", "/memory/suggest", { threadId, trigger: "compaction", claim, cursor: lastCursor(messages, begun.data.since), facts }, signal);
 		} catch {
 			// No valid extraction, or app/model unavailable: compaction still proceeds.
+		} finally {
+			// Cleanup must still reach the app after task cancellation; no model/context request uses this signal.
+			if (claim) await call("POST", "/memory/suggest", { threadId, trigger: "release", claim }, AbortSignal.timeout(500)).catch(() => {});
 		}
 	};
 
@@ -114,8 +125,8 @@ export function memoryExtension(options: MemoryOptions): Extension {
 		name: MEMORY_EXTENSION,
 		hooks: [
 			hook(CompactionTask, {
-				beforeCompact: async (compaction, api) => {
-					await suggestBeforeCompaction(compaction.entries, api.conversationId as unknown as number);
+				beforeCompact: async (compaction, api, ctx) => {
+					await suggestBeforeCompaction(compaction.entries, api.conversationId as unknown as number, ctx);
 					return undefined;
 				},
 			}),

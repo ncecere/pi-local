@@ -2,10 +2,14 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +39,7 @@ const defaultMemoryIdle = 10 * time.Minute
 type idleWatch struct {
 	mu      sync.Mutex
 	timers  map[string]*idleTimer
+	claims  map[string]extractionClaim
 	closed  bool
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -164,8 +169,12 @@ func (a *App) suggestFromIdle(agentID, threadID string, replyAt int64) {
 	if t, err := a.Threads.Get(ctx, agentID, threadID); err != nil || t.Busy || (t.LastReplyAt != nil && *t.LastReplyAt != replyAt) {
 		return // another message came in: its own reply starts a new wait
 	}
-	done := a.Memory.Extracted(ctx, agentID, threadID)
-	if done.ReplyAt >= replyAt {
+	claim, done := a.claimExtraction(ctx, agentID, threadID)
+	if claim == "" {
+		return
+	}
+	defer a.releaseExtraction(agentID, threadID, claim)
+	if done.ReplyAt >= replyAt && done.Cursor != "" {
 		return
 	}
 	// The model call is the agent's own spend: it counts against its budget like any request.
@@ -183,7 +192,7 @@ func (a *App) suggestFromIdle(agentID, threadID string, replyAt int64) {
 			known = append(known, f.Text)
 		}
 	}
-	body, _ := json.Marshal(map[string]any{"threadId": threadID, "since": done.Messages, "known": known})
+	body, _ := json.Marshal(map[string]any{"threadId": threadID, "since": done.Cursor, "known": known})
 	resp, err := a.Sup.Call(ctx, agentID, http.MethodPost, "/memory/extract", body, http.Header{"Content-Type": {"application/json"}})
 	if err != nil {
 		slog.Info("reading a conversation for suggestions", "agent", agentID, "err", err)
@@ -197,22 +206,25 @@ func (a *App) suggestFromIdle(agentID, threadID string, replyAt int64) {
 	}
 	var out struct {
 		Data struct {
-			Facts    []memory.Candidate `json:"facts"`
-			Messages int                `json:"messages"`
+			Facts  []memory.Candidate `json:"facts"`
+			Cursor string             `json:"cursor"`
 		} `json:"data"`
 	}
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&out) != nil || dec.Decode(new(any)) != io.EOF || out.Data.Messages < 0 || len(out.Data.Facts) > memory.MaxCandidates {
+	if dec.Decode(&out) != nil || dec.Decode(new(any)) != io.EOF || !validCursor(out.Data.Cursor) || len(out.Data.Facts) > memory.MaxCandidates {
 		return
 	}
 	// The switch or origin may have changed while the model was answering.
 	if !a.suggestable(ctx, agentID, threadID) {
 		return
 	}
-	a.saveSuggestions(ctx, agentID, threadID, out.Data.Facts)
+	if _, err := a.saveSuggestionsChecked(ctx, agentID, threadID, out.Data.Facts); err != nil {
+		return
+	}
 	// Failed requests never advance the cursor; successful empty extractions do.
-	if err := a.Memory.SetExtracted(ctx, agentID, threadID, memory.Extraction{Messages: out.Data.Messages, ReplyAt: replyAt}); err != nil {
+	cursor := laterCursor(done.Cursor, out.Data.Cursor)
+	if err := a.Memory.SetExtracted(ctx, agentID, threadID, memory.Extraction{Cursor: cursor, ReplyAt: replyAt}); err != nil {
 		slog.Info("recording memory extraction", "err", err)
 	}
 }
@@ -220,11 +232,16 @@ func (a *App) suggestFromIdle(agentID, threadID string, replyAt int64) {
 // saveSuggestions judges (when the `memory` use of fast judgments is on) and saves candidates as suggestions, and says
 // how many were new. The caller has checked the conversation may be read.
 func (a *App) saveSuggestions(ctx context.Context, agentID, threadID string, candidates []memory.Candidate) int {
+	n, _ := a.saveSuggestionsChecked(ctx, agentID, threadID, candidates)
+	return n
+}
+
+func (a *App) saveSuggestionsChecked(ctx context.Context, agentID, threadID string, candidates []memory.Candidate) (int, error) {
 	candidates = memory.CleanCandidates(candidates)
-	if len(candidates) == 0 {
-		return 0
+	if !a.suggestable(ctx, agentID, threadID) {
+		return 0, errors.New("conversation no longer eligible")
 	}
-	if a.Judge != nil && a.Judge.On("memory") && a.budgetCheck("memory judgment")(ctx, agentID) == nil {
+	if len(candidates) > 0 && a.Judge != nil && a.Judge.On("memory") && a.budgetCheck("memory judgment")(ctx, agentID) == nil {
 		texts := make([]string, len(candidates))
 		for i, c := range candidates {
 			texts[i] = c.Text
@@ -249,27 +266,40 @@ func (a *App) saveSuggestions(ctx context.Context, agentID, threadID string, can
 			slog.Info("judging suggestions", "err", err)
 		}
 	}
+	// Do not hold app.db or this guard across model I/O. The UI's disable/delete paths
+	// take the same guard, so eligibility cannot change between this check and writes.
+	a.suggestionMu.Lock()
+	defer a.suggestionMu.Unlock()
+	if !a.suggestable(ctx, agentID, threadID) {
+		return 0, errors.New("conversation no longer eligible")
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
 	saved := 0
 	existing := map[string]bool{}
 	facts, err := a.Memory.Facts(ctx, "")
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	for _, f := range facts {
 		existing[f.ID] = true
 	}
 	for _, c := range candidates {
+		if !a.suggestable(ctx, agentID, threadID) {
+			return saved, errors.New("conversation no longer eligible")
+		}
 		f, err := a.Memory.AddFact(ctx, memory.FactInput{Category: c.Category, Text: c.Text, Trust: "inferred", Active: false, SourceAgent: agentID, SourceThread: threadID})
 		if err != nil {
 			slog.Info("saving a suggestion", "err", err)
-			continue
+			return saved, err
 		}
 		if f.Status == "suggested" && !existing[f.ID] {
 			saved++
 			existing[f.ID] = true
 		}
 	}
-	return saved
+	return saved, nil
 }
 
 // --- the gateway's side --------------------------------------------------------------------------------------------
@@ -278,19 +308,108 @@ func (g memoryGateway) ExtractionAllowed(ctx context.Context, agentID, threadID 
 	return threadID != "" && g.a.suggestable(ctx, agentID, threadID) && g.a.budgetCheck("memory")(ctx, agentID) == nil
 }
 
-// Suggest: facts the runtime found in what a compaction is about to summarize.
+// Suggest also leases the shared extraction cursor before compaction makes any auxiliary request.
 func (g memoryGateway) Suggest(ctx context.Context, agentID string, in gateway.SuggestInput) (map[string]any, error) {
+	if in.Trigger == "release" {
+		g.a.releaseExtraction(agentID, in.ThreadID, in.Claim)
+		return map[string]any{"saved": 0}, nil
+	}
 	if _, _, err := g.agent(agentID); err != nil {
 		return nil, err
 	}
-	if in.Trigger != "compaction" || in.ThreadID == "" || !g.a.suggestable(ctx, agentID, in.ThreadID) {
+	if in.Trigger == "begin" {
+		claim, done := g.a.claimExtraction(ctx, agentID, in.ThreadID)
+		return map[string]any{"enabled": claim != "", "claim": claim, "since": done.Cursor}, nil
+	}
+	if !g.a.suggestable(ctx, agentID, in.ThreadID) {
+		g.a.releaseExtraction(agentID, in.ThreadID, in.Claim)
 		return map[string]any{"saved": 0}, nil
+	}
+	if !g.a.ownsExtraction(agentID, in.ThreadID, in.Claim) {
+		return nil, errors.New("memory extraction claim expired or missing")
+	}
+	defer g.a.releaseExtraction(agentID, in.ThreadID, in.Claim)
+	if in.Trigger != "compaction" || !validCursor(in.Cursor) || len(in.Facts) > memory.MaxCandidates {
+		return nil, errors.New("invalid memory extraction")
 	}
 	cands := make([]memory.Candidate, 0, len(in.Facts))
 	for _, f := range in.Facts {
 		cands = append(cands, memory.Candidate{Text: f.Text, Category: f.Category})
 	}
-	return map[string]any{"saved": g.a.saveSuggestions(ctx, agentID, in.ThreadID, cands)}, nil
+	saved, err := g.a.saveSuggestionsChecked(ctx, agentID, in.ThreadID, cands)
+	if err != nil {
+		return nil, err
+	}
+	done := g.a.Memory.Extracted(ctx, agentID, in.ThreadID)
+	done.Cursor = laterCursor(done.Cursor, in.Cursor)
+	if err := g.a.Memory.SetExtracted(ctx, agentID, in.ThreadID, done); err != nil {
+		return nil, err
+	}
+	return map[string]any{"saved": saved}, nil
+}
+
+// Claims are process-local, shared by idle and compaction, and never hold a DB transaction.
+// The lease outlives the bounded runtime request; expiry recovers a crashed/disconnected runtime.
+type extractionClaim struct {
+	token string
+	until time.Time
+}
+
+func (a *App) claimExtraction(ctx context.Context, agentID, threadID string) (string, memory.Extraction) {
+	w := &a.idle
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed || threadID == "" || !a.suggestable(ctx, agentID, threadID) || a.budgetCheck("memory")(ctx, agentID) != nil {
+		return "", memory.Extraction{}
+	}
+	key := idleKey(agentID, threadID)
+	if w.claims == nil {
+		w.claims = map[string]extractionClaim{}
+	}
+	if old, ok := w.claims[key]; ok && time.Now().Before(old.until) {
+		return "", memory.Extraction{}
+	}
+	token := rand.Text()
+	w.claims[key] = extractionClaim{token: token, until: time.Now().Add(5 * time.Minute)}
+	return token, a.Memory.Extracted(ctx, agentID, threadID)
+}
+
+func (a *App) ownsExtraction(agentID, threadID, token string) bool {
+	a.idle.mu.Lock()
+	defer a.idle.mu.Unlock()
+	c := a.idle.claims[idleKey(agentID, threadID)]
+	return token != "" && c.token == token && time.Now().Before(c.until)
+}
+
+func (a *App) releaseExtraction(agentID, threadID, token string) {
+	a.idle.mu.Lock()
+	defer a.idle.mu.Unlock()
+	key := idleKey(agentID, threadID)
+	if c := a.idle.claims[key]; token != "" && c.token == token {
+		delete(a.idle.claims, key)
+	}
+}
+
+var messageCursor = regexp.MustCompile(`^e([0-9]{1,15})(?::([0-9]{1,6}))?$`)
+
+func validCursor(s string) bool { return s == "" || messageCursor.MatchString(s) }
+
+func laterCursor(a, b string) string {
+	parts := func(s string) (int64, int64) {
+		m := messageCursor.FindStringSubmatch(s)
+		if m == nil {
+			return 0, 0
+		}
+		e, _ := strconv.ParseInt(m[1], 10, 64)
+		i, _ := strconv.ParseInt(m[2], 10, 64)
+		return e, i
+	}
+	ae, ai := parts(a)
+	be, bi := parts(b)
+	if be > ae || (be == ae && bi > ai) {
+		return b
+	}
+	return a
 }
 
 // SearchConversations: the agent's own conversations, through the app's message search. The agent's ID comes from its

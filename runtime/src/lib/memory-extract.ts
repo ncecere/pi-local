@@ -9,6 +9,17 @@ import type { ChatMessage } from "./view.ts";
 
 export type FactCandidate = { text: string; category: string };
 
+/** Durable message IDs are ordered by entry, then model-message index, never transcript length. */
+export const validCursor = (value: unknown): value is string => typeof value === "string" && (value === "" || /^e\d{1,15}(:\d{1,6})?$/.test(value));
+export function compareCursor(a: string, b: string): number {
+	const parts = (id: string) => id ? id.slice(1).split(":").map(Number) : [0, 0];
+	const [ae = 0, ai = 0] = parts(a);
+	const [be = 0, bi = 0] = parts(b);
+	return ae - be || ai - bi;
+}
+export const afterCursor = (messages: readonly ChatMessage[], since: string): ChatMessage[] => messages.filter((m) => compareCursor(m.id, since) > 0);
+export const lastCursor = (messages: readonly ChatMessage[], since = ""): string => messages.reduce((tail, m) => compareCursor(m.id, tail) > 0 ? m.id : tail, since);
+
 /** One turn of what the model reads. */
 export type Turn = { role: "person" | "assistant"; text: string };
 

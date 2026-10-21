@@ -184,6 +184,8 @@ func TestSuggestionsNeverFromSchedulesOrOtherAgentsOrAgentsWithoutMemory(t *test
 		t.Fatalf("a schedule's conversation: %v %v", res, err)
 	}
 	in.ThreadID = "t1"
+	in.Claim, _ = h.app.claimExtraction(ctx, agent, "t1")
+	in.Cursor = "e1"
 	if res, err := g.Suggest(ctx, agent, in); err != nil || res["saved"] != 1 {
 		t.Fatalf("before a compaction: %v %v", res, err)
 	}
@@ -384,7 +386,7 @@ func TestExtractionFailureDuplicateAndBudgetAccounting(t *testing.T) {
 	fake.setExtract(`{"facts":[]}`)
 	empty, _ := h.app.Threads.Get(ctx, agent, "empty")
 	h.app.suggestFromIdle(agent, "empty", *empty.LastReplyAt)
-	if got := h.app.Memory.Extracted(ctx, agent, "empty"); got.ReplyAt == 0 || got.Messages != 2 {
+	if got := h.app.Memory.Extracted(ctx, agent, "empty"); got.ReplyAt == 0 || got.Cursor == "" {
 		t.Fatalf("successful empty extraction did not advance: %+v", got)
 	}
 	// Every auxiliary model call, including malformed responses, uses the existing usage-counting provider.

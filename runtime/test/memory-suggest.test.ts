@@ -2,10 +2,10 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
-import { fakeModel, startTestAgent, type TestAgent, toolCall } from "@pdp/runtime/testing";
+import { fakeModel, gate, startTestAgent, type TestAgent, toolCall } from "@pdp/runtime/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { assistantAgent } from "../src/lib/assistant.ts";
-import { EXTRACT_SYSTEM, extractFacts, extractionPrompt, parseFacts, turnsOf } from "../src/lib/memory-extract.ts";
+import { afterCursor, EXTRACT_SYSTEM, extractFacts, extractionPrompt, lastCursor, parseFacts, turnsOf } from "../src/lib/memory-extract.ts";
 import type { ChatMessage } from "../src/lib/view.ts";
 import { within } from "./support.ts";
 
@@ -19,6 +19,16 @@ const user = (text: string, author?: Author): ChatMessage => ({ id: `u-${text.le
 const assistant = (text: string): ChatMessage => ({ id: `a-${text.length}`, role: "assistant", text });
 
 describe("what the model is asked, and what it may answer", () => {
+	it("uses stable IDs across shortened/changed transcripts, not positions", () => {
+		const old = [{ ...user("old"), id: "e9" }, { ...assistant("old reply"), id: "e10:2" }];
+		const cursor = lastCursor(old);
+		expect(cursor).toBe("e10:2");
+		const compacted = [{ ...user("new"), id: "e30" }];
+		expect(afterCursor(compacted, cursor)).toEqual(compacted);
+		expect(afterCursor([...old, ...compacted], cursor)).toEqual(compacted);
+		expect(afterCursor(old, "e50")).toEqual([]);
+		expect(lastCursor(old, "e50")).toBe("e50");
+	});
 	it("asks strictly: at most 3 facts, JSON only, about the person", () => {
 		expect(EXTRACT_SYSTEM).toContain("at most 3 durable facts");
 		expect(EXTRACT_SYSTEM).toContain("JSON only");
@@ -79,16 +89,21 @@ describe("what the model is asked, and what it may answer", () => {
 });
 
 /** The app's gateway, as far as memory goes: records what the runtime sends. */
-async function fakeGateway(options: { suggestions?: boolean; conversations?: unknown[] } = {}) {
+async function fakeGateway(options: { suggestions?: boolean; conversations?: unknown[]; beforeContext?: () => Promise<void> } = {}) {
 	const calls: { method: string; path: string; body: unknown }[] = [];
+	const cursors = new Map<string, string>();
 	const server: Server = createServer(async (req, res) => {
 		const chunks: Buffer[] = [];
 		for await (const chunk of req) chunks.push(chunk as Buffer);
 		const raw = Buffer.concat(chunks).toString();
 		const body = raw ? JSON.parse(raw) : undefined;
 		calls.push({ method: req.method ?? "", path: req.url ?? "", body });
+		if (req.url === "/memory/suggest" && body?.trigger === "compaction") cursors.set(body.threadId, body.cursor);
+		if (req.url === "/memory/context") await options.beforeContext?.();
 		const data =
-			req.url === "/memory/context"
+			req.url === "/memory/suggest" && body?.trigger === "begin"
+				? { enabled: options.suggestions ?? true, claim: "test-claim", since: cursors.get(body.threadId) ?? "" }
+				: req.url === "/memory/context"
 				? { aboutYou: "Preferences:\n- Prefers short answers", notes: "" }
 				: req.url?.startsWith("/memory/suggestions?thread=")
 					? { enabled: options.suggestions ?? true }
@@ -100,7 +115,7 @@ async function fakeGateway(options: { suggestions?: boolean; conversations?: unk
 	});
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	cleanup.push(() => new Promise((resolve) => server.close(() => resolve(undefined))));
-	return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, calls };
+	return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, calls, checkpoint: (thread: string, cursor: string) => cursors.set(thread, cursor) };
 }
 
 const memoryEnv = (url: string) => ({ MEMORY: "on", PLATFORM_GATEWAY_URL: url, PLATFORM_KEY: "key" });
@@ -122,7 +137,7 @@ describe("POST /memory/extract (the end of a conversation)", () => {
 		await agent.settled("t1");
 		model.reply("OK.");
 		await agent.send("t1", "Run the nightly report", { author: { kind: "trigger", id: "s1", name: "Nightly" } });
-		await agent.settled("t1", { messages: 4 });
+		const view = await agent.settled("t1", { messages: 4 });
 
 		let request = "";
 		let system = "";
@@ -132,11 +147,11 @@ describe("POST /memory/extract (the end of a conversation)", () => {
 			system = JSON.stringify(context);
 			return { ...fauxJson('{"facts":[{"text":"Is a nurse","category":"work"},{"text":"Likes brief answers","category":"preferences"}]}') };
 		});
-		const res = await post(agent, "/memory/extract", { threadId: "t1", since: 0, known: ["Prefers short answers"] });
+		const res = await post(agent, "/memory/extract", { threadId: "t1", since: "", known: ["Prefers short answers"] });
 		expect(res.status).toBe(200);
-		const { data } = (await res.json()) as { data: { facts: { text: string; category: string }[]; messages: number } };
+		const { data } = (await res.json()) as { data: { facts: { text: string; category: string }[]; cursor: string } };
 		expect(data.facts.map((f) => f.text)).toEqual(["Is a nurse", "Likes brief answers"]);
-		expect(data.messages).toBe(4);
+		expect(data.cursor).toBe(view.messages.at(-1)!.id);
 		expect(request).toContain("I'm a nurse and I like brief answers");
 		expect(request).toContain("- Prefers short answers");
 		expect(request).not.toContain("Run the nightly report"); // a schedule's message is no source
@@ -148,12 +163,12 @@ describe("POST /memory/extract (the end of a conversation)", () => {
 			second = JSON.stringify(context.messages);
 			return fauxJson('{"facts":[]}');
 		});
-		const again = await post(agent, "/memory/extract", { threadId: "t1", since: 2 });
-		expect(((await again.json()) as { data: { facts: unknown[]; messages: number } }).data).toEqual({ facts: [], messages: 4 });
+		const again = await post(agent, "/memory/extract", { threadId: "t1", since: view.messages[1]!.id });
+		expect(((await again.json()) as { data: { facts: unknown[]; cursor: string } }).data).toEqual({ facts: [], cursor: view.messages.at(-1)!.id });
 		expect(second).not.toContain("I'm a nurse");
 		// Nothing the person wrote since: the model isn't asked.
 		const before = model.calls;
-		await post(agent, "/memory/extract", { threadId: "t1", since: 4 });
+		await post(agent, "/memory/extract", { threadId: "t1", since: view.messages.at(-1)!.id });
 		expect(model.calls).toBe(before);
 	});
 
@@ -254,15 +269,118 @@ describe("before a compaction", () => {
 		const conversation = await agent.agent.threads.get("t1");
 		await conversation!.compact(undefined, BACKGROUND_CONTEXT);
 		const suggested = await within(10_000, async () => {
-			const call = gateway.calls.find((c) => c.path === "/memory/suggest");
+			const call = gateway.calls.find((c) => c.path === "/memory/suggest" && (c.body as { trigger: string }).trigger === "compaction");
 			if (!call) throw new Error("not yet");
 			return call;
 		});
 		expect(suggested.body).toEqual({
 			threadId: "t1",
 			trigger: "compaction",
+			claim: "test-claim",
+			cursor: expect.stringMatching(/^e\d+/),
 			facts: [{ text: "Is allergic to penicillin", category: "health" }],
 		});
+	});
+
+	it("idle then compaction consults the same durable cursor without a second model extraction", async () => {
+		const gateway = await fakeGateway();
+		const model = fakeModel();
+		const agent = await agentWith(gateway.url, model, compacting);
+		await longConversation(agent, model);
+		model.reply(fauxJson('{"facts":[]}'));
+		const idle = await post(agent, "/memory/extract", { threadId: "t1" });
+		const { data } = await idle.json() as { data: { cursor: string } };
+		gateway.checkpoint("t1", data.cursor); // what the app persists after saving the idle result
+		const before = model.calls;
+		model.reply("## Goal\nSummary.");
+		const conversation = await agent.agent.threads.get("t1");
+		await conversation!.compact(undefined, BACKGROUND_CONTEXT);
+		await within(10_000, async () => {
+			if (!gateway.calls.some((c) => c.path === "/memory/suggest" && (c.body as { trigger: string }).trigger === "compaction")) throw new Error("not yet");
+		});
+		expect(model.calls - before).toBeLessThanOrEqual(1); // summarization only
+	});
+
+	it("compaction then idle reads no old person turns, even though the view still includes history", async () => {
+		const gateway = await fakeGateway();
+		const model = fakeModel();
+		const agent = await agentWith(gateway.url, model, compacting);
+		await longConversation(agent, model);
+		const respond = (context: unknown) => JSON.stringify(context).includes("at most 3 durable facts") ? fauxJson('{"facts":[]}') : fauxJson("## Goal\nSummary.");
+		model.reply(respond as never, respond as never);
+		const conversation = await agent.agent.threads.get("t1");
+		await conversation!.compact(undefined, BACKGROUND_CONTEXT);
+		const saved = await within(10_000, async () => {
+			const call = gateway.calls.find((c) => c.path === "/memory/suggest" && (c.body as { trigger: string }).trigger === "compaction");
+			if (!call) throw new Error("not yet");
+			return call.body as { cursor: string };
+		});
+		const view = await agent.view("t1");
+		const fresh = afterCursor(view!.messages, saved.cursor);
+		// Compaction keeps a recent suffix, so idle may read that suffix, but not the summarized prefix.
+		let asked = "";
+		model.reply((context) => { asked = JSON.stringify(context); return fauxJson('{"facts":[]}'); });
+		const idle = await post(agent, "/memory/extract", { threadId: "t1", since: saved.cursor });
+		expect(idle.status).toBe(200);
+		expect(asked).not.toContain("allergic to penicillin");
+		for (const m of fresh.filter((m) => m.role === "user")) expect(asked).toContain(m.text.slice(0, 20));
+	});
+
+	it("close also aborts a stalled extraction context request", async () => {
+		const blocked = gate();
+		let stall = false;
+		const gateway = await fakeGateway({ beforeContext: async () => { if (stall) await blocked.wait(); } });
+		const model = fakeModel();
+		const agent = await agentWith(gateway.url, model, compacting);
+		await longConversation(agent, model);
+		stall = true;
+		const conversation = await agent.agent.threads.get("t1");
+		const compacted = conversation!.compact(undefined, BACKGROUND_CONTEXT).catch(() => {});
+		await blocked.reached;
+		const closed = agent.close();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([closed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("close waited for context")), 2000); })]);
+			expect(blocked.isOpen).toBe(false);
+		} finally {
+			clearTimeout(timer);
+			blocked.open();
+			await closed;
+			await compacted;
+		}
+	});
+
+	it("close aborts a stalled before-compaction extraction without releasing the provider", async () => {
+		const gateway = await fakeGateway();
+		const model = fakeModel();
+		const agent = await agentWith(gateway.url, model, compacting);
+		await longConversation(agent, model);
+		const blocked = gate();
+		let cancelled = false;
+		const respond = async (context: unknown, options: { signal?: AbortSignal } | undefined) => {
+			if (JSON.stringify(context).includes("at most 3 durable facts")) {
+				try { await blocked.wait(options?.signal); }
+				catch { cancelled = true; throw new Error("cancelled"); }
+				return fauxJson('{"facts":[]}');
+			}
+			return fauxJson("## Goal\nSummary.");
+		};
+		model.reply(respond as never, respond as never);
+		const conversation = await agent.agent.threads.get("t1");
+		const compacted = conversation!.compact(undefined, BACKGROUND_CONTEXT).catch(() => {});
+		await blocked.reached;
+		const closed = agent.close();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([closed, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("close waited for extraction")), 2000); })]);
+			expect(blocked.isOpen).toBe(false);
+			expect(cancelled).toBe(true);
+		} finally {
+			clearTimeout(timer);
+			blocked.open();
+			await closed;
+			await compacted;
+		}
 	});
 
 	it("does nothing, and asks the model nothing, while suggestions are off", async () => {
@@ -275,10 +393,10 @@ describe("before a compaction", () => {
 		const conversation = await agent.agent.threads.get("t1");
 		await conversation!.compact(undefined, BACKGROUND_CONTEXT);
 		await within(10_000, async () => {
-			if (!gateway.calls.some((c) => c.path === "/memory/suggestions?thread=t1")) throw new Error("not yet");
+			if (!gateway.calls.some((c) => c.path === "/memory/suggest" && (c.body as { trigger: string }).trigger === "begin")) throw new Error("not yet");
 		});
 		await new Promise((r) => setTimeout(r, 300));
-		expect(gateway.calls.some((c) => c.path === "/memory/suggest")).toBe(false);
+		expect(gateway.calls.some((c) => c.path === "/memory/suggest" && (c.body as { trigger: string }).trigger === "compaction")).toBe(false);
 		// Only the summary itself was asked of the model.
 		expect(model.calls - before).toBeLessThanOrEqual(1);
 	});

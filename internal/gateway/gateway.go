@@ -95,7 +95,9 @@ type Memory interface {
 // SuggestInput is facts an agent's model found about the person, with the conversation they came from.
 type SuggestInput struct {
 	ThreadID string `json:"threadId"`
-	Trigger  string `json:"trigger"` // compaction
+	Trigger  string `json:"trigger"` // begin | compaction | release
+	Claim    string `json:"claim"`
+	Cursor   string `json:"cursor"`
 	Facts    []struct {
 		Text     string `json:"text"`
 		Category string `json:"category"`

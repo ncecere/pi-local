@@ -11,12 +11,11 @@ CREATE TABLE user_memory_history (
 ) STRICT;
 CREATE INDEX user_memory_history_by_fact ON user_memory_history (memory_id, changed_at);
 
--- Which conversations were checked for suggestions, and how far (the number of messages read), so a conversation is
--- read once per reply and only its new part.
+-- Shared idle/compaction checkpoint. Durable message IDs survive transcript compaction; counts do not.
 CREATE TABLE memory_extractions (
     agent_id     TEXT    NOT NULL,
     thread_id    TEXT    NOT NULL,
-    messages     INTEGER NOT NULL,
+    cursor       TEXT    NOT NULL DEFAULT '', -- e<entry>[:<index>], stable across compaction
     reply_at     INTEGER NOT NULL,         -- the thread's last reply when it was checked (Unix ms)
     extracted_at INTEGER NOT NULL,
     PRIMARY KEY (agent_id, thread_id)

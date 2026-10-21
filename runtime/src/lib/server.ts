@@ -7,7 +7,7 @@ import { type Approvals, type DecisionInput, parseApprovalPolicy, waitingThreads
 import type { ThreadStore } from "./threads.ts";
 import { DELTA_VERSION, DeltaStream } from "./delta.ts";
 import { EXPOSED_KIND } from "./define.ts";
-import type { FactCandidate } from "./memory-extract.ts";
+import { afterCursor, type FactCandidate, lastCursor, validCursor } from "./memory-extract.ts";
 import { CONTRACT_VERSION, PI_DURABLE_VERSION } from "./version.ts";
 import {
 	AUTHOR_KINDS,
@@ -332,20 +332,20 @@ export function createRuntimeServer(options: RuntimeOptions): {
 	 * Tool approvals: `GET /approvals[?thread=]` lists the requests (pending first), `POST /approvals/{id}` applies a
 	 * decision `{decision: approve|deny|timeout|cancel, reason?, decidedBy?}` (the platform's, or a test's).
 	 */
-	// POST /memory/extract {threadId, since?, known?}: the facts about the person in the thread's messages after the first
-	// `since`, and how many messages it has now. One small request to the agent's model, and only the person's own
-	// messages count as a source (never a schedule's or another agent's).
+	// POST /memory/extract {threadId, since?, known?}: read messages after a stable durable message ID.
+	// The app holds the shared extraction claim until it saves the result and advances the cursor. One small request
+	// to the agent's model; only the person's own messages count as a source (never a schedule's or another agent's).
 	const routeExtract = async (request: IncomingMessage, response: ServerResponse) => {
 		if (options.extractMemory === undefined) return fail(response, 404, "not_found", "Memory suggestions are not offered");
 		const body = (await readJson(request)) as { threadId?: unknown; since?: unknown; known?: unknown };
 		if (typeof body.threadId !== "string" || !THREAD_ID.test(body.threadId)) return fail(response, 400, "invalid_thread_id", "Name the thread");
-		if (body.since !== undefined && (typeof body.since !== "number" || !Number.isSafeInteger(body.since) || body.since < 0)) return fail(response, 400, "invalid_since", "Use a non-negative message count");
+		if (body.since !== undefined && !validCursor(body.since)) return fail(response, 400, "invalid_since", "Use a durable message ID");
 		if (body.known !== undefined && (!Array.isArray(body.known) || body.known.length > 40 || body.known.some((v) => typeof v !== "string" || v.length > 1000))) return fail(response, 400, "invalid_known", "Use at most 40 facts");
-		const since = (body.since as number | undefined) ?? 0;
+		const since = (body.since as string | undefined) ?? "";
 		const known = (body.known as string[] | undefined) ?? [];
 		const view = await viewOf(body.threadId);
 		if (view === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
-		const fresh = since <= view.messages.length ? view.messages.slice(since) : view.messages;
+		const fresh = afterCursor(view.messages, since);
 		// App shutdown cancels the HTTP request: propagate that to the provider, rather than leaving an auxiliary
 		// request running for two minutes and holding the runtime's own shutdown open.
 		const disconnected = new AbortController();
@@ -356,7 +356,7 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			const signal = AbortSignal.any([AbortSignal.timeout(120_000), disconnected.signal]);
 			const facts = await options.extractMemory(fresh, known, signal, body.threadId);
 			if (facts === undefined) return fail(response, 502, "extraction_failed", "No valid memory extraction was returned");
-			return json(response, 200, { facts, messages: view.messages.length });
+			return json(response, 200, { facts, cursor: lastCursor(fresh, since) });
 		} finally {
 			response.off("close", onClose);
 		}

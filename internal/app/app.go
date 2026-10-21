@@ -116,7 +116,8 @@ type App struct {
 	// Memory is what agents know about the person, and each agent's own notes.
 	Memory *memory.Store
 	// idle holds the conversations waiting out their idle time before suggestions are read from them.
-	idle idleWatch
+	idle         idleWatch
+	suggestionMu sync.Mutex
 	// Templates are the New agent gallery's starting points, built-in and the person's.
 	Templates *templates.Store
 	// Skills are the shared skills (<data>/skills); an agent's own are in its folder.
@@ -389,7 +390,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, Activity: a.Activity, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Knowledge: a.Knowledge, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, Skills: a.Skills, Prompts: a.Prompts, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
+	a.API = &api.API{SuggestionGuard: &a.suggestionMu, DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, Activity: a.Activity, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Knowledge: a.Knowledge, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, Skills: a.Skills, Prompts: a.Prompts, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
 	// An agent's own skills changed: its next call resolves its configuration again (the runtime has the skills tool only
 	// while there are skills), and restarts it if that differs.
 	a.API.SkillsChanged = a.Sup.Invalidate

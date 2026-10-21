@@ -11,7 +11,7 @@ import (
 func (a *API) memoryRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/you", a.getYou)
 	m.HandleFunc("PUT /api/you/basics", a.putBasics)
-	m.HandleFunc("PUT /api/you/settings", a.putYouSettings)
+	m.HandleFunc("PUT /api/you/settings", a.guardSuggestions(a.putYouSettings))
 	m.HandleFunc("GET /api/you/memories", a.listFacts)
 	m.HandleFunc("POST /api/you/memories", a.addFact)
 	m.HandleFunc("PATCH /api/you/memories/{id}", a.updateFact)

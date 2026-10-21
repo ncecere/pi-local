@@ -357,7 +357,17 @@ type FactChange struct {
 
 // UpdateFact changes a fact.
 func (s *Store) UpdateFact(ctx context.Context, id string, ch FactChange) (*Fact, error) {
-	f, err := s.Fact(ctx, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	// Read on the transaction's connection: concurrent edits must snapshot the preceding edit,
+	// not a version read before waiting for app.db's single connection.
+	f, err := scanFact(tx.QueryRowContext(ctx, `SELECT `+factCols+` FROM user_memories WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -384,18 +394,17 @@ func (s *Store) UpdateFact(ctx context.Context, id string, ch FactChange) (*Fact
 			f.Trust = "inferred"
 		}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `UPDATE user_memories SET category = ?, text = ?, trust = ?, status = ?, pinned = ?, updated_at = ? WHERE id = ?`,
 		f.Category, f.Text, f.Trust, f.Status, boolInt(f.Pinned), s.now().UnixMilli(), id); err != nil {
 		return nil, err
 	}
 	if ch.Text != nil {
-		tx.ExecContext(ctx, `DELETE FROM user_memory_index WHERE id = ?`, id)
-		tx.ExecContext(ctx, `INSERT INTO user_memory_index (id, text) VALUES (?, ?)`, id, f.Text)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM user_memory_index WHERE id = ?`, id); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO user_memory_index (id, text) VALUES (?, ?)`, id, f.Text); err != nil {
+			return nil, err
+		}
 	}
 	// What it said before, when its words or category changed (not for a pin or an accept).
 	if f.Text != before.Text || f.Category != before.Category {
@@ -417,27 +426,46 @@ func (s *Store) UpdateFact(ctx context.Context, id string, ch FactChange) (*Fact
 
 // DeleteFact forgets a fact (deleted means deleted).
 func (s *Store) DeleteFact(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM user_memories WHERE id = ?`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM user_memories WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	s.db.ExecContext(ctx, `DELETE FROM user_memory_index WHERE id = ?`, id)
-	s.db.ExecContext(ctx, `DELETE FROM user_memory_history WHERE memory_id = ?`, id)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM user_memory_index WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM user_memory_history WHERE memory_id = ?`, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	s.OnChange("")
 	return nil
 }
 
 // EraseFacts forgets everything about the person (the basics card too).
 func (s *Store) EraseFacts(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_memories`); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	s.db.ExecContext(ctx, `DELETE FROM user_memory_index`)
-	s.db.ExecContext(ctx, `DELETE FROM user_memory_history`)
-	s.db.ExecContext(ctx, `DELETE FROM settings WHERE key = 'about_me'`)
+	defer tx.Rollback()
+	for _, q := range []string{`DELETE FROM user_memories`, `DELETE FROM user_memory_index`, `DELETE FROM user_memory_history`, `DELETE FROM settings WHERE key = 'about_me'`} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	s.OnChange("")
 	return nil
 }

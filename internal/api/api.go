@@ -92,6 +92,8 @@ type API struct {
 	Prompts *prompts.Store
 	// Memory: what agents know about the person, and their own notes; MemoryDefaults fills the About me card.
 	Memory *memory.Store
+	// SuggestionGuard coordinates final suggestion writes with disable/deletion, never model I/O.
+	SuggestionGuard *sync.Mutex
 	// Judge: optional fast judgments (agent routing, tool preselection).
 	Judge          *judge.Service
 	MemoryDefaults func() memory.Basics
@@ -147,8 +149,8 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /api/agents", a.listAgents)
 	m.HandleFunc("GET /api/agents/catalog", a.catalog)
 	m.HandleFunc("POST /api/agents", a.createAgent)
-	m.HandleFunc("PATCH /api/agents/{agent}", a.withAgent(a.updateAgent))
-	m.HandleFunc("DELETE /api/agents/{agent}", a.withAgent(a.deleteAgent))
+	m.HandleFunc("PATCH /api/agents/{agent}", a.guardSuggestions(a.withAgent(a.updateAgent)))
+	m.HandleFunc("DELETE /api/agents/{agent}", a.guardSuggestions(a.withAgent(a.deleteAgent)))
 
 	m.HandleFunc("GET /api/agents/{agent}/threads", a.withAgent(a.listThreads))
 	m.HandleFunc("GET /api/agents/{agent}/threads/{thread}", a.withThread(a.getThread))
@@ -158,7 +160,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("POST /api/agents/{agent}/threads/{thread}/stop", a.withThread(a.stopThread))
 	m.HandleFunc("POST /api/agents/{agent}/threads/{thread}/fork", a.withThread(a.forkThread))
 	m.HandleFunc("PATCH /api/agents/{agent}/threads/{thread}", a.withThread(a.renameThread))
-	m.HandleFunc("DELETE /api/agents/{agent}/threads/{thread}", a.withThread(a.deleteThread))
+	m.HandleFunc("DELETE /api/agents/{agent}/threads/{thread}", a.guardSuggestions(a.withThread(a.deleteThread)))
 
 	m.HandleFunc("GET /api/events", a.events)
 	a.knowledgeRoutes(m)
@@ -219,6 +221,17 @@ func (t *traceWriter) Write(b []byte) (int, error) {
 func (t *traceWriter) Flush() {
 	if f, ok := t.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
+	}
+}
+
+// guardSuggestions prevents disable/deletion from interleaving the final eligibility check and fact writes.
+func (a *API) guardSuggestions(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if a.SuggestionGuard != nil {
+			a.SuggestionGuard.Lock()
+			defer a.SuggestionGuard.Unlock()
+		}
+		next(w, r)
 	}
 }
 
