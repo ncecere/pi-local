@@ -2,6 +2,14 @@
 
 Each version's section is its release notes on GitHub.
 
+## 0.4.2
+
+- **Security:** rebuild with Go 1.26.10, including the compromised-intermediate certificate distrust fix and earlier
+  standard-library security fixes. Refresh exact-release license provenance; no production application-source or
+  dependency-version changes. Existing installations need the rebuilt app to receive these fixes.
+- The macOS Apple Silicon package remains ad-hoc signed, not Apple-notarized. See `docs/qa/go1.26.10-security.md`
+  for advisory scope and verification.
+
 ## 0.4.1
 
 - **Settings navigation:** grouped sections in a compact left sidebar instead of two rows of tabs. Narrow windows
