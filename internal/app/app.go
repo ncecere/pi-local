@@ -66,6 +66,8 @@ type Config struct {
 
 // App is a running Pi Local.
 type App struct {
+	// policyMu serializes telling runtimes their approval rules (pushApprovalPolicy).
+	policyMu   sync.Mutex
 	cfg        Config
 	Agents     *agents.Store
 	Threads    *threads.Index
@@ -289,7 +291,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, JudgeApproval: a.Judge.RiskyCall, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
@@ -313,12 +315,15 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		a.publishAgent(c.AgentID)
 		// A failed agent given a working configuration (another model) is no longer failed.
 		a.Sup.Recheck(context.Background(), c.AgentID)
-		// A running agent picks up its new configuration now (the supervisor restarts it on the new revision).
+		// A running agent picks up its new configuration now (the supervisor restarts it on the new revision); a change
+		// to its approval rules or profile alone is told to the running runtime instead.
 		if status, _ := a.Sup.Status(c.AgentID); status == supervisor.Awake {
 			go func() {
 				if err := a.Sup.Wake(context.Background(), c.AgentID); err != nil {
 					slog.Warn("restarting an agent with its new configuration", "agent", c.AgentID, "err", err)
+					return
 				}
+				a.pushApprovalPolicy(c.AgentID)
 			}()
 		}
 	})
@@ -376,6 +381,35 @@ func (a *App) publishAgent(id string) {
 	a.Hub.Publish("agent", map[string]any{"agentId": id, "deleted": false, "agent": a.API.AgentJSON(ag)})
 }
 
+// pushApprovalPolicy tells an awake agent's runtime its current approval rules and profile (POST /approvals/policy).
+// Pushes are serialized and read the configuration when they run, so the last change always wins. A runtime that
+// can't be told is stopped (it starts again with the current policy on its next call): a rule the person removed
+// must not keep allowing.
+func (a *App) pushApprovalPolicy(id string) {
+	a.policyMu.Lock()
+	defer a.policyMu.Unlock()
+	if status, _ := a.Sup.Status(id); status != supervisor.Awake {
+		return // it starts with the current policy
+	}
+	ag, err := a.Agents.Get(id)
+	if err != nil {
+		return
+	}
+	raw, _ := json.Marshal(ag.Config.Approvals.Policy())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	resp, err := a.Sup.Call(ctx, id, http.MethodPost, "/approvals/policy", raw, http.Header{"Content-Type": {"application/json"}})
+	if err == nil {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return
+		}
+	}
+	slog.Warn("telling an agent its new approval rules failed; restarting it", "agent", id, "err", err)
+	a.Sup.Stop(id)
+}
+
 // resolve is an agent's current configuration as the runtime's environment.
 func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	ag, err := a.Agents.Get(id)
@@ -398,10 +432,10 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	if len(ag.Config.Workspace.Tools) > 0 {
 		env["WORKSPACE_TOOLS"] = strings.Join(ag.Config.Workspace.Tools, ",")
 	}
-	if len(ag.Config.Approvals.Tools) > 0 {
-		raw, _ := json.Marshal(map[string]any{"tools": ag.Config.Approvals.Tools, "timeoutSeconds": ag.Config.Approvals.Timeout()})
-		env["TOOL_APPROVALS"] = string(raw)
-	}
+	// The approval policy: profile, rules, the built-in rules (always sent). Changes to it reach a running runtime
+	// without a restart (pushApprovalPolicy), so it is not part of what makes a configuration stale.
+	raw, _ := json.Marshal(ag.Config.Approvals.Policy())
+	env["TOOL_APPROVALS"] = string(raw)
 	// MCP servers: resolved here (secrets and paths filled in); the runtime connects to them itself.
 	if len(ag.Config.MCP) > 0 {
 		var choices []mcp.Choice

@@ -24,10 +24,13 @@ import (
 
 // Tool is one of a server's tools, from its last test.
 type Tool struct {
-	Name         string          `json:"name"`
-	Title        *string         `json:"title"`
-	Description  *string         `json:"description"`
-	InputSchema  json.RawMessage `json:"inputSchema,omitempty"`
+	Name        string          `json:"name"`
+	Title       *string         `json:"title"`
+	Description *string         `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	// Annotations are the server's hints (readOnlyHint, destructiveHint) as the last test found them; the approval
+	// profiles read them. Absent for a server tested before they were kept, or one that gives none.
+	Annotations  json.RawMessage `json:"annotations,omitempty"`
 	ModelVisible bool            `json:"modelVisible"`
 }
 
@@ -759,6 +762,8 @@ type RuntimeTool struct {
 	Title       string          `json:"title,omitempty"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	// Annotations: see Tool.
+	Annotations json.RawMessage `json:"annotations,omitempty"`
 }
 
 // Choice is an agent's use of a server: all its tools (nil) or some.
@@ -805,7 +810,7 @@ func (c *Catalog) runtimeServer(s *Server, ch Choice, workspace, agentDir string
 		if !t.ModelVisible || (ch.Tools != nil && !want[t.Name]) {
 			continue
 		}
-		rt := RuntimeTool{Name: t.Name, InputSchema: t.InputSchema}
+		rt := RuntimeTool{Name: t.Name, InputSchema: t.InputSchema, Annotations: t.Annotations}
 		if t.Title != nil {
 			rt.Title = *t.Title
 		}

@@ -275,6 +275,10 @@ func copyOf(a *Agent) *Agent {
 	c.Config.CanCall = append([]string(nil), a.Config.CanCall...)
 	c.Config.Workspace.Tools = append([]string(nil), a.Config.Workspace.Tools...)
 	c.Config.Approvals.Tools = append([]string(nil), a.Config.Approvals.Tools...)
+	c.Config.Approvals.Rules = nil
+	for _, r := range a.Config.Approvals.Rules {
+		c.Config.Approvals.Rules = append(c.Config.Approvals.Rules, r.Copy())
+	}
 	c.Config.MCP = nil
 	for _, m := range a.Config.MCP {
 		choice := MCPChoice{Server: m.Server}

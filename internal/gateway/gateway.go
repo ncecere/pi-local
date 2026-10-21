@@ -117,6 +117,8 @@ type Handler struct {
 	Notify func(agentID, threadID, title, message string) bool
 	// PickTools: fast-judgment tool preselection (nil: not offered; it answers none when off).
 	PickTools func(ctx context.Context, message string, tools []judge.Tool, limit int) ([]string, error)
+	// JudgeApproval: fast-judgment tightening of approvals (nil: not offered; it answers not risky when off).
+	JudgeApproval func(ctx context.Context, tool string, arguments json.RawMessage) (bool, error)
 	// Elicitations: MCP servers' questions to the person, relayed by the runtime (nil: not offered).
 	Elicitations *elicitations.Store
 	// AppKey authenticates the app's own MCP probe, for /mcp/oauth only.
@@ -301,6 +303,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			names = []string{}
 		}
 		ok(w, map[string]any{"tools": names})
+	case h.JudgeApproval != nil && r.Method == http.MethodPost && r.URL.Path == "/judge/approval":
+		var body struct {
+			Tool      string          `json:"tool"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if body.Tool == "" || len(body.Tool) > 200 {
+			fail(w, http.StatusBadRequest, "invalid_request", "name the tool")
+			return
+		}
+		// Only ever tightens: a failed judgment is no judgment, and the rules stand.
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		risky, err := h.JudgeApproval(ctx, body.Tool, body.Arguments)
+		ok(w, map[string]any{"risky": err == nil && risky})
 	case h.Memory != nil && strings.HasPrefix(r.URL.Path, "/memory/"):
 		h.serveMemory(w, r, agentID)
 	case h.Web != nil && r.Method == http.MethodPost && (r.URL.Path == "/web/search" || r.URL.Path == "/web/fetch"):
