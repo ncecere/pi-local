@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ncecere/pi-local/internal/process"
 	"github.com/ncecere/pi-local/internal/supervisor"
 )
 
@@ -51,10 +52,11 @@ func (p *Prober) run(ctx context.Context, request map[string]any, onEvent func(p
 	}
 	raw, _ := json.Marshal(request)
 	cmd.Stdin = strings.NewReader(string(raw))
-	stdout, err := cmd.StdoutPipe()
+	stdout, err := process.NewOutputPipe(cmd)
 	if err != nil {
 		return probeEvent{}, err
 	}
+	defer stdout.Close() // both endpoints, including before-Start refusals
 	var stderr strings.Builder
 	cmd.Stderr = &limitedWriter{b: &stderr, max: 16 << 10}
 	cmd.WaitDelay = 2 * time.Second
@@ -62,15 +64,10 @@ func (p *Prober) run(ctx context.Context, request map[string]any, onEvent func(p
 	// not the runtime's stdin EOF watchdog or CommandContext's leader-only kill.
 	tree, err := startCommand(ctx, ctx, cmd)
 	if err != nil {
-		stdout.Close()
-		// Before-Start refusal doesn't run os/exec's pipe cleanup.
-		if child, ok := cmd.Stdout.(*os.File); ok {
-			child.Close()
-		}
 		return probeEvent{}, fmt.Errorf("could not run the probe: %w", err)
 	}
+	stdout.Started(tree.Done(), ctx.Done(), process.OutputDrainGrace)
 	defer tree.Close()
-	defer stdout.Close()
 	var last probeEvent
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
@@ -81,7 +78,7 @@ func (p *Prober) run(ctx context.Context, request map[string]any, onEvent func(p
 		}
 		last = ev
 		if onEvent != nil {
-			onEvent(ev)
+			stdout.Consume(func() { onEvent(ev) })
 		}
 	}
 	tree.Wait()

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -23,18 +24,58 @@ func TestRuntimeProcessHelper(t *testing.T) {
 		return
 	}
 	mode := os.Args[len(os.Args)-1]
+	if mode == "stdout-holder" {
+		os.WriteFile("holder-ready", []byte("yes"), 0600)
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat("release-holder"); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		os.WriteFile("holder-done", []byte("yes"), 0600)
+		os.Exit(0)
+	}
+	if mode == "retained" || mode == "unready-retained" {
+		child := exec.Command(os.Args[0], "-test.run=^TestRuntimeProcessHelper$", "--", "stdout-holder")
+		child.Env, child.Stdout = os.Environ(), os.Stdout
+		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if child.Start() != nil {
+			os.Exit(9)
+		}
+		for {
+			if _, err := os.Stat("holder-ready"); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if mode == "stdout-burst" {
+		fmt.Println("fixture-gate")
+		for {
+			if _, err := os.Stat("release"); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		for i := 0; i < 200; i++ {
+			fmt.Println("fixture-progress " + strings.Repeat("x", 1024))
+		}
+		fmt.Println(strings.Repeat("z", 512<<10) + "FINAL_STDOUT_SURVIVED")
+		os.Exit(2)
+	}
 	if mode == "early" {
 		fmt.Println("fixture misconfigured")
 		os.Exit(2)
 	}
-	if mode == "ignore" || mode == "unready" {
+	if mode == "ignore" || mode == "unready" || mode == "unready-retained" {
 		signal.Ignore(syscall.SIGTERM)
 	}
 	term := make(chan os.Signal, 1)
 	if mode == "graceful" {
 		signal.Notify(term, syscall.SIGTERM)
 	}
-	if mode != "unready" {
+	if mode != "unready" && mode != "unready-retained" {
 		fmt.Println(`PI_RUNTIME_READY {"port":9}`)
 	}
 	if mode == "graceful" {
@@ -147,6 +188,73 @@ func TestPrestartRefusalClosesPipesAndLogs(t *testing.T) {
 	}
 	if logs.f != nil {
 		t.Fatal("log file left open")
+	}
+}
+
+func TestSupervisorDrainsStdout(t *testing.T) {
+	s, dir := fixtureSupervisor(t, "stdout-burst")
+	s.opts.StartTimeout = 5 * time.Second
+	s.opts.RedactLog = func(map[string]string) func(string) string {
+		return func(line string) string {
+			if line == "fixture-gate" {
+				os.WriteFile(filepath.Join(dir, "release"), []byte("yes"), 0600)
+				time.Sleep(100 * time.Millisecond)
+			}
+			if strings.HasPrefix(line, "fixture-progress ") {
+				time.Sleep(time.Millisecond)
+			}
+			return line
+		}
+	}
+	err := s.Wake(context.Background(), "fixture")
+	var se *StartError
+	if !errors.As(err, &se) || se.Code != 2 {
+		t.Fatalf("unexpected runtime exit: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "logs", "runtime.log"))
+	if err != nil || !strings.Contains(string(b), strings.Repeat("z", 512<<10)+"FINAL_STDOUT_SURVIVED") {
+		t.Fatalf("truncated final stdout log: %v", err)
+	}
+	noKeys(t, s)
+}
+
+func TestSupervisorEscapedStdout(t *testing.T) {
+	for _, mode := range []string{"retained", "unready-retained"} {
+		t.Run(mode, func(t *testing.T) {
+			s, dir := fixtureSupervisor(t, mode)
+			t.Cleanup(func() {
+				os.WriteFile(filepath.Join(dir, "release-holder"), []byte("yes"), 0600)
+				deadline := time.Now().Add(2 * time.Second)
+				for {
+					if _, err := os.Stat(filepath.Join(dir, "holder-done")); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Error("escaped fixture did not finish cooperatively")
+						break
+					}
+					time.Sleep(time.Millisecond)
+				}
+			})
+			start := time.Now()
+			err := s.Wake(context.Background(), "fixture")
+			if mode == "retained" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.Stop("fixture")
+			} else if err == nil {
+				t.Fatal("unready fixture unexpectedly started")
+			}
+			s.Close()
+			noKeys(t, s)
+			if time.Since(start) > 8*time.Second {
+				t.Fatal("retained stdout blocked stop/deadline cleanup")
+			}
+			if _, err := os.Stat(filepath.Join(dir, "holder-done")); err == nil {
+				t.Fatal("fixture ended before escaped retention was tested")
+			}
+		})
 	}
 }
 

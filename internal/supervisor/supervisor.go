@@ -457,7 +457,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 		logs.redact = s.opts.RedactLog(env)
 	}
 	cmd.Stderr = logs
-	stdout, err := cmd.StdoutPipe()
+	stdout, err := process.NewOutputPipe(cmd)
 	if err != nil {
 		p.close()
 		return nil, err
@@ -476,6 +476,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 		p.close()
 		return nil, &StartError{AgentID: id, Code: -1, Message: "could not run node: " + err.Error()}
 	}
+	stdout.Started(p.tree.Done(), nil, process.OutputDrainGrace)
 	ready := make(chan int, 1)
 	readDone := make(chan struct{})
 	go func() {
@@ -495,7 +496,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 					}
 				}
 			}
-			logs.Line(line)
+			stdout.Consume(func() { logs.Line(line) })
 		}
 		io.Copy(io.Discard, stdout)
 	}()
@@ -524,6 +525,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 	case <-ctx.Done():
 	}
 	s.kill(p)
+	stdout.Close() // startup cancellation/deadline must not wait on escaped stdout
 	<-p.done
 	s.unregisterKey(p)
 	p.close()
@@ -622,12 +624,9 @@ func (p *proc) close() {
 		if p.tree != nil {
 			p.tree.Close()
 		} else if p.cmd != nil {
-			// A refusal before cmd.Start leaves both child pipe ends open;
-			// os/exec only cleans them when Start itself is attempted.
+			// A refusal before cmd.Start leaves StdinPipe's child end open;
+			// stdout is independently owned and closed below on every path.
 			if f, ok := p.cmd.Stdin.(io.Closer); ok {
-				f.Close()
-			}
-			if f, ok := p.cmd.Stdout.(io.Closer); ok {
 				f.Close()
 			}
 		}
