@@ -251,6 +251,54 @@ func TestTheActivityLogRecordsMessagesToolCallsAndApprovals(t *testing.T) {
 	}
 }
 
+func TestStoppedAndExpiredApprovalsRecordOneDeclinedToolWithoutAResult(t *testing.T) {
+	h := start(t, t.TempDir(), Config{})
+	scripted(t, h)
+	agent := h.agentOn("Worker", "script/s1", map[string]any{
+		"workspace": map[string]any{"tools": []string{"bash"}},
+		"approvals": map[string]any{"profile": "careful"},
+	})
+	for _, thread := range []string{"stopped", "expired"} {
+		h.mustDo("POST", "/api/agents/"+agent+"/threads/"+thread+"/messages", map[string]string{
+			"text": "RUN:echo password=hunter2 > should-not-exist", "requestId": thread,
+		}, 202)
+		req := h.pendingApproval(agent)
+		status := "cancelled"
+		if thread == "stopped" {
+			h.mustDo("POST", "/api/agents/"+agent+"/threads/"+thread+"/stop", nil, 202)
+		} else {
+			// Expiry must audit the tool even while its runtime is asleep, with no result to report.
+			h.mustDo("POST", "/api/agents/"+agent+"/sleep", nil, 200)
+			if _, err := h.app.DB.Exec(`UPDATE approvals SET expires_at = 1 WHERE id = ?`, req.ID); err != nil {
+				t.Fatal(err)
+			}
+			h.app.Approvals.Kick()
+			status = "timed_out"
+		}
+		query := "agent=" + agent + "&thread=" + thread + "&kind=tool"
+		got := h.activityWith(query, 1)
+		if len(got) != 1 || got[0].Title != "bash" || got[0].Outcome != "declined" || got[0].DurationMs != nil ||
+			got[0].field("approval.status") != status || got[0].field("approval.id") != req.ID || got[0].field("approval.waitedMs") == nil ||
+			strings.Contains(string(got[0].Detail), "hunter2") {
+			t.Fatalf("the %s call: %+v", thread, got)
+		}
+		if thread == "expired" {
+			h.waitReply(agent, thread)
+			// The real afterTools batch has a one-second flush window. Wait past it to check both writers.
+			time.Sleep(1500 * time.Millisecond)
+		}
+		if again := h.activity(query).Items; len(again) != 1 || again[0].ID != got[0].ID {
+			t.Fatalf("a later result duplicated the %s call: %+v", thread, again)
+		}
+		if decisions := h.activityWith("agent="+agent+"&thread="+thread+"&kind=approval", 1); len(decisions) != 1 {
+			t.Fatalf("approval activity: %+v", decisions)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(h.app.cfg.DataDir, "agents", agent, "workspace", "should-not-exist")); !os.IsNotExist(err) {
+		t.Fatalf("an unapproved command ran: %v", err)
+	}
+}
+
 func TestTheActivityLogRecordsSchedulesAsksBudgetsErrorsAndSignIns(t *testing.T) {
 	h := start(t, t.TempDir(), Config{DemoTokensPerSecond: "100000"})
 	scripted(t, h)

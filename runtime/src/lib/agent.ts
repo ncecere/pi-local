@@ -321,7 +321,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const activity =
 		env.PLATFORM_GATEWAY_URL && env.PLATFORM_KEY ? new ActivityReporter(gatewayPost(env.PLATFORM_GATEWAY_URL, env.PLATFORM_KEY)) : undefined;
 	if (activity) {
-		const audit = new ToolAudit(activity, { approvalFor: (conversationId, callId) => approvals.forCall(conversationId, callId), threadOf: async (conversationId) => (await threads.threadOf(conversationId)) ?? (await approvals.placeOf(conversationId).catch(() => undefined))?.threadId });
+		const audit = new ToolAudit(activity, { approvalFor: (conversationId, callId, taskId) => approvals.forCall(conversationId, callId, taskId), threadOf: async (conversationId) => (await threads.threadOf(conversationId)) ?? (await approvals.placeOf(conversationId).catch(() => undefined))?.threadId });
 		audit.bind(harness);
 		asking.push(audit.extension());
 	}

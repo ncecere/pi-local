@@ -52,6 +52,15 @@ func (a *App) recordApproval(ap *approvals.Approval) {
 	}
 	a.Activity.Record(activity.Entry{At: at, Kind: activity.KindApproval, AgentID: ap.AgentID, AgentName: ap.AgentName, ThreadID: thread, Actor: actor,
 		Title: title, Outcome: outcome, DurationMs: &waited, Detail: activity.Detail(detail), Dedupe: "approval:" + ap.AgentID + ":" + ap.ID})
+	// Stop need not settle a tool round, and expiry can happen while the runtime sleeps. The persisted
+	// request has everything needed to audit the unexecuted call; a later result shares its dedupe key.
+	if ap.Status == "cancelled" || ap.Status == "timed_out" {
+		a.Activity.RecordTools(ap.AgentID, []activity.ToolItem{{
+			CallID: ap.CallID, ThreadID: thread, Tool: ap.Tool, Arguments: ap.Arguments,
+			Outcome: "declined", EndedAt: at,
+			Approval: &activity.ToolApproval{ID: ap.ID, Status: ap.Status, WaitedMs: &waited},
+		}})
+	}
 }
 
 // recordReplyError: a reply ended in an error.

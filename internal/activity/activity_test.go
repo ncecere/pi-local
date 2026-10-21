@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -113,6 +114,55 @@ func TestToolCallsFromARuntimeAreValidatedRedactedAndKeptOnce(t *testing.T) {
 	}
 	if n := s.RecordTools("ag_1", many); n != MaxToolBatch {
 		t.Fatalf("a big batch took %d", n)
+	}
+}
+
+func TestApprovalToolDedupeSurvivesReopeningAndEitherReportOrder(t *testing.T) {
+	for _, tc := range []struct {
+		status      string
+		resultFirst bool
+	}{{"cancelled", false}, {"cancelled", true}, {"timed_out", false}, {"timed_out", true}} {
+		t.Run(tc.status+"/result-first="+strconv.FormatBool(tc.resultFirst), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "app.db")
+			open := func() *Store {
+				db, err := appdb.Open(t.Context(), path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s := New(db)
+				t.Cleanup(func() { s.Close(); db.Close() })
+				return s
+			}
+			at := time.Now().UnixMilli()
+			fallback := ToolItem{CallID: "repeated", ThreadID: "t", Tool: "bash", Outcome: "declined", EndedAt: at,
+				Arguments: json.RawMessage(`{"command":"echo password=hunter2"}`), Approval: &ToolApproval{ID: "ap_one", Status: tc.status}}
+			result := fallback
+			result.EntryID, result.EndedAt = "42", at+1
+			first, later := fallback, result
+			if tc.resultFirst {
+				first, later = later, first
+			}
+			s := open()
+			s.RecordTools("ag_1", []ToolItem{first})
+			s.Close()
+			if err := s.db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s = open() // no in-memory seen set can hide a duplicate
+			s.RecordTools("ag_1", []ToolItem{later, later})
+			got := list(t, s, Query{Agent: "ag_1"})
+			if len(got) != 1 || got[0].Outcome != "declined" || got[0].DurationMs != nil || strings.Contains(string(got[0].Detail), "hunter2") {
+				t.Fatalf("the declined call: %+v", got)
+			}
+			// A new task may reuse the provider call ID; its approval and result entry are distinct.
+			later.EntryID = "43"
+			later.Approval = &ToolApproval{ID: "ap_two", Status: "cancelled"}
+			s.RecordTools("ag_1", []ToolItem{later})
+			s.RecordTools("ag_2", []ToolItem{first})
+			if got := list(t, s, Query{}); len(got) != 3 {
+				t.Fatalf("distinct calls/agents were merged: %+v", got)
+			}
+		})
 	}
 }
 

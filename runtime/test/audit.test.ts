@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { assistantAgent, assistantExtension, defineAgent, defineExtension, defineTool, Type } from "@pdp/runtime";
+import { approvalHook, assistantAgent, assistantExtension, defineAgent, defineExtension, defineTool, Type } from "@pdp/runtime";
 import { fakeModel, startTestAgent, type TestAgent, toolCall } from "@pdp/runtime/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActivityReporter, type ToolActivity } from "../src/lib/audit.ts";
@@ -155,10 +155,10 @@ describe("tool calls in the audit log", () => {
 
 		const calls = await gw.calls(3);
 		const by = (id: string) => calls.find((c) => c.callId === id)!;
-		expect(by("c1")).toMatchObject({ outcome: "denied", threadId: "t1", approval: { status: "denied", by: "Bo", source: "rule", reason: "Not today" } });
+		expect(by("c1")).toMatchObject({ outcome: "denied", threadId: "t1", approval: { id: first.id, status: "denied", by: "Bo", source: "rule", reason: "Not today" } });
 		expect(by("c1").error).toBe("Tool call blocked: denied by Bo: Not today");
 		expect(by("c1").approval!.waitedMs).toBeGreaterThanOrEqual(0);
-		expect(by("c2")).toMatchObject({ outcome: "declined", threadId: "t2", approval: { status: "timed_out" } });
+		expect(by("c2")).toMatchObject({ outcome: "declined", threadId: "t2", approval: { id: second.id, status: "timed_out" } });
 		expect(by("c3")).toMatchObject({ outcome: "denied", threadId: "t3" });
 		expect(by("c3")).not.toHaveProperty("approval");
 	});
@@ -173,7 +173,49 @@ describe("tool calls in the audit log", () => {
 		await agent.decide(request.id, "approve", { decidedBy: { kind: "user", id: "u-bo", name: "Bo" } });
 		await agent.settled("t");
 		const [call] = await gw.calls(1);
-		expect(call).toMatchObject({ tool: "get_time", outcome: "ok", approval: { status: "approved", by: "Bo", source: "tools" } });
+		expect(call).toMatchObject({ tool: "get_time", outcome: "ok", approval: { id: request.id, status: "approved", by: "Bo", source: "tools" } });
+	});
+
+	it("names approvals by the durable task even when a provider reuses the call ID", async () => {
+		const gw = await gateway();
+		const model = fakeModel();
+		model.reply(toolCall("get_time", {}, { id: "reused" }), toolCall("get_time", {}, { id: "reused" }), "Done.");
+		const agent = track(await startTestAgent(assistantAgent, { model, env: { ...gw.env, TOOL_APPROVALS: JSON.stringify({ tools: ["get_time"] }) } }));
+		await agent.send("t", "twice");
+		const first = await agent.pendingApproval("t");
+		await agent.decide(first.id, "approve");
+		const deadline = Date.now() + 10_000;
+		let second = first;
+		while (second.id === first.id) {
+			if (Date.now() > deadline) throw new Error("no second approval");
+			second = await agent.pendingApproval("t");
+		}
+		await agent.decide(second.id, "timeout");
+		await agent.settled("t");
+		const calls = await gw.calls(2);
+		expect(calls.map((c) => [c.outcome, c.approval?.id])).toEqual([["ok", first.id], ["declined", second.id]]);
+	});
+
+	it("uses the request that blocked a task when several keyed hooks asked", async () => {
+		const gw = await gateway();
+		const model = fakeModel();
+		model.reply(toolCall("get_time", {}, { id: "c1" }), "Understood.");
+		const definition = defineAgent({
+			extensions: ({ instructions, approvals }) => [assistantExtension(instructions), defineExtension({
+				name: "two-approvals",
+				hooks: [approvalHook(approvals, () => ({ key: "one" })), approvalHook(approvals, () => ({ key: "two" }))],
+			})],
+		});
+		const agent = track(await startTestAgent(definition, { model, env: gw.env }));
+		await agent.send("t", "time?");
+		const first = await agent.pendingApproval("t");
+		await agent.decide(first.id, "approve");
+		const second = await agent.pendingApproval("t");
+		expect(second.id).not.toBe(first.id);
+		await agent.decide(second.id, "timeout");
+		await agent.settled("t");
+		const [call] = await gw.calls(1);
+		expect(call).toMatchObject({ outcome: "declined", approval: { id: second.id, status: "timed_out" } });
 	});
 
 	it("reports each call once, however many rounds a reply takes", async () => {

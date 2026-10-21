@@ -512,6 +512,8 @@ func clip(s string, n int) string {
 
 // ToolApproval is what the runtime says of a call's approval.
 type ToolApproval struct {
+	// ID is the durable approval request, shared with platform-side declined calls.
+	ID string `json:"id,omitempty"`
 	// Status: approved, denied, timed_out or cancelled.
 	Status string `json:"status"`
 	// By: who decided ("" for a time-out or cancellation).
@@ -555,7 +557,7 @@ func (s *Store) RecordTools(agentID string, items []ToolItem) int {
 	}
 	n := 0
 	for _, it := range items {
-		if it.Tool == "" || len(it.Tool) > maxTitle || !toolOutcomes[it.Outcome] || (it.EntryID == "" && it.CallID == "") {
+		if it.Tool == "" || len(it.Tool) > maxTitle || !toolOutcomes[it.Outcome] || (it.EntryID == "" && it.CallID == "" && (it.Approval == nil || it.Approval.ID == "")) {
 			continue
 		}
 		detail := map[string]any{"callId": clip(it.CallID, 200)}
@@ -568,6 +570,9 @@ func (s *Store) RecordTools(agentID string, items []ToolItem) int {
 		}
 		if a := it.Approval; a != nil && a.Status != "" {
 			ap := map[string]any{"status": clip(a.Status, 20)}
+			if a.ID != "" {
+				ap["id"] = clip(a.ID, 70)
+			}
 			if a.By != "" {
 				ap["by"] = clip(oneLine(a.By), maxActor)
 			}
@@ -586,6 +591,12 @@ func (s *Store) RecordTools(agentID string, items []ToolItem) int {
 		if key == "" {
 			key = it.ThreadID + "/" + it.CallID + "/" + strconv.FormatInt(it.EndedAt, 10)
 		}
+		dedupe := fmt.Sprintf("tool:%s:%s", agentID, key)
+		// An approval can end without a result entry (Stop), or before its result arrives (expiry).
+		// Use the same persisted key for both reports, never a provider call ID (which can repeat).
+		if a := it.Approval; a != nil && a.ID != "" {
+			dedupe = "tool-approval:" + agentID + ":" + a.ID
+		}
 		var duration *int64
 		if it.DurationMs != nil && *it.DurationMs >= 0 {
 			duration = it.DurationMs
@@ -599,7 +610,7 @@ func (s *Store) RecordTools(agentID string, items []ToolItem) int {
 			thread = ""
 		}
 		s.Record(Entry{At: at, Kind: KindTool, AgentID: agentID, ThreadID: thread, Title: it.Tool, Outcome: it.Outcome, DurationMs: duration,
-			Detail: Detail(detail), Dedupe: fmt.Sprintf("tool:%s:%s", agentID, key)})
+			Detail: Detail(detail), Dedupe: dedupe})
 		n++
 	}
 	return n

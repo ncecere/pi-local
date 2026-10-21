@@ -291,10 +291,17 @@ export class Approvals implements ApprovalRequester {
 		return { status: result.record.status, applied: result.applied };
 	}
 
-	/** The request made for a call of a conversation, if it asked (the audit reads how it was decided). */
-	forCall(conversationId: number, callId: string): ApprovalRecord | undefined {
-		for (const r of this.cache.values()) if (r.conversationId === conversationId && r.callId === callId) return r;
-		return undefined;
+	/** The request made for a call; the audit names its task because provider call IDs may repeat. */
+	forCall(conversationId: number, callId: string, taskId?: number): ApprovalRecord | undefined {
+		let approved: ApprovalRecord | undefined;
+		for (const r of this.cache.values()) {
+			if (r.conversationId !== conversationId || r.callId !== callId || (taskId !== undefined && r.taskId !== taskId)) continue;
+			// Several keyed hooks may ask about one task. The request that blocked it, not an earlier approval,
+			// must name its declined activity so a later result deduplicates against the platform's record.
+			if (r.status !== "approved") return r;
+			approved = r;
+		}
+		return approved;
 	}
 
 	/** Every request (pending first, then newest), or one thread's. */

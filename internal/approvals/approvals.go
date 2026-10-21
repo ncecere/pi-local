@@ -32,6 +32,8 @@ type Approval struct {
 	ExpiresAt   int64           `json:"expiresAt"`
 	DecidedAt   *int64          `json:"decidedAt"`
 	Reason      *string         `json:"reason"`
+	// CallID is retained for the tool audit, not exposed in the approvals API.
+	CallID string `json:"-"`
 }
 
 // Report is what a runtime reports of a request (runtime approvals.ts, reportOf).
@@ -105,14 +107,14 @@ func (s *Store) Close() {
 	s.wg.Wait()
 }
 
-const cols = `agent_id, id, thread_id, tool, arguments, summary, status, requested_at, expires_at, decided_at, reason`
+const cols = `agent_id, id, thread_id, tool, call_id, arguments, summary, status, requested_at, expires_at, decided_at, reason`
 
 func (s *Store) scan(row interface{ Scan(...any) error }) (*Approval, error) {
 	var a Approval
 	var thread, summary, reason sql.NullString
 	var decided sql.NullInt64
 	var args string
-	if err := row.Scan(&a.AgentID, &a.ID, &thread, &a.Tool, &args, &summary, &a.Status, &a.RequestedAt, &a.ExpiresAt, &decided, &reason); err != nil {
+	if err := row.Scan(&a.AgentID, &a.ID, &thread, &a.Tool, &a.CallID, &args, &summary, &a.Status, &a.RequestedAt, &a.ExpiresAt, &decided, &reason); err != nil {
 		return nil, err
 	}
 	a.Arguments = json.RawMessage(args)

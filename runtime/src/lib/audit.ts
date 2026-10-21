@@ -11,7 +11,9 @@ import { redactArguments } from "./redact.ts";
  * Where calls end: pi-durable's `afterTool` hook runs only for calls that executed, and a call blocked by an approval,
  * refused by a rule or never run at all (unavailable, invalid arguments, interrupted) has no such hook. Every call of a
  * round, whichever way it ended, has a result entry by the time the generation task's `afterTools` hook runs, so that
- * is where they are read (the entry carries the outcome, the duration and the end time the tool task wrote).
+ * is where they are read (the entry carries the outcome, the duration and the end time the tool task wrote). A stopped
+ * run need not reach afterTools: the platform records cancelled/timed-out approvals as declined itself. Both paths
+ * carry the durable approval ID so the platform keeps just one tool activity, even if a result arrives later.
  *
  * Reporting is best effort: a failure here never touches the run. A call whose report can't be delivered after a few
  * tries, or that is queued when the process dies, is not in the log.
@@ -35,7 +37,7 @@ export type ToolActivity = {
 	durationMs?: number;
 	/** When it ended (Unix ms). */
 	endedAt: number;
-	approval?: { status: ApprovalRecord["status"]; by?: string; source?: string; waitedMs?: number; reason?: string };
+	approval?: { id: string; status: ApprovalRecord["status"]; by?: string; source?: string; waitedMs?: number; reason?: string };
 	/** What the model was told when the call failed or was refused (short). */
 	error?: string;
 };
@@ -118,7 +120,7 @@ export class ActivityReporter {
 
 /** What the audit asks of the agent: the request made for a call, and the thread a conversation belongs to (a subagent's: its owner's). */
 export interface AuditSources {
-	approvalFor(conversationId: number, callId: string): ApprovalRecord | undefined;
+	approvalFor(conversationId: number, callId: string, taskId: number | undefined): ApprovalRecord | undefined;
 	threadOf(conversationId: number): Promise<string | undefined>;
 }
 
@@ -194,7 +196,7 @@ export class ToolAudit {
 		const message = entry.model?.find((m) => m.role === "toolResult");
 		if (message?.role !== "toolResult") return undefined;
 		const call = calls.get(message.toolCallId);
-		const approval = this.sources.approvalFor(conversationId, message.toolCallId);
+		const approval = this.sources.approvalFor(conversationId, message.toolCallId, entry.byTaskId === undefined ? undefined : Number(entry.byTaskId));
 		const diagnostics = (entry.data as { diagnostics?: { severity?: string; code?: string; message?: string }[] } | undefined)?.diagnostics ?? [];
 		const blocked = diagnostics.some((d) => d.code === "blocked");
 		const outcome: ToolOutcome = blocked
@@ -226,6 +228,7 @@ export class ToolAudit {
 		if (outcome !== "ok" && text !== "") item.error = text.length > MAX_ERROR ? `${text.slice(0, MAX_ERROR - 1)}…` : text;
 		if (approval !== undefined) {
 			item.approval = {
+				id: approval.id,
 				status: approval.status,
 				...(approval.decidedBy === undefined ? {} : { by: approval.decidedBy.name }),
 				...(approval.source === undefined ? {} : { source: approval.source }),
