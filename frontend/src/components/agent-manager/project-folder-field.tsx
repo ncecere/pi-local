@@ -22,6 +22,7 @@ export function ProjectFolderInput({
   invalid = false,
   describedBy,
   label = 'Project folder',
+  dialogTitle,
 }: {
   id: string;
   value: string;
@@ -31,6 +32,8 @@ export function ProjectFolderInput({
   describedBy?: string;
   /** For the Choose… button's accessible name. */
   label?: string;
+  /** What the folder dialog says (default: "Choose the project folder"). */
+  dialogTitle?: string;
 }) {
   const hasDialog = useFeature('folderDialog');
   const choose = useChooseFolder();
@@ -56,7 +59,7 @@ export function ProjectFolderInput({
           disabled={choose.isPending}
           aria-label={`Choose ${label.toLowerCase()}`}
           onClick={() =>
-            choose.mutate(undefined, {
+            choose.mutate(dialogTitle, {
               onSuccess: (chosen) => {
                 if (chosen?.path) onChange(chosen.path);
               },

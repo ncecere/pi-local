@@ -25,6 +25,8 @@ type Manager interface {
 	Reveal(path string) error
 	// RevealFile shows a file selected in the Finder.
 	RevealFile(path string) error
+	// OpenFile opens a file in the application the system uses for it, or (reveal) selects it in the Finder.
+	OpenFile(path string, reveal bool) error
 	// WriteDiagnostics writes the diagnostics zip.
 	WriteDiagnostics(w io.Writer) error
 }
@@ -270,7 +272,18 @@ func (a *API) chooseFolder(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotImplemented, "not_supported", "Choosing a folder needs the desktop app: type its path.")
 		return
 	}
-	path, err := a.FolderDialog("Choose the project folder")
+	// The dialog's title may be given ({title}); a project folder's is the default.
+	var in struct {
+		Title string `json:"title"`
+	}
+	if r.ContentLength != 0 && !decodeBody(w, r, &in) {
+		return
+	}
+	title := strings.TrimSpace(in.Title)
+	if title == "" || len(title) > 100 {
+		title = "Choose the project folder"
+	}
+	path, err := a.FolderDialog(title)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "internal", "The folder dialog failed: "+err.Error())
 		return

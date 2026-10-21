@@ -81,6 +81,7 @@ import { applyTeamEvent } from '~/lib/teams';
  * - `memory`: the person's memory changed (`agentId` "": the About me card,
  *   facts, suggestions) or an agent's notes did. It reads ['you'] or that
  *   agent's ['agents', id, 'memory'] again.
+ * - `knowledge`: index progress or folders changed. It reads loaded knowledge status and problems again.
  * - `resync`, or a reconnect: events may have been missed; the lists are read
  *   again.
  * Mounted once, in the app shell.
@@ -131,7 +132,9 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({
         predicate: (query) =>
           query.queryKey[0] === 'agents' &&
-          (query.queryKey[2] === 'threads' || query.queryKey[2] === 'memory'),
+          (query.queryKey[2] === 'threads' ||
+            query.queryKey[2] === 'memory' ||
+            query.queryKey[2] === 'knowledge'),
       });
     };
 
@@ -329,6 +332,11 @@ export function usePlatformEvents() {
               params: { agentId: event.agentId, threadId: event.run.threadId },
             }),
         },
+      });
+    });
+    source.on('knowledge', () => {
+      void queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey[0] === 'agents' && query.queryKey[2] === 'knowledge',
       });
     });
     source.on('memory', (data) => {

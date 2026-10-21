@@ -36,7 +36,11 @@ const USE_TEXT: Record<string, { label: string; hint: string; ready?: true }> = 
     ready: true,
   },
   memory: { label: 'Memory', hint: 'Coming later.' },
-  knowledge: { label: 'Knowledge', hint: 'Coming later.' },
+  knowledge: {
+    label: 'Knowledge',
+    hint: 'Rank the best matching document passages by relevance before the agent reads them.',
+    ready: true,
+  },
   triggers: { label: 'Triggers', hint: 'Coming later.' },
 };
 

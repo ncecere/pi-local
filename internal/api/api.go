@@ -32,6 +32,7 @@ import (
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/judge"
+	"github.com/ncecere/pi-local/internal/knowledge"
 	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/memory"
 	"github.com/ncecere/pi-local/internal/models"
@@ -73,6 +74,8 @@ type API struct {
 	MCP       *mcp.Catalog
 	Schedules *schedules.Store
 	Search    *search.Store
+	// Knowledge: the index of agents' knowledge folders.
+	Knowledge *knowledge.Service
 	// Desktop is the desktop app's own settings (nil in the headless server).
 	Desktop   Desktop
 	Updater   *update.Updater
@@ -148,6 +151,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("DELETE /api/agents/{agent}/threads/{thread}", a.withThread(a.deleteThread))
 
 	m.HandleFunc("GET /api/events", a.events)
+	a.knowledgeRoutes(m)
 	a.modelRoutes(m)
 	a.manageRoutes(m)
 	a.toolRoutes(m)
@@ -397,8 +401,9 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 			"tools": nonNil(ag.Config.Workspace.Tools), "folder": ag.Config.Workspace.Folder, "dir": ag.WorkspaceDir(),
 			"sandbox": ag.Config.Workspace.SandboxOn(), "network": ag.Config.Workspace.NetworkOn(), "sandboxAvailable": agents.SandboxSupported,
 		},
-		"web":    ag.Config.Web,
-		"memory": map[string]any{"off": ag.Config.Memory.Off, "share": nonNil(ag.Config.Memory.Share)},
+		"web":       ag.Config.Web,
+		"memory":    map[string]any{"off": ag.Config.Memory.Off, "share": nonNil(ag.Config.Memory.Share)},
+		"knowledge": map[string]any{"folders": nonNil(ag.Config.Knowledge.Folders)},
 		"approvals": map[string]any{
 			"profile": ag.Config.Approvals.EffectiveProfile(), "tools": nonNil(ag.Config.Approvals.Tools), "rules": rulesJSON(ag.Config.Approvals.Rules),
 			"builtinRules": agents.BuiltinRules, "timeoutSeconds": ag.Config.Approvals.Timeout(),
@@ -516,6 +521,8 @@ type agentInput struct {
 	Schedules    *agents.AgentSchedules `json:"schedules"`
 	Web          *agents.WebTools       `json:"web"`
 	Memory       *agents.MemorySettings `json:"memory"`
+	// Knowledge: {folders} replaces the agent's knowledge folders.
+	Knowledge *agents.Knowledge `json:"knowledge"`
 	// Security: {scrubSecrets} (true when left out).
 	Security *agents.Security `json:"security"`
 	// Budget: {monthlyUsd, onExceed} sets the agent's monthly budget, null removes it, absent leaves it.
@@ -604,6 +611,9 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.Memory != nil {
 		c.Memory = *in.Memory
+	}
+	if in.Knowledge != nil {
+		c.Knowledge = *in.Knowledge
 	}
 	if in.Security != nil {
 		c.Security = *in.Security

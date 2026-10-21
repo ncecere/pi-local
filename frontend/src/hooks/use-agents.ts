@@ -3,6 +3,7 @@ import {
   type Agent,
   type AgentApprovals,
   type AgentBudget,
+  type AgentKnowledge,
   type AgentMcpServer,
   type AgentSecurity,
   type AgentTemplate,
@@ -229,6 +230,8 @@ export function useCreateAgent() {
       instructions?: string;
       /** Left out: the kind's default tools (coding: read, write, edit, bash) in its own folder. */
       workspace?: AgentWorkspaceInput;
+      /** Folders of documents it can search (Document Q&A). */
+      knowledge?: AgentKnowledge;
     }) => api.post<Agent>('/api/agents', body),
     onSuccess: (agent) =>
       queryClient.setQueryData<Agent[]>(AGENTS_KEY, (list) =>
@@ -260,6 +263,8 @@ export function useUpdateAgent() {
       mcp?: AgentMcpServer[];
       schedules?: { agentMade: boolean };
       web?: WebTools;
+      /** Replaces the knowledge folders. */
+      knowledge?: AgentKnowledge;
       security?: AgentSecurity;
       /** null removes the agent's budget. */
       budget?: AgentBudget | null;

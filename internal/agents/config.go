@@ -105,6 +105,8 @@ type Config struct {
 	Web WebTools `yaml:"web,omitempty"`
 	// Memory: what it knows about the person (the basics, and the categories it shares) and its own notes.
 	Memory MemorySettings `yaml:"memory,omitempty"`
+	// Knowledge: folders on this computer whose documents the agent can search and cite.
+	Knowledge Knowledge `yaml:"knowledge,omitempty"`
 	// Budget: a monthly limit on what the agent may spend on its model (nil: none).
 	Budget *Budget `yaml:"budget,omitempty"`
 	// Security: whether what its tools return is cleaned of secrets before the model sees it and before it is saved.
@@ -154,6 +156,16 @@ func (b *Budget) CheckBudget() error {
 	b.MonthlyUSD = math.Round(b.MonthlyUSD*100) / 100
 	return nil
 }
+
+// Knowledge is an agent's knowledge folders: absolute paths of folders on this computer. The app indexes the text
+// files, Markdown, PDF, Word, Excel and PowerPoint files in them (internal/knowledge), and the agent searches the index
+// with search_knowledge and may read the files (read-only, even outside its workspace).
+type Knowledge struct {
+	Folders []string `yaml:"folders,omitempty" json:"folders"`
+}
+
+// MaxKnowledgeFolders is how many folders one agent may have.
+const MaxKnowledgeFolders = 20
 
 // WebTools are an agent's web tools (read-only: they change nothing).
 type WebTools struct {
@@ -471,7 +483,13 @@ func (c *Config) Normalize() {
 }
 
 // Validate checks a normalized config.
-func (c *Config) Validate() error {
+func (c *Config) Validate() error { return c.validate(nil) }
+
+// ValidateChange checks a config that replaces `previous`: as Validate, except that a knowledge folder the agent already
+// had is not required to exist any more (an unplugged drive must not stop the person renaming the agent).
+func (c *Config) ValidateChange(previous Config) error { return c.validate(&previous) }
+
+func (c *Config) validate(previous *Config) error {
 	if c.Name == "" || utf8.RuneCountInString(c.Name) > MaxNameChars || strings.ContainsAny(c.Name, "\r\n") {
 		return invalid("invalid_name", "Give the agent a name of 1 to %d characters, on one line.", MaxNameChars)
 	}
@@ -519,6 +537,13 @@ func (c *Config) Validate() error {
 	}
 	c.Memory.Share = share
 	if err := c.Workspace.checkFolder(); err != nil {
+		return err
+	}
+	var had []string
+	if previous != nil {
+		had = previous.Knowledge.Folders
+	}
+	if err := c.Knowledge.check(had); err != nil {
 		return err
 	}
 	if c.Budget != nil {
@@ -646,6 +671,45 @@ func (w *Workspace) checkFolder() error {
 	if w.Folder == "/" || w.Folder == filepath.Clean(home) || w.Folder == "/Users" || w.Folder == "/System" {
 		return invalid("invalid_workspace_folder", "Choose a project folder, not %s: the agent's tools would reach everything in it.", w.Folder)
 	}
+	return nil
+}
+
+// check cleans the knowledge folders and checks each: absolute, a folder on this computer (unless the agent had it
+// already: `had`), not the whole disk or the home folder (the index would try to read everything), each once.
+func (k *Knowledge) check(had []string) error {
+	if len(k.Folders) > MaxKnowledgeFolders {
+		return invalid("invalid_knowledge_folder", "An agent has at most %d knowledge folders.", MaxKnowledgeFolders)
+	}
+	home, _ := os.UserHomeDir()
+	var folders []string
+	for _, f := range k.Folders {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if strings.HasPrefix(f, "~/") && home != "" {
+			f = filepath.Join(home, f[2:])
+		}
+		if !filepath.IsAbs(f) {
+			return invalid("invalid_knowledge_folder", "Choose the folder by its full path, like /Users/you/Documents/contracts.")
+		}
+		f = filepath.Clean(f)
+		real, _ := filepath.EvalSymlinks(f)
+		realHome, _ := filepath.EvalSymlinks(home)
+		if f == "/" || f == filepath.Clean(home) || f == "/Users" || f == "/System" ||
+			(real != "" && (real == "/" || real == realHome || real == "/Users" || real == "/System")) {
+			return invalid("invalid_knowledge_folder", "Choose a folder of documents, not %s: it holds far too much to read.", f)
+		}
+		if !slices.Contains(had, f) {
+			if info, err := os.Lstat(f); err != nil || !info.IsDir() {
+				return invalid("invalid_knowledge_folder", "%s isn't a folder on this computer.", f)
+			}
+		}
+		if !slices.Contains(folders, f) {
+			folders = append(folders, f)
+		}
+	}
+	k.Folders = folders
 	return nil
 }
 

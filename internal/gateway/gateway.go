@@ -19,6 +19,7 @@ import (
 	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/judge"
+	"github.com/ncecere/pi-local/internal/knowledge"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
@@ -103,6 +104,13 @@ type Web interface {
 	Fetch(ctx context.Context, url string, offset, maxChars int) (*web.Page, error)
 }
 
+// Knowledge is an agent's knowledge folders, searched by its search_knowledge tool.
+type Knowledge interface {
+	// Search answers a question from the agent's folders: passages with where they are from and a link, and what was
+	// searched. Errors that are for the model (no folders) are *knowledge.Error.
+	Search(ctx context.Context, agentID, query string, limit int) (any, error)
+}
+
 // Handler is the gateway's routes.
 type Handler struct {
 	Keys      Keys
@@ -118,6 +126,8 @@ type Handler struct {
 	Web Web
 	// Memory: what an agent knows about the person and itself (nil: not offered).
 	Memory Memory
+	// Knowledge: search_knowledge (nil: not offered).
+	Knowledge Knowledge
 	// ModelEnv is what a runtime needs to use a model the person chose for a conversation (the same variables as its
 	// own model's); nil: not offered.
 	ModelEnv func(ctx context.Context, agentID, modelID string) (map[string]string, error)
@@ -338,6 +348,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ok(w, map[string]any{"risky": err == nil && risky})
 	case h.Memory != nil && strings.HasPrefix(r.URL.Path, "/memory/"):
 		h.serveMemory(w, r, agentID)
+	case h.Knowledge != nil && r.Method == http.MethodPost && r.URL.Path == "/knowledge/search":
+		var body struct {
+			Query string `json:"query"`
+			Limit int    `json:"limit"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if strings.TrimSpace(body.Query) == "" || len(body.Query) > 2000 {
+			fail(w, http.StatusBadRequest, "invalid_request", "say what to look for")
+			return
+		}
+		if body.Limit <= 0 || body.Limit > 10 {
+			body.Limit = 5
+		}
+		answer, err := h.Knowledge.Search(r.Context(), agentID, body.Query, body.Limit)
+		if err != nil {
+			var ke *knowledge.Error
+			if errors.As(err, &ke) {
+				fail(w, ke.Status, ke.Code, ke.Message)
+				return
+			}
+			slog.Error("searching knowledge", "agent", agentID, "err", err)
+			fail(w, http.StatusInternalServerError, "internal", "the documents could not be searched")
+			return
+		}
+		ok(w, answer)
 	case h.Web != nil && r.Method == http.MethodPost && (r.URL.Path == "/web/search" || r.URL.Path == "/web/fetch"):
 		h.serveWeb(w, r, agentID)
 	case h.Elicitations != nil && (r.URL.Path == "/mcp/elicitations" || strings.HasPrefix(r.URL.Path, "/mcp/elicitations/")):

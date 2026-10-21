@@ -60,6 +60,17 @@ describe("knowledge folders are readable, never writable", () => {
 		expect(denied(await env.readTextFile(join(agentDir, "not-there", "x"), ctx))).toBe(true);
 	});
 
+	it("does not expand access when a configured folder was replaced by a symlink before startup", async () => {
+		const { workspace, temp, agentDir } = await layout();
+		const outside = join(agentDir, "outside");
+		mkdirSync(outside);
+		writeFileSync(join(outside, "secret.txt"), "PRIVATE");
+		const alias = join(agentDir, "replaced-docs");
+		symlinkSync(outside, alias);
+		const env = createWorkspaceEnv({ root: workspace, tempDir: temp, readOnlyRoots: [alias] });
+		expect(denied(await env.readTextFile(join(alias, "secret.txt"), ctx))).toBe(true);
+	});
+
 	it("without knowledge folders the workspace is all there is", async () => {
 		const { workspace, temp, docs } = await layout();
 		const env = createWorkspaceEnv({ root: workspace, tempDir: temp });

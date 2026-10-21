@@ -302,7 +302,8 @@ export function TemplateSummary({
 }) {
   const chips = templateChipDetails(template);
   const hint = needsWebSearch(template) && webSearchReady === false;
-  if (chips.length === 0 && !hint) return null;
+  const knowledge = template.needs?.includes('knowledge');
+  if (chips.length === 0 && !hint && !knowledge) return null;
   return (
     <div className="flex flex-col gap-2" aria-live="polite">
       {chips.length > 0 && (
@@ -317,6 +318,11 @@ export function TemplateSummary({
             </li>
           ))}
         </ul>
+      )}
+      {knowledge && (
+        <p className="text-xs text-[var(--text-muted)]">
+          After creating this agent, add document folders in its Knowledge tab in Settings → Agents.
+        </p>
       )}
       {hint && (
         <p className="text-xs text-[var(--text-muted)]">

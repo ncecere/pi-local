@@ -27,11 +27,11 @@ func TestTemplates(t *testing.T) {
 			t.Errorf("%s isn't marked built-in", tp.ID)
 		}
 	}
-	if strings.Join(ids, ",") != "assistant,researcher,writer,daily-briefing,translator,planner,coding" {
+	if strings.Join(ids, ",") != "assistant,researcher,writer,daily-briefing,translator,planner,document-qa,coding" {
 		t.Fatalf("built-ins: %v", ids)
 	}
 	cat := decodeInto[struct{ Templates []templateJSON }](t, h.mustDo("GET", "/api/agents/catalog", nil, 200))
-	if len(cat.Templates) != 7 || cat.Templates[3].Name != "Daily briefing" {
+	if len(cat.Templates) != 8 || cat.Templates[3].Name != "Daily briefing" {
 		t.Fatalf("catalog: %+v", cat.Templates)
 	}
 
@@ -75,7 +75,7 @@ func TestTemplates(t *testing.T) {
 	}
 	h.mustDo("DELETE", "/api/templates/my-writer", nil, 200)
 	h.mustDo("DELETE", "/api/templates/assistant", nil, 409)
-	if n := len(decodeInto[struct{ Templates []templateJSON }](t, h.mustDo("GET", "/api/templates", nil, 200)).Templates); n != 8 {
+	if n := len(decodeInto[struct{ Templates []templateJSON }](t, h.mustDo("GET", "/api/templates", nil, 200)).Templates); n != len(list)+1 {
 		t.Fatalf("after deleting one of two: %d", n)
 	}
 }

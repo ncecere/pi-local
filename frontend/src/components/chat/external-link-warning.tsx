@@ -1,6 +1,8 @@
 import { AlertTriangle } from 'lucide-react';
 import { type ComponentProps, type ReactNode, useId, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import type { LinkSafetyModalProps } from 'streamdown';
+import { agentPath, api, errorMessage } from '~/api/client';
 import { Button } from '~/components/ui/button';
 import {
   Dialog,
@@ -10,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '~/components/ui/dialog';
+import { knowledgeLinkOf } from '~/lib/knowledge';
 import { cn } from '~/lib/utils';
 
 const SKIP_EXTERNAL_LINK_WARNING_KEY = 'oci.skipExternalLinkWarning';
@@ -135,6 +138,39 @@ export function MessageLink({
 }: ComponentProps<'a'> & { node?: unknown }) {
   const [open, setOpen] = useState(false);
   const linkClass = cn('wrap-anywhere font-medium text-primary underline', className);
+  // A citation of a document in an agent's knowledge folders: a click opens the file on this computer.
+  const document = href ? knowledgeLinkOf(href) : null;
+  if (href && document)
+    return (
+      <a
+        {...rest}
+        href={href}
+        className={linkClass}
+        data-streamdown="link"
+        data-knowledge-file=""
+        title="Open this file"
+        onClick={(event) => {
+          // Another tab, or a download, is the browser's own: its address serves the file.
+          if (
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey ||
+            rest.download !== undefined
+          )
+            return;
+          event.preventDefault();
+          api
+            .post(agentPath(document.agentId, '/knowledge/open'), { path: document.path })
+            .catch((error: unknown) =>
+              toast.error(errorMessage(error, "The file couldn't be opened.")),
+            );
+        }}
+      >
+        {children}
+      </a>
+    );
   // Being written (or refused by the URL policy): text until it is complete.
   if (!href || href === INCOMPLETE_LINK)
     return (

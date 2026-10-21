@@ -18,7 +18,7 @@ func TestTheNewAgentChoicesAreTheTemplates(t *testing.T) {
 	for _, k := range cat.Templates {
 		ids = append(ids, k.ID)
 	}
-	if strings.Join(ids, ",") != "assistant,researcher,writer,daily-briefing,translator,planner,coding" {
+	if strings.Join(ids, ",") != "assistant,researcher,writer,daily-briefing,translator,planner,document-qa,coding" {
 		t.Fatalf("choices: %v", ids)
 	}
 	// Triage is retired, not removed: an agent made with it still saves and runs.

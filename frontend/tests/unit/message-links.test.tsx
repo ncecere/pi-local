@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Markdown } from '../../src/components/chat/markdown';
+import { fakeBackend, restoreTransport, settle } from './ui-test-utils';
 
 /**
  * Links in messages (#174), through the real lazily loaded Streamdown
@@ -25,6 +26,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   document.body.innerHTML = '';
   vi.restoreAllMocks();
+  restoreTransport();
 });
 
 async function render(markdown: string) {
@@ -94,6 +96,27 @@ describe('links in messages (#174)', () => {
       '_blank',
       'noopener,noreferrer',
     );
+  });
+
+  it('opens an indexed knowledge citation through the scoped API, not a file URL', async () => {
+    const agentId = 'ag_abcdefghijklmnop';
+    const backend = fakeBackend({
+      [`POST /api/agents/${agentId}/knowledge/open`]: () => ({ ok: true }),
+    });
+    const href = `/api/agents/${agentId}/knowledge/file?path=%2Fdocs%2FQ3%20report.pdf`;
+    await render(`Revenue rose [Q3 report.pdf, page 2](${href}).`);
+    const link = container.querySelector('[data-knowledge-file]')!;
+    expect(link).not.toBeNull();
+    expect(click(link)).toBe(true);
+    await settle();
+    expect(backend.calls).toEqual([
+      {
+        method: 'POST',
+        path: `/api/agents/${agentId}/knowledge/open`,
+        body: { path: '/docs/Q3 report.pdf' },
+      },
+    ]);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('follows a link within the instance without a warning', async () => {

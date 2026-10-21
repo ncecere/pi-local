@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { mkdir, mkdtemp, realpath, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -181,7 +181,8 @@ export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 	const readOnlyRoots: string[] = [];
 	for (const folder of options.readOnlyRoots ?? []) {
 		try {
-			readOnlyRoots.push(realpathSync(folder));
+			// A configured directory that became a link must not grant access to its new target on restart.
+			if (lstatSync(folder).isDirectory()) readOnlyRoots.push(realpathSync(folder));
 		} catch {
 			// A folder that isn't there (an unplugged drive) gives access to nothing.
 		}

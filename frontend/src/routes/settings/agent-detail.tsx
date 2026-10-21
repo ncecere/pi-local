@@ -8,6 +8,7 @@ import { AgentStatus } from '~/components/agent-manager/agent-status';
 import { CanAskTab } from '~/components/agent-manager/can-ask-tab';
 import { ConfigTab } from '~/components/agent-manager/config-tab';
 import { KindSettingsTab } from '~/components/agent-manager/kind-settings-tab';
+import { KnowledgeTab } from '~/components/agent-manager/knowledge-tab';
 import { LogsTab } from '~/components/agent-manager/logs-tab';
 import { McpTab } from '~/components/agent-manager/mcp-tab';
 import { MemoryTab } from '~/components/agent-manager/memory-tab';
@@ -28,6 +29,7 @@ type TabId =
   | 'mcp'
   | 'kind'
   | 'memory'
+  | 'knowledge'
   | 'can-ask'
   | 'schedules'
   | 'activity'
@@ -40,6 +42,7 @@ const TAB_IDS: readonly string[] = [
   'mcp',
   'kind',
   'memory',
+  'knowledge',
   'can-ask',
   'schedules',
   'activity',
@@ -91,6 +94,7 @@ export function SettingsAgentDetailPage({
       ? [{ id: 'kind' as const, label: `${agentKindLabel(agent)} settings` }]
       : []),
     { id: 'memory', label: 'Memory' },
+    { id: 'knowledge', label: 'Knowledge' },
     { id: 'can-ask', label: 'Can ask' },
     { id: 'schedules', label: 'Schedules' },
     { id: 'activity', label: 'Activity' },
@@ -190,6 +194,7 @@ export function SettingsAgentDetailPage({
         )}
         {current === 'kind' && <KindSettingsTab agent={agent} />}
         {current === 'memory' && <MemoryTab agent={agent} />}
+        {current === 'knowledge' && <KnowledgeTab agent={agent} />}
         {current === 'can-ask' && <CanAskTab agent={agent} agents={agents.data} />}
         {current === 'schedules' && <SchedulesTab agent={agent} />}
         {current === 'activity' && <ActivityTab agent={agent} />}
