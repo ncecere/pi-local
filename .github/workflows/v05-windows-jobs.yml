@@ -1,7 +1,7 @@
 name: v0.5 owned child lifecycle
 on:
   push:
-    branches: [v05/windows-jobs]
+    branches: [v0.5, v05/windows-jobs]
     paths:
       - '.github/workflows/v05-windows-jobs.yml'
       - 'internal/process/**'
