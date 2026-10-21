@@ -3,7 +3,20 @@
 A proposal to review, not a commitment. Each item is described in
 [suggested-features.md](suggested-features.md) (section numbers in brackets).
 
-## Where we are (v0.1)
+## Release status
+
+- v0.1.0 and v0.2.0 are published.
+- v0.3 trust/control is published as [v0.3.2](https://github.com/ncecere/pi-local/releases/tag/v0.3.2), with public
+  assets and immutable-source smoke verified. v0.3.0/v0.3.1 remain unchanged, unpublished packaging attempts.
+- v0.4's implementation, independent reviews, browser QA, full source gate and cold-cache packaging preflight pass;
+  final main CI and publication/asset checks remain. Optional embeddings and a dedicated Concierge judgment
+  recommendation are deferred. See [v0.4 verification](docs/qa/v0.4.md) for actual coverage and limits.
+- [v0.5 planning](docs/plans/v0.5.md) is ready; implementation starts after v0.4 releases.
+- Only the user decides when to launch v1.0.
+
+The tables below retain proposal scope; release notes and verification records identify what actually ships.
+
+## Initial baseline (v0.1)
 
 A desktop app (macOS first) where your own durable agents work for you:
 - chat
@@ -27,7 +40,7 @@ Three strengths set it apart from hosted chat apps:
    run overnight.
 3. **Yours:** agents are folders you can read, export and share. Templates are files; memory is visible and editable.
 
-What holds it back today:
+What held the initial baseline back:
 - **A newcomer must assemble everything:** a provider, an agent, connections.
 - **Agents can't reach the web.**
 - **Approvals are all-or-nothing.**
