@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -44,6 +45,8 @@ type Template struct {
 	Schedule *Schedule `yaml:"schedule,omitempty" json:"schedule,omitempty"`
 	// MCP names the MCP servers it works with (their IDs in Settings → MCP), used when this computer has them.
 	MCP []string `yaml:"mcp,omitempty" json:"mcp,omitempty"`
+	// MCPTools restricts a named server to selected tools; absent means all tools.
+	MCPTools map[string][]string `yaml:"mcpTools,omitempty" json:"mcpTools,omitempty"`
 	// Needs says what makes it work well ("web-search", "knowledge"), so the gallery can say what to set up.
 	Needs []string `yaml:"needs,omitempty" json:"needs,omitempty"`
 	// Builtin: shipped with the app (not editable or deletable).
@@ -105,7 +108,7 @@ func New(dir string) (*Store, error) {
 		t.Builtin = true
 		s.builtin = append(s.builtin, *t)
 	}
-	order := map[string]int{"assistant": 0, "researcher": 1, "writer": 2, "daily-briefing": 3, "translator": 4, "planner": 5, "document-qa": 6, "coding": 7, "agent-builder": 8, "concierge": 9, "meeting-helper": 10}
+	order := map[string]int{"assistant": 0, "researcher": 1, "writer": 2, "daily-briefing": 3, "translator": 4, "planner": 5, "document-qa": 6, "coding": 7, "agent-builder": 8, "concierge": 9, "meeting-helper": 10, "inbox-helper": 11}
 	sort.SliceStable(s.builtin, func(i, j int) bool { return order[s.builtin[i].ID] < order[s.builtin[j].ID] })
 	return s, nil
 }
@@ -138,6 +141,11 @@ func (t *Template) check() error {
 	}
 	if t.Kind == "" {
 		t.Kind = "assistant"
+	}
+	for server, tools := range t.MCPTools {
+		if !slices.Contains(t.MCP, server) || len(tools) == 0 {
+			return bad("invalid_template", "Tool restrictions must name a template MCP server and at least one tool.")
+		}
 	}
 	// Everything an agent would be checked for: make one from it and validate.
 	cfg := agents.Config{Name: t.Name}
@@ -181,7 +189,7 @@ func (t *Template) Apply(c *agents.Config) {
 	}
 	c.MCP = nil
 	for _, slug := range t.MCP {
-		c.MCP = append(c.MCP, agents.MCPChoice{Server: slug})
+		c.MCP = append(c.MCP, agents.MCPChoice{Server: slug, Tools: slices.Clone(t.MCPTools[slug])})
 	}
 }
 
@@ -206,6 +214,12 @@ func FromAgent(id string, c agents.Config) *Template {
 	}
 	for _, m := range c.MCP {
 		t.MCP = append(t.MCP, m.Server)
+		if len(m.Tools) > 0 {
+			if t.MCPTools == nil {
+				t.MCPTools = map[string][]string{}
+			}
+			t.MCPTools[m.Server] = append([]string(nil), m.Tools...)
+		}
 	}
 	return t
 }

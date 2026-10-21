@@ -56,7 +56,7 @@ type Agent = {
 | Route | Answer |
 |---|---|
 | `GET /api/agents` | `Agent[]`, newest first. Never starts a runtime. |
-| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. The same templates as `GET /api/templates`: Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner, Document Q&A, Coding, Agent builder and Concierge, plus Meeting helper when Apple Calendar is connected, then the person's own. `triage` is retired but existing agents keep running. |
+| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. The same templates as `GET /api/templates`: Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner, Document Q&A, Coding, Agent builder and Concierge, plus Meeting helper when Apple Calendar is connected and Inbox helper when a tested custom connection exposes the reviewed mail-read tools, then the person's own. `triage` is retired but existing agents keep running. |
 | `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?, web?, knowledge?, skills?}`. The template sets defaults; supplied fields win, except empty instructions retain the template's. Returns `201 Agent`. Invalid settings return `400`; an unavailable connection-dependent template returns `409 connection_required`. Coding defaults to workspace tools `["read", "write", "edit", "bash"]`. |
 | `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?, memory?, knowledge?, skills?, budget?}` (and the other configuration fields described below). Returns `Agent`; absent fields stay unchanged. `budget: null` removes a budget. A change increments revision and restarts an awake runtime. |
 | `DELETE /api/agents/{id}` | Stops its runtime and moves its folder to the OS trash (or deletes it). Answers `{ok: true}`. |
@@ -709,8 +709,22 @@ before retrying. No edit/delete/send tools are exposed.
 The **Meeting helper** template appears only when the enabled, tested `apple_calendar` connection offers its
 model-visible `calendar` tool. Agent creation rechecks this condition (`409 connection_required` otherwise).
 It uses the careful profile, does not send invitations and explains bounded/recurring-event limits.
-**Inbox helper is deferred**: this curated set has no safely configured automatic mail capability. The calendar
-tool is supplied by the Apple connection, not a synthetic calendar backed by unconnected cloud accounts.
+
+The **Inbox helper** is offered only for an enabled, tested, error-free custom connection (signed in if using
+Pi Local OAuth) exposing both model-visible `list-mail-messages` and `get-mail-message`, each with
+`readOnlyHint: true` and no `destructiveHint: true`. These exact names are reviewed in
+[Softeria's source](https://github.com/Softeria/ms-365-mcp-server/blob/9176369b760190f7c51451fb4ea05fe5f0aeb2ac/src/endpoints.json):
+GET `/me/messages` and GET `/me/messages/{message-id}`, both `Mail.Read`. The source revision is
+`9176369b760190f7c51451fb4ea05fe5f0aeb2ac`; `src/graph-tools.ts` supplies the read-only annotations.
+A label such as Gmail or Microsoft 365 is not sufficient. Metadata is not proof of a server's identity: review and
+configure the custom server first. Microsoft/Google cards remain Advanced setup; this helper adds no OAuth flow.
+The lexicographically first qualifying server slug is selected deterministically; only those two tools are granted
+via `MCPChoice.Tools`, never the whole server. Gallery, dialog and builder use the same resolution. Creation and
+builder preparation recheck availability; approval application refuses a lost or changed mail connection.
+It uses Careful approvals, no shell/web tools or default schedule, and drafts replies only in chat. It never sends,
+archives, deletes, saves mailbox drafts or claims background monitoring. Unavailable connections mean explain and
+stop. Tests use synthetic metadata, not personal sign-ins or records. There is still no automatic mail setup;
+Meeting helper's calendar tool comes from Apple, not unconnected cloud accounts.
 
 Apple tests use synthetic objects, in-memory MCP wires and mocked JXA subprocesses only; they never start
 Apple apps or access personal records. Calendar recurrence expansion and a full permission-granted read/write
@@ -974,6 +988,7 @@ type Template = {
   schedules?: { agentMade: boolean };                     // may set its own schedules
   schedule?: { name: string; cron: string; message: string; threadMode?: "new" | "this" };  // made with the agent
   mcp?: string[];                 // MCP server IDs it works with, used when this computer has them
+  mcpTools?: Record<string, string[]>; // per-server tool restrictions; absent means all tools
   needs?: string[];               // what makes it work well: "web-search", "knowledge"
   builtin: boolean;               // shipped with the app: can't be deleted
 };
@@ -986,7 +1001,7 @@ type Template = {
 | `GET /api/templates/{id}/export` | The YAML file, `Content-Disposition: attachment; filename="<id>.pi-template.yaml"`. |
 | `POST /api/templates/{id}/export-save` | Desktop app: asks where to save it (the system Save dialog) and writes the YAML there. `{path}`, or `{cancelled: true}`; `501` in a browser (use `/export`). |
 | `DELETE /api/templates/{id}` | `{ok: true}`. `409 builtin` for a built-in. Agents made from it keep working. |
-| `POST /api/agents/{id}/save-template` | Body `{name?, description?}` (default: the agent's). A template of the agent's kind, instructions, workspace tools, approvals, web tools, `schedules.agentMade` and MCP server IDs (never its project folder, knowledge folder paths, memory or conversations). `201 Template` (category `yours`). |
+| `POST /api/agents/{id}/save-template` | Body `{name?, description?}` (default: the agent's). A template of the agent's kind, instructions, workspace tools, approvals, web tools, `schedules.agentMade` and MCP server IDs with per-tool restrictions (never its project folder, knowledge folder paths, memory or conversations). `201 Template` (category `yours`). |
 
 `POST /api/agents` with `templateId` makes an agent from one (see [Agents](#agents)). A template with a `schedule` also
 gets that schedule. The `coding` template's project folder is sent as `workspace` as before.

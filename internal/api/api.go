@@ -731,7 +731,7 @@ func (a *API) prepareAgent(ctx context.Context, in agentInput) (agents.Config, *
 	if in.TemplateID != nil && a.Templates != nil {
 		if t, err := a.Templates.Get(*in.TemplateID); err == nil {
 			if !a.templateAvailable(t) {
-				return cfg, nil, &templates.Error{Status: http.StatusConflict, Code: "connection_required", Message: "Connect Apple Calendar and test its calendar tool before using Meeting helper."}
+				return cfg, nil, &templates.Error{Status: http.StatusConflict, Code: "connection_required", Message: templateConnectionRequired(t)}
 			}
 			tmpl = t
 			t.Apply(&cfg)

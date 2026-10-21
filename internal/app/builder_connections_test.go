@@ -19,13 +19,17 @@ func TestBuilderCannotApplyAnUnavailableConnectionTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"create_agent", "update_agent"} {
-		t.Run(tool, func(t *testing.T) {
-			configuration := map[string]any{"name": "Unavailable", "templateId": "meeting-helper"}
+	for _, tc := range []struct{ tool, template string }{
+		{"create_agent", "meeting-helper"}, {"update_agent", "meeting-helper"},
+		{"create_agent", "inbox-helper"}, {"update_agent", "inbox-helper"},
+	} {
+		tool := tc.tool
+		t.Run(tool+"/"+tc.template, func(t *testing.T) {
+			configuration := map[string]any{"name": "Unavailable", "templateId": tc.template}
 			if tool == "update_agent" {
 				configuration["agent"] = child
 			}
-			raw, err := json.Marshal(map[string]any{"key": tool, "approvalId": "ap_" + tool, "tool": tool, "configuration": configuration})
+			raw, err := json.Marshal(map[string]any{"key": tool + tc.template, "approvalId": "ap_" + tool, "tool": tool, "configuration": configuration})
 			if err != nil {
 				t.Fatal(err)
 			}

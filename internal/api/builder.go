@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 
 	"github.com/ncecere/pi-local/internal/agents"
@@ -157,7 +158,7 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 					return nil, builderRefuse("Unknown template %q.", *config.TemplateID)
 				}
 				if !a.templateAvailable(tmpl) {
-					return nil, builderRefuse("Connect and test the template's required connection before using it.")
+					return nil, builderRefuse("%s", templateConnectionRequired(tmpl))
 				}
 				tmpl.Apply(&cfg)
 				patch.TemplateID = nil
@@ -264,6 +265,31 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 	}
 	if err := a.builderSkills(cfg.Skills); err != nil {
 		return nil, err
+	}
+	// Approval can outlive a connection. Do not create from a stale capability
+	// template or silently switch the mailbox that the person reviewed.
+	var original struct{ Config BuilderInput }
+	if err := json.Unmarshal([]byte(inputText), &original); err != nil {
+		return nil, err
+	}
+	if id := original.Config.TemplateID; id != nil && (*id == "inbox-helper" || *id == "meeting-helper") {
+		if a.Templates == nil {
+			return nil, builderRefuse("Templates are unavailable.")
+		}
+		t, err := a.Templates.Get(*id)
+		if err != nil {
+			return nil, builderRefuse("The template is no longer available. Prepare a new proposal.")
+		}
+		if !a.templateAvailable(t) {
+			return nil, builderRefuse("%s", templateConnectionRequired(t))
+		}
+		if t.Builtin && t.ID == "inbox-helper" {
+			var resolved agents.Config
+			t.Apply(&resolved)
+			if !reflect.DeepEqual(resolved.MCP, cfg.MCP) {
+				return nil, builderRefuse("The mail connection changed. Prepare a new proposal for review.")
+			}
+		}
 	}
 	commit := func(tx *sql.Tx) error {
 		if proposal.Tool == "create_agent" {

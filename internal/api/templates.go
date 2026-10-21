@@ -47,11 +47,21 @@ func (a *API) templateList() []templates.Template {
 
 // Capability-dependent templates are offered and accepted only with a tested, enabled connection.
 func (a *API) templateAvailable(t *templates.Template) bool {
-	if !t.Builtin || t.ID != "meeting-helper" {
+	if !t.Builtin || (t.ID != "meeting-helper" && t.ID != "inbox-helper") {
 		return true
 	}
 	if a.MCP == nil {
 		return false
+	}
+	if t.ID == "inbox-helper" {
+		server, tools, err := a.MCP.MailReadTools(context.Background())
+		if err != nil || server == "" {
+			return false
+		}
+		// Replace fields on this template copy, never mutate the shared store's maps/slices.
+		t.MCP = []string{server}
+		t.MCPTools = map[string][]string{server: tools}
+		return true
 	}
 	list, err := a.MCP.Connections(context.Background())
 	if err != nil {
@@ -68,6 +78,13 @@ func (a *API) templateAvailable(t *templates.Template) bool {
 		}
 	}
 	return false
+}
+
+func templateConnectionRequired(t *templates.Template) string {
+	if t.ID == "inbox-helper" {
+		return "Inbox helper needs an already configured, enabled and tested custom mail connection exposing list-mail-messages and get-mail-message with read-only metadata. Finish any required sign-in and test it in Custom connections."
+	}
+	return "Connect Apple Calendar and test its calendar tool before using Meeting helper."
 }
 
 func (a *API) listTemplates(w http.ResponseWriter, r *http.Request) {

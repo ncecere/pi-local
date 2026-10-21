@@ -394,6 +394,8 @@ export interface AgentTemplate {
   schedule?: { name: string; cron: string; message: string; threadMode?: string };
   /** MCP server IDs it works with, used when this computer has them. */
   mcp?: string[];
+  /** Per-server tool restrictions; absent means all tools on that server. */
+  mcpTools?: Record<string, string[]>;
   /** What makes it work well ("web-search"). */
   needs?: string[];
   /** Shipped with the app: can't be deleted. */
