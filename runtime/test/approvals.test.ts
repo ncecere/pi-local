@@ -265,6 +265,9 @@ describe("tool approvals", () => {
 		cleanup.push(async () => aborter.abort());
 		const deltas = follow(`${agent.baseUrl}/threads/t/events?format=delta&v=1`, agent.token, aborter.signal);
 		const views = follow(`${agent.baseUrl}/threads/t/events`, agent.token, aborter.signal);
+		// Both streams connected (their first event is the snapshot) before the request exists: otherwise it can arrive
+		// in the delta stream's snapshot instead of as an approvals.set.
+		await until(() => deltas.events.length > 0 && views.events.length > 0);
 		await agent.send("t", "what time is it?", { author: ann });
 		const request = await agent.pendingApproval("t");
 		await until(() => deltas.events.some((e) => e.event === "approvals.set"));
