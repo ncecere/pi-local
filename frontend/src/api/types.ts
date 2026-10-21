@@ -877,7 +877,13 @@ export interface UpdateRelease {
   published: string;
 }
 
-export type UpdateStage = 'downloading' | 'verifying' | 'installing' | 'restarting' | 'failed';
+export type UpdateStage =
+  | 'downloading'
+  | 'verifying'
+  | 'backing-up'
+  | 'installing'
+  | 'restarting'
+  | 'failed';
 
 /** `GET /api/update` (and the `update` event): the app's version, the latest release, an install in progress. */
 export interface UpdateStatus {
@@ -1023,3 +1029,75 @@ export type ChatToolMessage = {
 
 /** `at`: Unix milliseconds (a user message's sending, an assistant reply's start). */
 export type ChatMessage = ChatUserMessage | ChatAssistantMessage | ChatToolMessage;
+
+// ── Backups and diagnostics (docs/api.md, "Backups and diagnostics (v0.3)") ──────────────────
+
+export type BackupReason = 'manual' | 'automatic' | 'before-update';
+
+/** A provider, MCP server or service whose secrets are in the keychain, not in a backup (names only). */
+export interface BackupKeyNeed {
+  kind: 'provider' | 'mcp' | 'web-search' | 'judgments';
+  id: string;
+  name: string;
+  /** "API key", "Header X-Org", "Variable GITHUB_TOKEN", "Sign-in". */
+  items: string[];
+}
+
+export interface Backup {
+  /** The file's name without .zip. */
+  id: string;
+  file: string;
+  path: string;
+  /** Unix ms. */
+  createdAt: number;
+  /** The zip's size on disk, in bytes. */
+  size: number;
+  /** Size before compression. */
+  bytes: number;
+  reason: BackupReason;
+  version: string;
+  agents: number;
+  /** What the agents' own workspace folders add, before compression. */
+  workspaceBytes: number;
+  needsKeys: BackupKeyNeed[];
+  warnings: string[];
+  /** False for a file that isn't a backup this version can open: it can't be restored. */
+  readable: boolean;
+}
+
+/** A restore waiting for the app to restart. */
+export interface PendingRestore {
+  id: string;
+  requestedAt: number;
+  phase: 'pending' | 'applying';
+}
+
+export interface LastRestore {
+  ok: boolean;
+  /** Unix ms. */
+  at: number;
+  /** The backup restored. */
+  id: string;
+  /** The folder the replaced data was moved to. */
+  movedTo: string;
+  error: string;
+}
+
+/** `GET /api/backups`. */
+export interface BackupList {
+  backups: Backup[];
+  /** Where backups are kept. */
+  folder: string;
+  /** The daily automatic backup is on. */
+  auto: boolean;
+  /** How many automatic backups are kept. */
+  keep: number;
+  /** A backup is being made. */
+  running: boolean;
+  /** Why the last automatic backup failed; "" if it didn't. */
+  autoError: string;
+  pending: PendingRestore | null;
+  /** The app can restart itself to restore; otherwise the person quits and opens it. */
+  canRestart: boolean;
+  lastRestore: LastRestore | null;
+}

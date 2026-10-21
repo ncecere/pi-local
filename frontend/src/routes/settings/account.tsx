@@ -2,6 +2,7 @@ import { FolderOpen } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 import { errorMessage } from '~/api/client';
+import { DiagnosticsRow } from '~/components/settings/diagnostics-row';
 import { SettingsRow, SettingsSection } from '~/components/settings/settings-layout';
 import { UpdatesSection } from '~/components/settings/updates-section';
 import { Button } from '~/components/ui/button';
@@ -120,6 +121,7 @@ export function SettingsAccountPage() {
             </Button>
           </div>
         </SettingsRow>
+        <DiagnosticsRow />
       </SettingsSection>
 
       <UpdatesSection />

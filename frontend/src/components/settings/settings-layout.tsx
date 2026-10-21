@@ -30,7 +30,8 @@ interface Tab {
     | '/settings/mcp'
     | '/settings/schedules'
     | '/settings/conversations'
-    | '/settings/usage';
+    | '/settings/usage'
+    | '/settings/backups';
   label: string;
   exact: boolean;
   /** Shown only while this optional feature is on. */
@@ -48,6 +49,7 @@ const ALL_TABS: Tab[] = [
   { to: '/settings/schedules', label: 'Schedules', exact: false },
   { to: '/settings/conversations', label: 'Conversations', exact: false },
   { to: '/settings/usage', label: 'Usage', exact: false },
+  { to: '/settings/backups', label: 'Backups', exact: false },
 ];
 
 const isActive = (tab: Tab, pathname: string) =>

@@ -24,6 +24,7 @@ import type {
 import { transport } from '~/api/transport';
 import { AGENTS_KEY, applyAgentEvent, threadsKey } from '~/hooks/use-agents';
 import { APPROVALS_KEY } from '~/hooks/use-approvals';
+import { BACKUPS_KEY } from '~/hooks/use-backups';
 import { applyElicitationData, ELICITATIONS_KEY } from '~/hooks/use-elicitations';
 import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
 import { MCP_LOGINS_KEY, MCP_SERVERS_KEY, putMcpLogin } from '~/hooks/use-mcp';
@@ -69,6 +70,8 @@ import { applyTeamEvent } from '~/lib/teams';
  *   It updates ['schedules'] in place.
  * - `schedule_run`: a scheduled run ended. Its schedule's last run (and its
  *   history, when open) change, and a quiet toast links to its conversation.
+ * - `backup`: backups changed (one made or deleted, the daily setting, a restore
+ *   recorded). It reads ['backups'] again (Settings → Backups).
  * - `update`: the update status changed (a check, or an install's stage). It
  *   replaces ['update'] (Settings → About).
  * - `memory`: the person's memory changed (`agentId` "": the About me card,
@@ -118,6 +121,7 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({ queryKey: MCP_LOGINS_KEY });
       void queryClient.invalidateQueries({ queryKey: SCHEDULES_KEY });
       void queryClient.invalidateQueries({ queryKey: UPDATE_KEY });
+      void queryClient.invalidateQueries({ queryKey: BACKUPS_KEY });
       void queryClient.invalidateQueries({ queryKey: YOU_KEY });
       void queryClient.invalidateQueries({
         predicate: (query) =>
@@ -329,6 +333,10 @@ export function usePlatformEvents() {
         return;
       }
       if (status && typeof status === 'object') queryClient.setQueryData(UPDATE_KEY, status);
+    });
+    // Backups changed (made, deleted, the setting, a restore recorded): read the list again.
+    source.on('backup', () => {
+      void queryClient.invalidateQueries({ queryKey: BACKUPS_KEY });
     });
     source.on('thread', (data) => {
       let event: ThreadEvent;

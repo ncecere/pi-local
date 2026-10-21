@@ -20,6 +20,7 @@ import { formatRelativeTime } from '~/lib/utils';
 const STAGE_TEXT: Record<Exclude<UpdateStage, 'failed'>, string> = {
   downloading: 'Downloading…',
   verifying: 'Checking the signature…',
+  'backing-up': 'Backing up your data…',
   installing: 'Installing…',
   restarting: 'Restarting…',
 };
