@@ -133,6 +133,27 @@ const posts = (backend: ReturnType<typeof fakeBackend>, path = MESSAGES) =>
   backend.calls.filter((call) => call.method === 'POST' && call.path === path);
 
 describe('The model picker', () => {
+  it('marks unpriced choices as cost not counted without inventing prices', async () => {
+    await showThread(
+      { modelPerConversation: true },
+      {
+        'GET /api/providers': () => ({
+          providers: [
+            {
+              models: [
+                { id: 'acme/strong', inputPrice: null, outputPrice: null },
+                { id: 'acme/quick', inputPrice: 0, outputPrice: 0 },
+              ],
+            },
+          ],
+        }),
+      },
+    );
+    await openMenu();
+    expect(menuText()).toContain('Strong · cost not counted');
+    expect(menuText()).not.toContain('Quick · cost not counted');
+  });
+
   it('is not there while the feature is off', async () => {
     await showThread({ modelPerConversation: false });
     expect(document.querySelector('textarea[aria-label="Message input"]')).not.toBeNull();

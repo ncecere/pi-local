@@ -277,7 +277,18 @@ export function suggestRule(
   // kept too, so one harmless call doesn't allow every `git` command.
   const sub =
     second && /^(?:[A-Za-z][A-Za-z0-9:_-]*|-[A-Za-z0-9-]+)$/.test(second) ? ` ${second}` : '';
-  return { tool, args: { command: `${first}${sub}*` } };
+  return { tool, args: { command: `${first}${sub} *` } };
+}
+
+/** A shell command remembered exactly; a literal star would be a glob, not exact. */
+export function exactCommandRule(
+  tool: string,
+  args: unknown,
+): { tool: string; args: Record<string, string> } | null {
+  const command = commandOf(args)?.trim();
+  return tool === 'bash' && command && !command.includes('*') && !isCompoundCommand(command)
+    ? { tool, args: { command } }
+    : null;
 }
 
 /** Whether the card offers "Approve and always allow this": not for what a built-in or an ask rule, or the agent's own code, asked. */

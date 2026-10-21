@@ -9,10 +9,11 @@ export function dollars(value: number): string {
     : `$${whole}.${String(Math.abs(cents % 100)).padStart(2, '0')}`;
 }
 
-/** A spent amount with cents always ($0.90, $17.30), so small amounts don't read as zero. */
+/** Small spending keeps mills visible; larger amounts show cents. */
 export function spent(value: number): string {
-  if (value > 0 && value < 0.005) return '<$0.01';
-  return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (value > 0 && value < 0.0005) return '<$0.001';
+  const digits = value > 0 && value < 1 ? 3 : 2;
+  return `$${value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 }
 
 /** The percent used, whole, for display ("87%"); never "100%" until it is. */
@@ -70,11 +71,27 @@ export function budgetNotice(
 
 /** What a budget's amount field accepts: dollars, at least a cent. */
 export function parseBudgetAmount(text: string): number | null {
-  const cleaned = text.trim().replace(/^\$/, '').replace(/,/g, '');
+  // One decimal separator, never silently treat a decimal comma as thousands.
+  const cleaned = text.trim().replace(/^\$/, '').replace(',', '.');
   if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null;
   const value = Number(cleaned);
   return value >= 0.01 && value <= 1_000_000 ? value : null;
 }
+
+/** Both scopes matter: raising one does not clear the other. */
+export function budgetNotices(
+  agentId: string,
+  overview: BudgetOverview | undefined,
+): BudgetNotice[] {
+  if (!overview) return [];
+  return [
+    budgetNotice(agentId, { app: overview.app, agents: [] }),
+    budgetNotice(agentId, { app: null, agents: overview.agents }),
+  ].filter((notice): notice is BudgetNotice => notice !== null);
+}
+
+/** Plain editable cents, without currency or grouping. */
+export const budgetAmount = (value: number): string => value.toFixed(2);
 
 /** Whether two budgets are the same (null: none). */
 export function sameBudget(a: AgentBudget | null | undefined, b: AgentBudget | null | undefined) {

@@ -10,8 +10,11 @@ import {
   approvalOutcome,
   argumentsView,
   canAlwaysAllow,
+  commandOf,
   describeRule,
+  exactCommandRule,
   expiresIn,
+  isCompoundCommand,
   suggestRule,
 } from '~/lib/approvals';
 import { formatExact } from '~/lib/dates';
@@ -166,6 +169,9 @@ export function ApprovalCard({
   // "Approve and always allow this": the rule it would add (none for what a built-in or ask rule asked, or a
   // compound command: no allow rule could cover it).
   const always = canAlwaysAllow(approval) ? suggestRule(tool, shown) : null;
+  const exact = canAlwaysAllow(approval) ? exactCommandRule(tool, shown) : null;
+  const [rememberExact, setRememberExact] = useState(false);
+  const remembered = rememberExact ? exact : always;
 
   const send = (decision: 'approve' | 'deny', alwaysAllowed?: string) => {
     if (decide.isPending) return;
@@ -195,13 +201,13 @@ export function ApprovalCard({
 
   // The rule first: if it can't be added, nothing is approved, and the person can still choose Approve.
   const approveAlways = async () => {
-    if (!always || decide.isPending || addRule.isPending) return;
+    if (!remembered || decide.isPending || addRule.isPending) return;
     try {
-      await addRule.mutateAsync({ agentId, ...always });
+      await addRule.mutateAsync({ agentId, ...remembered });
     } catch {
       return; // said on the card (addRule.error)
     }
-    send('approve', describeRule(always));
+    send('approve', describeRule(remembered));
   };
 
   const cancelDeny = () => {
@@ -351,9 +357,33 @@ export function ApprovalCard({
         </div>
       )}
       {always && !denying && (
-        <p className="-mt-1 text-xs text-[var(--text-muted)]">
-          Always allow adds a rule: <span className="font-mono">{describeRule(always)}</span>. You
-          can remove it on the agent's Tools tab.
+        <div className="space-y-2 text-xs text-[var(--text-muted)]">
+          {exact && (
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={rememberExact}
+                onChange={(event) => setRememberExact(event.target.checked)}
+              />
+              Remember only this exact command
+            </label>
+          )}
+          <p>
+            Always allow remembers{' '}
+            {tool === 'bash'
+              ? rememberExact
+                ? 'only this command'
+                : 'this command and its arguments, not similarly named commands'
+              : 'every call to this tool'}
+            : <span className="font-mono">{describeRule(remembered ?? always)}</span>. Change or
+            remove it on the agent's Tools tab.
+          </p>
+        </div>
+      )}
+      {tool === 'bash' && isCompoundCommand(commandOf(shown) ?? '') && (
+        <p className="text-xs text-[var(--text-muted)]">
+          This command combines commands or uses shell operators. It can be approved once, but
+          cannot be remembered as an allow rule. Ask for separate simple commands to remember them.
         </p>
       )}
     </section>

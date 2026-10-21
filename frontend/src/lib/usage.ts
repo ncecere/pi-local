@@ -1,4 +1,5 @@
 import type { UsageTotals } from '~/api/types';
+import { spent } from '~/lib/budget';
 import { dayFromKey } from '~/lib/dates';
 
 /** The periods usage can be read for. */
@@ -21,13 +22,6 @@ export const tokensOf = (totals: UsageTotals) =>
 
 export const cachedOf = (totals: UsageTotals) => totals.cacheReadTokens + totals.cacheWriteTokens;
 
-const money = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
 /**
  * The cost to show: "—" when every request went to unpriced models, otherwise
  * the dollars, `partial` when some requests are not in it. Under a cent is
@@ -36,8 +30,7 @@ const money = new Intl.NumberFormat('en-US', {
 export function costOf(totals: UsageTotals): { text: string; partial: boolean } {
   if (totals.requests > 0 && totals.unpricedRequests >= totals.requests)
     return { text: '—', partial: false };
-  const text =
-    totals.costUsd > 0 && totals.costUsd < 0.005 ? '<$0.01' : money.format(totals.costUsd);
+  const text = spent(totals.costUsd);
   return { text, partial: totals.unpricedRequests > 0 };
 }
 

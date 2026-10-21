@@ -1,6 +1,7 @@
 import type { Agent } from '~/api/client';
 import { FIELD } from '~/components/models/fields';
 import type { AgentCatalog } from '~/hooks/use-agents';
+import { useUnpricedModels } from '~/hooks/use-providers';
 import { groupModelsByProvider } from '~/lib/models';
 import { cn } from '~/lib/utils';
 
@@ -26,6 +27,7 @@ export function ModelSelect({
   describedBy?: string;
   disabled?: boolean;
 }) {
+  const unpriced = useUnpricedModels();
   const missing =
     current && !catalog.models.some((model) => model.id === current.id) ? current : null;
   const groups = groupModelsByProvider(catalog.models);
@@ -49,6 +51,7 @@ export function ModelSelect({
           {group.models.map((model) => (
             <option key={model.id} value={model.id}>
               {model.name}
+              {unpriced.has(model.id) ? ' · cost not counted' : ''}
               {model.id === catalog.defaultModelId ? ' (default)' : ''}
             </option>
           ))}

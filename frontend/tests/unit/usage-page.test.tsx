@@ -134,7 +134,8 @@ describe('Settings → Usage: the drill-down', () => {
     const text = document.body.textContent ?? '';
     expect(text).toContain('All agents together');
     expect(text).toContain('$42.50 of $50 · 85%');
-    expect(text).toContain('Not counting 3 requests to models without prices.');
+    expect(text).toContain("Costs and budgets don't include requests to models without prices.");
+    expect(document.querySelectorAll('[data-unpriced-warning]').length).toBe(1);
     expect(document.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe(
       '85',
     );
@@ -229,11 +230,11 @@ describe('Settings → Usage: the budget for all agents', () => {
     view = await renderWithQuery(<SettingsUsagePage />);
     await settle();
     const amount = fieldByLabel('Monthly budget') as HTMLInputElement;
-    expect(amount.value).toBe('50');
+    expect(amount.value).toBe('50.00');
     expect((fieldByLabel('At the limit') as HTMLSelectElement).value).toBe('warn');
     expect(buttonByText('Save')?.disabled).toBe(true);
 
-    await typeInto(amount, '75.5');
+    await typeInto(amount, '75,5');
     await choose(fieldByLabel('At the limit'), 'stop');
     await click(buttonByText('Save'));
     const put = backend.calls.find((call) => call.method === 'PUT');

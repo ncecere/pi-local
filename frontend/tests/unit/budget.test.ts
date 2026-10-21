@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { BudgetOverview, BudgetStatus } from '../../src/api/types.ts';
 import {
+  budgetAmount,
   budgetNotice,
+  budgetNotices,
   dollars,
   parseBudgetAmount,
   percentText,
@@ -35,10 +37,11 @@ describe('money', () => {
   });
 
   it('writes what is spent with cents, small amounts as under a cent', () => {
-    expect(spent(0.9)).toBe('$0.90');
+    expect(spent(0.9)).toBe('$0.900');
+    expect(spent(0.0124)).toBe('$0.012');
     expect(spent(17.3)).toBe('$17.30');
     expect(spent(0)).toBe('$0.00');
-    expect(spent(0.0004)).toBe('<$0.01');
+    expect(spent(0.0004)).toBe('<$0.001');
     expect(spent(1234.5)).toBe('$1,234.50');
   });
 
@@ -94,6 +97,18 @@ describe('budgetNotice', () => {
     );
   });
 
+  it('keeps both scopes visible, including a warning alongside a stop', () => {
+    const notices = budgetNotices(
+      'ag_hardac',
+      overview(
+        [status({ state: 'near', percent: 85 })],
+        status({ scope: 'app', state: 'over', blocked: true }),
+      ),
+    );
+    expect(notices.map((notice) => notice.status.scope)).toEqual(['app', 'agent']);
+    expect(notices.map((notice) => notice.kind)).toEqual(['stopped', 'near']);
+  });
+
   it('puts the app budget in front when it is the worse of the two', () => {
     const app = status({
       scope: 'app',
@@ -120,13 +135,29 @@ describe('budget amounts', () => {
   it('accepts dollars from a cent to a million', () => {
     expect(parseBudgetAmount('20')).toBe(20);
     expect(parseBudgetAmount(' $20.50 ')).toBe(20.5);
-    expect(parseBudgetAmount('1,000')).toBe(1000);
+    expect(parseBudgetAmount('10,5')).toBe(10.5);
+    expect(parseBudgetAmount('10,50')).toBe(10.5);
+    expect(budgetAmount(10.5)).toBe('10.50');
     expect(parseBudgetAmount('0.01')).toBe(0.01);
     expect(parseBudgetAmount('1000000')).toBe(1_000_000);
   });
 
   it('refuses the rest', () => {
-    for (const text of ['', '0', '-5', 'ten', '1.234', '1000001', '2e3', '$']) {
+    for (const text of [
+      '',
+      '0',
+      '-5',
+      'ten',
+      '1.234',
+      '1000001',
+      '2e3',
+      '$',
+      '1,000',
+      '1,2,3',
+      '10,5.0',
+      'NaN',
+      'Infinity',
+    ]) {
       expect(parseBudgetAmount(text), text).toBeNull();
     }
   });

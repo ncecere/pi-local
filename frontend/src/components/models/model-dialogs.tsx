@@ -229,7 +229,7 @@ export function ModelDialog({
                 inputMode="decimal"
                 value={inputPrice}
                 onChange={(event) => setInputPrice(event.target.value)}
-                placeholder="3.00"
+                placeholder="Not priced"
                 aria-describedby={`${id}-in-price-hint`}
                 className={FIELD}
               />
@@ -248,7 +248,7 @@ export function ModelDialog({
                 inputMode="decimal"
                 value={outputPrice}
                 onChange={(event) => setOutputPrice(event.target.value)}
-                placeholder="15.00"
+                placeholder="Not priced"
                 aria-describedby={`${id}-out-price-hint`}
                 className={FIELD}
               />

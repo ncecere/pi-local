@@ -36,7 +36,7 @@ import { useBudgets } from '~/hooks/use-budgets';
 import { type ChatScrollTarget, useChatScroll } from '~/hooks/use-chat-scroll';
 import { useElicitationsByThread } from '~/hooks/use-elicitations';
 import { useModelChoice } from '~/hooks/use-model-choice';
-import { budgetNotice } from '~/lib/budget';
+import { budgetNotices } from '~/lib/budget';
 import { isPendingMessage, type ReplyMetadata } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
 import {
@@ -103,7 +103,17 @@ function ThreadConversation({
   const session = useAgentThread({ agentId, threadId, handover });
   // The agent's budget (or the app's) nearly used, over, or used up: said above the message box.
   const budgets = useBudgets();
-  const budgetNote = budgetNotice(agentId, budgets.data);
+  const budgetNotes = budgetNotices(agentId, budgets.data);
+  if (session.budgetRefusal && !budgets.data) {
+    const refused = session.budgetRefusal;
+    budgetNotes.push(
+      ...budgetNotices(agentId, {
+        app: refused.scope === 'app' ? refused : null,
+        agents: refused.scope === 'agent' ? [refused] : [],
+      }),
+    );
+  }
+  const showSendError = session.sendError && !(session.overBudget && budgetNotes.length > 0);
   const info = useThreadInfo(agentId, threadId);
   // The model and thinking level for this conversation, chosen in the composer. A conversation
   // opened from the new chat page starts with the choice its first message carries.
@@ -453,7 +463,7 @@ function ThreadConversation({
                     {dropped && (
                       <NoReplyNote agentName={agent?.name ?? 'The agent'} onRetry={retry} />
                     )}
-                    {session.sendError && (
+                    {showSendError && (
                       <p
                         role="alert"
                         className="rounded-xl bg-[var(--danger)]/15 px-4 py-3 text-sm text-[var(--danger-on-tint)]"
@@ -492,11 +502,11 @@ function ThreadConversation({
             )}
           </div>
 
-          {budgetNote && (
-            <div className="px-4 pb-2">
-              <BudgetBanner notice={budgetNote} />
+          {budgetNotes.map((notice) => (
+            <div key={notice.status.scope} className="px-4 pb-2">
+              <BudgetBanner notice={notice} />
             </div>
-          )}
+          ))}
           <Composer
             autoFocus={(handover?.focus ?? false) || focusComposer}
             value={session.draft}

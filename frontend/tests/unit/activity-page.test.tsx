@@ -90,6 +90,30 @@ async function choose(select: HTMLElement | null, value: string) {
 }
 
 describe('Settings → Activity', () => {
+  it('names approval tools in human words and includes the key argument', async () => {
+    fakeBackend({
+      'GET /api/agents': () => agents,
+      'GET /api/activity?limit=100': () =>
+        page([
+          entry({
+            kind: 'approval',
+            title: 'Approved bash',
+            detail: {
+              tool: 'bash',
+              arguments: { command: 'git status --short' },
+              summary: 'Asked by the profile',
+            },
+          }),
+        ]),
+    });
+    view = await renderWithQuery(<SettingsActivityPage />);
+    await settle();
+    const row = document.querySelector('li[data-kind="approval"]');
+    expect(row?.textContent).toContain('Approved: Run command');
+    expect(row?.textContent).toContain('git status --short');
+    expect(row?.textContent).toContain('Asked by the profile');
+  });
+
   it('lists what happened, newest first, with how each thing ended and a link to its conversation', async () => {
     fakeBackend({
       'GET /api/agents': () => agents,
@@ -144,7 +168,7 @@ describe('Settings → Activity', () => {
       'sign_in',
     ]);
     expect(rows[0]!.textContent).toContain('Tool call');
-    expect(rows[0]!.textContent).toContain('bash');
+    expect(rows[0]!.textContent).toContain('Run command');
     expect(rows[0]!.textContent).toContain('git status');
     expect(rows[0]!.textContent).toContain('Hardac');
     expect(rows[0]!.textContent).toContain('Done');

@@ -1,5 +1,14 @@
 import type { ActivityEntry, ActivityKind, ChatMessage, ChatToolCall } from '~/api/client';
-import { approvalNote, argumentsLine, clip, entryLine, formatDuration } from '~/lib/activity';
+import {
+  approvalNote,
+  argumentsLine,
+  clip,
+  entryLine,
+  entryTitle,
+  formatDuration,
+  humanToolName,
+  previewLine,
+} from '~/lib/activity';
 
 /**
  * A conversation's "What happened" timeline: the steps of a conversation in order, from the view's own messages and
@@ -89,7 +98,7 @@ export function buildTimeline(
         at: message.at ?? 0,
         kind: 'message',
         title,
-        line: clip(message.text, 160),
+        line: previewLine(message.text, 160),
       });
     } else if (message.role === 'assistant') {
       for (const call of message.toolCalls ?? []) {
@@ -118,7 +127,7 @@ export function buildTimeline(
           id: `call:${call.id}:${message.id}`,
           at: call.startedAt ?? (entry ? entry.at - (entry.durationMs ?? 0) : (message.at ?? 0)),
           kind: 'tool',
-          title: call.name,
+          title: humanToolName(call.name),
           line: argumentsLine(call.arguments),
           ...(note || problem ? { note: [note, problem].filter(Boolean).join(' · ') } : {}),
           ...(durationMs !== undefined && durationMs !== null ? { durationMs } : {}),
@@ -140,7 +149,7 @@ export function buildTimeline(
           at: message.at ?? 0,
           kind: 'reply',
           title: 'Replied',
-          line: clip(message.text, 160),
+          line: previewLine(message.text, 160),
         });
       }
     }
@@ -152,7 +161,7 @@ export function buildTimeline(
       id: `log:${entry.id}`,
       at: entry.at,
       kind: entry.kind,
-      title: entry.title,
+      title: entryTitle(entry),
       ...(entry.durationMs !== null ? { durationMs: entry.durationMs } : {}),
     };
     const outcome = OUTCOMES.has(entry.outcome) ? (entry.outcome as StepOutcome) : undefined;

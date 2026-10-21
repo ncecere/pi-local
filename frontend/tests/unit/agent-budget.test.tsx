@@ -123,7 +123,7 @@ describe("An agent's budget (Settings → Agents → Overview)", () => {
     });
     expect(toast).toHaveBeenCalledWith('Hardac saved.');
     // Drawn again from what was saved.
-    expect((fieldByLabel('Monthly budget') as HTMLInputElement).value).toBe('20');
+    expect((fieldByLabel('Monthly budget') as HTMLInputElement).value).toBe('20.00');
     expect(buttonByText('Remove the budget')).toBeDefined();
   });
 
@@ -178,7 +178,7 @@ describe('The budget banner above a conversation', () => {
     expect(banner?.getAttribute('data-budget-banner')).toBe('near');
     expect(banner?.getAttribute('role')).toBe('status');
     expect(banner?.textContent).toContain('Hardac has used 86% of its $20 budget for October.');
-    expect(banner?.querySelector('a')?.textContent).toBe('Open its settings');
+    expect(banner?.querySelector('a')?.textContent).toBe('Raise agent budget');
   });
 
   it('is an alert when the agent is stopped', async () => {
@@ -203,7 +203,7 @@ describe('The budget banner above a conversation', () => {
       <BudgetBanner notice={budgetNotice('ag_hardac', { app, agents: [] })} />,
     );
     const link = document.querySelector('[data-budget-banner] a');
-    expect(link?.textContent).toBe('Open usage');
+    expect(link?.textContent).toBe('Raise app budget');
     expect(link?.getAttribute('href')).toBe('/settings/usage');
   });
 });

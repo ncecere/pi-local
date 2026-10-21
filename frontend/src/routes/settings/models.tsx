@@ -144,6 +144,7 @@ function modelFacts(model: Model): string {
     facts.push(
       `${formatPrice(model.inputPrice)} in / ${formatPrice(model.outputPrice)} out per M${model.priceSource === 'list' ? ' (list)' : ''}`,
     );
+  else facts.push('cost not counted');
   return facts.join(' · ');
 }
 

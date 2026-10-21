@@ -1,4 +1,43 @@
 import type { ActivityEntry, ActivityFilters, ActivityKind } from '~/api/client';
+import { stripHarness } from '~/lib/diagnostics';
+import { plainTextOfMarkdown } from '~/shared/markdown-plain';
+
+export function previewLine(value: string, max = 160): string {
+  return clip(plainTextOfMarkdown(stripHarness(value)), max);
+}
+
+export function humanToolName(tool: string): string {
+  const names: Record<string, string> = {
+    bash: 'Run command',
+    read: 'Read file',
+    write: 'Write file',
+    edit: 'Edit file',
+    web_search: 'Search the web',
+    web_fetch: 'Read web page',
+    ask_person: 'Ask you',
+    notify_person: 'Notify you',
+    ask_agent: 'Ask another agent',
+    todo: 'Update checklist',
+  };
+  return (
+    names[tool] ??
+    tool
+      .replace(/^mcp__/, '')
+      .replace(/__/g, ': ')
+      .replace(/_/g, ' ')
+  );
+}
+
+export function entryTitle(entry: ActivityEntry): string {
+  if (entry.kind === 'tool') return humanToolName(entry.title);
+  if (entry.kind === 'approval' && typeof entry.detail?.tool === 'string') {
+    const prefix = entry.title.endsWith(entry.detail.tool)
+      ? entry.title.slice(0, -entry.detail.tool.length).trim()
+      : entry.title;
+    return `${prefix}: ${humanToolName(entry.detail.tool)}`;
+  }
+  return entry.title;
+}
 
 /** The audit log's words (docs/api.md, "Activity (v0.3)"). Pure. */
 
@@ -113,13 +152,15 @@ export function entryLine(entry: ActivityEntry): string {
     case 'tool':
       return argumentsLine(detail.arguments);
     case 'message':
-      return text(detail.preview);
+      return previewLine(text(detail.preview));
     case 'ask': {
-      const preview = text(detail.preview);
+      const preview = previewLine(text(detail.preview));
       return preview ? `“${preview}”` : '';
     }
     case 'approval':
-      return text(detail.reason) || text(detail.summary);
+      return [argumentsLine(detail.arguments), text(detail.reason) || text(detail.summary)]
+        .filter(Boolean)
+        .join(' · ');
     default:
       return text(detail.error);
   }

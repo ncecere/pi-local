@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { ApiError, api, type Backup, type BackupList } from '~/api/client';
 import { filenameFromContentDisposition, saveBlob } from '~/lib/download';
 
@@ -67,6 +68,7 @@ export function useDeleteBackup() {
 export function useRevealBackup() {
   return useMutation({
     mutationFn: (id: string) => api.post<{ ok: true }>(`/api/backups/${id}/reveal`),
+    onSuccess: () => toast('Selected the backup in Finder.'),
   });
 }
 
@@ -110,7 +112,7 @@ export function useSaveDiagnostics() {
       const filename =
         filenameFromContentDisposition(file.contentDisposition) ?? 'pi-local-diagnostics.zip';
       saveBlob(file.blob, filename);
-      return filename;
+      return `${filename} to browser Downloads`;
     },
   });
 }

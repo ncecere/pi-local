@@ -25,6 +25,18 @@ export function useProviders() {
   });
 }
 
+/** Known unpriced choices, joined from providers rather than guessing catalog prices. */
+export function useUnpricedModels() {
+  const providers = useProviders();
+  return new Set(
+    providers.data?.providers.flatMap((provider) =>
+      provider.models
+        .filter((model) => model.inputPrice == null && model.outputPrice == null)
+        .map((model) => model.id),
+    ) ?? [],
+  );
+}
+
 /**
  * After any change to providers or models: the lists, the agent catalog (its
  * models), and the agents (their model's name; a change restarts the ones on it).

@@ -258,17 +258,17 @@ describe('the pending list', () => {
 describe('"Approve and always allow this"', () => {
   it('suggests the first word and subcommand of a command', () => {
     const rule = (command: string) => suggestRule('bash', { command });
-    expect(rule('git status')).toEqual({ tool: 'bash', args: { command: 'git status*' } });
-    expect(rule('git status --short')).toEqual({ tool: 'bash', args: { command: 'git status*' } });
+    expect(rule('git status')).toEqual({ tool: 'bash', args: { command: 'git status *' } });
+    expect(rule('git status --short')).toEqual({ tool: 'bash', args: { command: 'git status *' } });
     expect(rule('  npm run build -- --watch')).toEqual({
       tool: 'bash',
-      args: { command: 'npm run*' },
+      args: { command: 'npm run *' },
     });
-    expect(rule('ls -la')).toEqual({ tool: 'bash', args: { command: 'ls -la*' } });
-    expect(rule('git --version')).toEqual({ tool: 'bash', args: { command: 'git --version*' } });
-    expect(rule('ls')).toEqual({ tool: 'bash', args: { command: 'ls*' } });
-    expect(rule('cat ./notes.md')).toEqual({ tool: 'bash', args: { command: 'cat*' } });
-    expect(rule('git status 2>&1')).toEqual({ tool: 'bash', args: { command: 'git status*' } });
+    expect(rule('ls -la')).toEqual({ tool: 'bash', args: { command: 'ls -la *' } });
+    expect(rule('git --version')).toEqual({ tool: 'bash', args: { command: 'git --version *' } });
+    expect(rule('ls')).toEqual({ tool: 'bash', args: { command: 'ls *' } });
+    expect(rule('cat ./notes.md')).toEqual({ tool: 'bash', args: { command: 'cat *' } });
+    expect(rule('git status 2>&1')).toEqual({ tool: 'bash', args: { command: 'git status *' } });
   });
 
   it('suggests nothing for a command no allow rule could cover', () => {

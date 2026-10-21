@@ -137,9 +137,17 @@ export function SettingsUsagePage() {
         >
           {shownBudget && (shownBudget.app || shownBudget.agent) && (
             <section aria-label="Budget" className="space-y-4">
-              {shownBudget.agent && <BudgetMeter status={shownBudget.agent} />}
+              <p className="text-xs text-[var(--text-muted)]">
+                Budgets cover the whole calendar month shown, across all models, regardless of the
+                filters.
+              </p>
+              {shownBudget.agent && <BudgetMeter status={shownBudget.agent} showUnpriced={false} />}
               {shownBudget.app && (
-                <BudgetMeter status={shownBudget.app} title="All agents together" />
+                <BudgetMeter
+                  status={shownBudget.app}
+                  title="All agents together"
+                  showUnpriced={false}
+                />
               )}
             </section>
           )}
@@ -151,11 +159,14 @@ export function SettingsUsagePage() {
               hint={filtered ? 'in this selection' : 'used in this period'}
             />
           </StatStrip>
-          {data.total.unpricedRequests > 0 && (
-            <p className="-mt-4 text-xs text-[var(--text-muted)]">
-              The cost doesn't include {whole.format(data.total.unpricedRequests)} unpriced
-              requests: requests to models without prices. Set a model's prices in Settings → Models
-              to count them.
+          {(data.total.unpricedRequests > 0 ||
+            (budgets.data?.app?.unpricedRequests ?? 0) > 0 ||
+            (shownBudget?.agent?.unpricedRequests ?? 0) > 0) && (
+            <p data-unpriced-warning className="-mt-4 text-xs text-[var(--text-muted)]">
+              Costs and budgets don't include requests to models without prices. Set a model's
+              prices in Settings → Models to count them.
+              {data.total.unpricedRequests > 0 &&
+                ` This selection has ${whole.format(data.total.unpricedRequests)} unpriced requests.`}
             </p>
           )}
           <section aria-labelledby="usage-days">
@@ -174,7 +185,7 @@ export function SettingsUsagePage() {
             </h3>
             {data.agents.length === 0 ? (
               <p className="text-sm text-[var(--text-muted)]">
-                {filtered ? 'No agents match in' : "Your agents haven't been used in"} {period}.
+                {filtered ? 'No agents match in' : 'No agents have been used in'} {period}.
               </p>
             ) : (
               <UsageTable
@@ -219,7 +230,7 @@ export function SettingsUsagePage() {
       >
         <div>
           <h3 id="usage-budget" className="text-base font-semibold">
-            Budget for all agents
+            Budget for all agents · current month · all models
           </h3>
           <p className="mt-1 max-w-xl text-sm text-[var(--text-muted)]">
             A monthly limit on what every agent together may spend. You hear at 80% and at 100%.

@@ -16,6 +16,7 @@ import {
   HeadingLevels,
   headingLevelsOf,
 } from '~/components/chat/markdown-headings';
+import { remarkLiteralHtml } from '~/components/chat/markdown-literal-html';
 import { remarkSoftBreaks } from '~/components/chat/markdown-soft-breaks';
 import { TASK_LIST_COMPONENTS } from '~/components/chat/markdown-task-list';
 import {
@@ -113,7 +114,11 @@ function buildMarkdownRenderer([
   const conversationPlugins = ownerRehypePlugins ? withDirection(ownerRehypePlugins) : null;
   // Streamdown's own (GFM, code metadata), then single line breaks kept (#207).
   // One array for every message: Streamdown re-parses when its identity changes.
-  const remarkPlugins = [...Object.values(defaultRemarkPlugins ?? {}), remarkSoftBreaks];
+  const remarkPlugins = [
+    ...Object.values(defaultRemarkPlugins ?? {}),
+    remarkSoftBreaks,
+    remarkLiteralHtml,
+  ];
   // Single-dollar inline math is off by default, but models commonly emit it;
   // escapeCurrencyDollars keeps amounts of money out of it (#339).
   // Mermaid itself loads only when a diagram is first rendered.

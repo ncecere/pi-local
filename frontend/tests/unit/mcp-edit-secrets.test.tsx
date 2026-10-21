@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { McpServer } from '../../src/api/client';
-import { EditServerDialog } from '../../src/components/mcp/server-dialogs';
+import { AddServerDialog, EditServerDialog } from '../../src/components/mcp/server-dialogs';
 import {
   buttonByText,
   click,
@@ -54,6 +54,21 @@ const button = (label: string) =>
   document.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement;
 
 describe('Editing an MCP server: env values one at a time', () => {
+  it('can show and hide a new environment value without fetching or losing it', async () => {
+    const backend = fakeBackend();
+    view = await renderWithQuery(<AddServerDialog onClose={() => {}} onSignIn={() => {}} />);
+    await click(buttonByText('Add variable'));
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Variable 1 value"]')!;
+    await typeInto(input, 'temporary-test-value');
+    expect(input.type).toBe('password');
+    await click(button('Show variable 1 value'));
+    expect(input.type).toBe('text');
+    expect(input.value).toBe('temporary-test-value');
+    await click(button('Hide variable 1 value'));
+    expect(input.type).toBe('password');
+    expect(input.value).toBe('temporary-test-value');
+    expect(backend.calls.filter((call) => call.method === 'POST')).toEqual([]);
+  });
   it('changes one value, removes one, adds one; the others are kept', async () => {
     const backend = fakeBackend({
       'PATCH /api/mcp/servers/tdx': () => server(),

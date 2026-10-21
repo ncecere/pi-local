@@ -7,7 +7,7 @@ import { Spinner } from '~/components/ui/spinner';
 import { BudgetFields, BudgetMeter } from '~/components/usage/budget-parts';
 import { useUpdateAgent } from '~/hooks/use-agents';
 import { useBudgets } from '~/hooks/use-budgets';
-import { parseBudgetAmount, sameBudget } from '~/lib/budget';
+import { budgetAmount, parseBudgetAmount, sameBudget } from '~/lib/budget';
 
 /**
  * An agent's monthly budget: how much it may spend on its model each calendar month, counted from its usage at the
@@ -18,7 +18,7 @@ export function BudgetPanel({ agent }: { agent: Agent }) {
   const budgets = useBudgets();
   const current = agent.budget ?? null;
   const status = budgets.data?.agents.find((candidate) => candidate.agentId === agent.id);
-  const [amount, setAmount] = useState(current ? String(current.monthlyUsd) : '');
+  const [amount, setAmount] = useState(current ? budgetAmount(current.monthlyUsd) : '');
   const [mode, setMode] = useState<AgentBudget['onExceed']>(current?.onExceed ?? 'stop');
   const [problem, setProblem] = useState<string | null>(null);
   const parsed = parseBudgetAmount(amount);

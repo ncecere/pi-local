@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import {
   type About,
   type Agent,
@@ -179,6 +180,7 @@ export function useDeleteAgent() {
 export function useReveal() {
   return useMutation({
     mutationFn: (target: RevealTarget) => api.post<{ ok: true }>('/api/reveal', target),
+    onSuccess: () => toast('Opened the folder in Finder.'),
   });
 }
 

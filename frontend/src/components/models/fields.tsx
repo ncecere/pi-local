@@ -1,4 +1,4 @@
-import { Plus, X } from 'lucide-react';
+import { Eye, EyeOff, Plus, X } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { type AgentRef, errorMessage } from '~/api/client';
 import { Button } from '~/components/ui/button';
@@ -107,6 +107,7 @@ export function HeadersEditor({
 }) {
   const Noun = noun.charAt(0).toUpperCase() + noun.slice(1);
   const id = useId();
+  const [visible, setVisible] = useState<Set<number>>(new Set());
   const set = (index: number, change: Partial<HeaderRow>) =>
     onChange(rows.map((row, i) => (i === index ? { ...row, ...change } : row)));
   return (
@@ -125,7 +126,7 @@ export function HeadersEditor({
             className={cn(FIELD, 'flex-1 font-mono text-xs')}
           />
           <input
-            type="password"
+            type={visible.has(index) ? 'text' : 'password'}
             aria-label={`${Noun} ${index + 1} value`}
             value={row.value}
             onChange={(event) => set(index, { value: event.target.value })}
@@ -137,9 +138,29 @@ export function HeadersEditor({
             type="button"
             variant="ghost"
             size="icon-sm"
+            aria-label={`${visible.has(index) ? 'Hide' : 'Show'} ${noun} ${index + 1} value`}
+            aria-pressed={visible.has(index)}
+            onClick={() =>
+              setVisible((before) => {
+                const next = new Set(before);
+                if (next.has(index)) next.delete(index);
+                else next.add(index);
+                return next;
+              })
+            }
+          >
+            {visible.has(index) ? <EyeOff /> : <Eye />}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
             aria-label={`Remove ${noun} ${index + 1}${row.name ? ` (${row.name})` : ''}`}
             title="Remove"
-            onClick={() => onChange(rows.filter((_, i) => i !== index))}
+            onClick={() => {
+              setVisible(new Set());
+              onChange(rows.filter((_, i) => i !== index));
+            }}
           >
             <X />
           </Button>

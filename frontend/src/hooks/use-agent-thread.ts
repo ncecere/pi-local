@@ -1,9 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
+  type AgentThread,
   ApiError,
   type Attachment,
   api,
+  type BudgetStatus,
   type ChatAssistantMessage,
   type ChatMessage,
   type ChatView,
@@ -13,6 +15,7 @@ import {
 import { transport } from '~/api/transport';
 import type { AgentLive } from '~/components/agent/avatar/agent-live';
 import { markThreadBusy, noteNewThread, threadsKey } from '~/hooks/use-agents';
+import { BUDGETS_KEY } from '~/hooks/use-budgets';
 import { useInboxActions } from '~/hooks/use-inbox';
 import { titleFromFiles } from '~/lib/attachments';
 import {
@@ -228,6 +231,8 @@ export function useAgentThread({
   const awaitingUsers = useRef<number | null>(null);
   const [draft, setDraft] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
+  const [budgetRefusal, setBudgetRefusal] = useState<BudgetStatus | null>(null);
+  const [overBudget, setOverBudget] = useState(false);
   const [stopping, setStopping] = useState(false);
   const fresh = handover !== null && handover.existing !== true;
   const [connection, setConnection] = useState<Connection>(fresh ? 'idle' : 'connecting');
@@ -464,6 +469,8 @@ export function useAgentThread({
       if (!content && files.length === 0) return false;
       const steer = options.steer === true;
       setSendError(null);
+      setBudgetRefusal(null);
+      setOverBudget(false);
       const shown = withEarlier(viewRef.current, earlierRef.current);
       setPending((current) =>
         current.some((message) => message.requestId === requestId)
@@ -514,6 +521,20 @@ export function useAgentThread({
         markThreadBusy(queryClient, agentId, threadId);
         return true;
       } catch (error) {
+        if (!exists) {
+          // No server-side conversation exists after a refused first message.
+          queryClient.setQueryData<AgentThread[]>(threadsKey(agentId), (threads) =>
+            threads?.filter((thread) => thread.threadId !== threadId),
+          );
+          awaitingUsers.current = null;
+        }
+        if (error instanceof ApiError && error.code === 'over_budget') {
+          setOverBudget(true);
+          setBudgetRefusal(
+            (error.details as { budget?: BudgetStatus } | undefined)?.budget ?? null,
+          );
+          void queryClient.invalidateQueries({ queryKey: BUDGETS_KEY });
+        }
         setPending((current) =>
           current.map((message) =>
             message.requestId === requestId ? { ...message, state: 'failed' } : message,
@@ -648,6 +669,8 @@ export function useAgentThread({
     setDraft,
     send,
     sendError,
+    budgetRefusal,
+    overBudget,
     clearSendError: () => setSendError(null),
     stop,
     stopping,

@@ -45,18 +45,41 @@ describe('the approval card: Approve and always allow this', () => {
       'POST /api/agents/ag_rex/approvals/ap_one': () => decided,
     });
     view = await renderWithQuery(<ApprovalCard agentId="ag_rex" approval={request()} />);
-    expect(document.body.textContent).toContain('bash · command: git status*');
+    expect(document.body.textContent).toContain('bash · command: git status *');
     await click(buttonByText(ALWAYS));
 
     expect(backend.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
       'POST /api/agents/ag_rex/approval-rules',
       'POST /api/agents/ag_rex/approvals/ap_one',
     ]);
-    expect(backend.calls[0]?.body).toEqual({ tool: 'bash', args: { command: 'git status*' } });
+    expect(backend.calls[0]?.body).toEqual({ tool: 'bash', args: { command: 'git status *' } });
     expect(backend.calls[1]?.body).toEqual({ decision: 'approve' });
     expect(vi.mocked(toast).mock.calls[0]?.[0]).toBe(
-      'Approved: bash will run. Always allowed: bash · command: git status*.',
+      'Approved: bash will run. Always allowed: bash · command: git status *.',
     );
+  });
+
+  it('can remember only the exact command', async () => {
+    const backend = fakeBackend({
+      'POST /api/agents/ag_rex/approval-rules': () => ({ rule: { id: 'r_exact' }, rules: [] }),
+      'POST /api/agents/ag_rex/approvals/ap_one': () => decided,
+    });
+    view = await renderWithQuery(<ApprovalCard agentId="ag_rex" approval={request()} />);
+    await click(document.querySelector('input[type="checkbox"]'));
+    await click(buttonByText(ALWAYS));
+    expect(backend.calls[0]?.body).toEqual({
+      tool: 'bash',
+      args: { command: 'git status --short' },
+    });
+  });
+
+  it('never labels a wildcard command as exact', async () => {
+    fakeBackend();
+    view = await renderWithQuery(
+      <ApprovalCard agentId="ag_rex" approval={request({ arguments: { command: 'ls *.md' } })} />,
+    );
+    expect(document.body.textContent).not.toContain('Remember only this exact command');
+    expect(document.querySelector('input[type="checkbox"]')).toBeNull();
   });
 
   it('for another tool, allows the tool alone', async () => {
@@ -117,6 +140,7 @@ describe('the approval card: Approve and always allow this', () => {
       />,
     );
     expect(buttonByText(ALWAYS)).toBeUndefined();
+    expect(document.body.textContent).toContain('cannot be remembered as an allow rule');
   });
 
   it('is offered when fast judgments asked, and the card says why', async () => {

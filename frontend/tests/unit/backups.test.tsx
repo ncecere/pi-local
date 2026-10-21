@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, type Backup, type BackupList } from '../../src/api/client';
+import { ApiError, api, type Backup, type BackupList } from '../../src/api/client';
 import { DiagnosticsRow } from '../../src/components/settings/diagnostics-row';
 import { updateHeadline } from '../../src/components/settings/updates-section';
+import * as downloads from '../../src/lib/download';
 import { SettingsBackupsPage } from '../../src/routes/settings/backups';
 import {
   buttonByText,
@@ -31,6 +32,7 @@ afterEach(() => {
   restoreTransport();
   toast.mockClear();
   toast.error.mockClear();
+  vi.restoreAllMocks();
 });
 
 function backup(overrides: Partial<Backup> = {}): Backup {
@@ -257,6 +259,7 @@ describe('Settings → Backups', () => {
     view = await page();
     await click(buttonByText('Show in Finder'));
     expect(backend.calls.some((call) => call.path.endsWith('/reveal'))).toBe(true);
+    expect(toast).toHaveBeenCalledWith('Selected the backup in Finder.');
   });
 
   it('shows a restore waiting for a restart, and lets you take it back', async () => {
@@ -272,6 +275,7 @@ describe('Settings → Backups', () => {
     expect(document.body.textContent).toContain(
       'A restore is waiting. Quit Pi Local and open it again',
     );
+    expect(document.body.textContent).toContain('Restore from pi-local-2026-10-20-090000.zip');
     await click(buttonByText('Cancel the restore'));
     expect(backend.calls.some((call) => call.method === 'DELETE')).toBe(true);
   });
@@ -311,6 +315,26 @@ describe('Settings → Backups', () => {
     );
   });
 
+  it('dismisses a restore notice across visits and explains manual retention', async () => {
+    const lastRestore = {
+      ok: true,
+      at: Date.now(),
+      id: 'dismiss-me',
+      movedTo: '/tmp/old-data',
+      error: '',
+    };
+    fakeBackend({ 'GET /api/backups': () => list({ lastRestore }) });
+    view = await page();
+    expect(document.body.textContent).toContain('Manual backups are kept until you delete them.');
+    expect(document.body.textContent).toContain('/tmp/old-data');
+    await click(buttonByText('Dismiss restore notice'));
+    expect(document.body.textContent).not.toContain('/tmp/old-data');
+    view.unmount();
+    view = await page();
+    expect(document.body.textContent).not.toContain('/tmp/old-data');
+    localStorage.clear();
+  });
+
   it('shows why the last automatic backup failed', async () => {
     fakeBackend({ 'GET /api/backups': () => list({ autoError: 'the disk is full' }) });
     view = await page();
@@ -328,6 +352,23 @@ describe('Settings → About → Save diagnostics…', () => {
     await click(buttonByText('Save diagnostics…'));
     expect(backend.calls).toEqual([{ method: 'POST', path: '/api/diagnostics', body: undefined }]);
     expect(toast).toHaveBeenCalledWith('Saved /Users/ada/Desktop/diag.zip.');
+  });
+
+  it('identifies browser Downloads after the desktop endpoint is unavailable', async () => {
+    fakeBackend({
+      'POST /api/diagnostics': () => {
+        throw new ApiError(501, 'not_supported', 'Browser');
+      },
+    });
+    vi.spyOn(api, 'download').mockResolvedValue({
+      blob: new Blob(['zip']),
+      contentDisposition: 'attachment; filename="diag.zip"',
+    });
+    const save = vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined);
+    view = await renderWithQuery(<DiagnosticsRow />);
+    await click(buttonByText('Save diagnostics…'));
+    expect(save).toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith('Saved diag.zip to browser Downloads.');
   });
 
   it('says nothing when the dialog is cancelled', async () => {

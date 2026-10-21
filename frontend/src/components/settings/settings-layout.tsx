@@ -170,7 +170,7 @@ function SectionNav({ pathname }: { pathname: string }) {
     <nav aria-label="Settings sections">
       <div
         ref={track}
-        className="hidden max-w-full flex-nowrap gap-1 overflow-x-auto rounded-xl bg-[var(--bg-segment-track)] p-1 [scrollbar-width:none] sm:inline-flex"
+        className="hidden max-w-full flex-wrap gap-1 rounded-xl bg-[var(--bg-segment-track)] p-1 sm:flex"
       >
         {TABS.map((tab) => {
           const active = isActive(tab, pathname);

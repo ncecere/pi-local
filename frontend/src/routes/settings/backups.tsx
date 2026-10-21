@@ -27,19 +27,33 @@ const WEEK = 7 * 24 * 3_600_000;
 /** How the last restore went, for a week after. */
 function LastRestoreNotice({ list }: { list: BackupList }) {
   const last = list.lastRestore;
-  if (!last || Date.now() - last.at > WEEK) return null;
+  const key = `pai.restore.dismissed.${last?.id}.${last?.at}`;
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(key) === 'true');
+  if (!last || dismissed || Date.now() - last.at > WEEK) return null;
+  const dismiss = (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={() => {
+        localStorage.setItem(key, 'true');
+        setDismissed(true);
+      }}
+    >
+      Dismiss restore notice
+    </Button>
+  );
   if (!last.ok)
     return (
       <ErrorNotice>
-        The last restore didn't happen. {last.error || 'Nothing was changed.'}
+        The last restore didn't happen. {last.error || 'Nothing was changed.'} {dismiss}
       </ErrorNotice>
     );
   return (
-    <p role="status" className="rounded-lg bg-[var(--bg-control)] px-3 py-2 text-sm">
+    <div role="status" className="rounded-lg bg-[var(--bg-control)] px-3 py-2 text-sm">
       Restored from a backup {formatRelativeTime(new Date(last.at))}. The data it replaced is in{' '}
       <span className="break-all font-mono text-xs">{last.movedTo}</span>; delete that folder when
-      you're sure you don't need it.
-    </p>
+      you're sure you don't need it. {dismiss}
+    </div>
   );
 }
 
@@ -52,6 +66,11 @@ function PendingNotice({ list }: { list: BackupList }) {
       className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[var(--bg-control)] px-3 py-2 text-sm"
     >
       <p>
+        Restore from{' '}
+        <span className="font-mono text-xs">
+          {list.backups.find((backup) => backup.id === list.pending?.id)?.file ?? list.pending.id}
+        </span>
+        .{' '}
         {list.canRestart
           ? 'A restore is under way: Pi Local is restarting.'
           : 'A restore is waiting. Quit Pi Local and open it again to finish it.'}
@@ -184,7 +203,7 @@ export function SettingsBackupsPage() {
       {data && (
         <>
           <PendingNotice list={data} />
-          <LastRestoreNotice list={data} />
+          <LastRestoreNotice key={`${data.lastRestore?.id}.${data.lastRestore?.at}`} list={data} />
           {data.autoError && (
             <ErrorNotice>The last automatic backup failed: {data.autoError}</ErrorNotice>
           )}
@@ -192,7 +211,7 @@ export function SettingsBackupsPage() {
           <SettingsRow
             id="backup-auto"
             label="Back up every day"
-            description={`Once a day, keeping the last ${data.keep}. An agent in the middle of a reply is left alone until there is a quiet moment. Backups made by you, or before an update, are kept apart.`}
+            description={`Once a day, keeping the last ${data.keep}. An agent in the middle of a reply is left alone until there is a quiet moment. Manual backups are kept until you delete them. The newest 3 before-update backups are kept separately.`}
           >
             <Switch
               checked={data.auto}

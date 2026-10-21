@@ -8,6 +8,7 @@ import { Spinner } from '~/components/ui/spinner';
 import { useAppBudget, useSaveAppBudget } from '~/hooks/use-budgets';
 import {
   type BudgetNotice,
+  budgetAmount,
   dollars,
   parseBudgetAmount,
   percentText,
@@ -17,7 +18,15 @@ import {
 import { cn } from '~/lib/utils';
 
 /** How much of a budget this month is used: a bar, the dollars, and what happens at the limit. */
-export function BudgetMeter({ status, title }: { status: BudgetStatus; title?: ReactNode }) {
+export function BudgetMeter({
+  status,
+  title,
+  showUnpriced = true,
+}: {
+  status: BudgetStatus;
+  title?: ReactNode;
+  showUnpriced?: boolean;
+}) {
   const width = Math.min(100, Math.max(0, status.percent));
   const tone =
     status.state === 'over'
@@ -52,7 +61,8 @@ export function BudgetMeter({ status, title }: { status: BudgetStatus; title?: R
             : status.onExceed === 'stop'
               ? `At the limit ${status.scope === 'app' ? 'agents stop' : 'it stops'} taking new work.`
               : 'At the limit it only warns.'}
-        {status.unpricedRequests > 0 &&
+        {showUnpriced &&
+          status.unpricedRequests > 0 &&
           ` Not counting ${status.unpricedRequests.toLocaleString()} requests to models without prices.`}
       </p>
     </div>
@@ -140,7 +150,7 @@ function AppBudgetFields({
   status: BudgetStatus | null | undefined;
   save: ReturnType<typeof useSaveAppBudget>;
 }) {
-  const [amount, setAmount] = useState(current ? String(current.monthlyUsd) : '');
+  const [amount, setAmount] = useState(current ? budgetAmount(current.monthlyUsd) : '');
   const [mode, setMode] = useState<AgentBudget['onExceed']>(current?.onExceed ?? 'stop');
   const [problem, setProblem] = useState<string | null>(null);
   const parsed = parseBudgetAmount(amount);
@@ -167,7 +177,7 @@ function AppBudgetFields({
         submit(next);
       }}
     >
-      {status && <BudgetMeter status={status} title="All agents together" />}
+      {status && <BudgetMeter status={status} title="All agents together" showUnpriced={false} />}
       <BudgetFields
         amount={amount}
         onAmount={(value) => {
@@ -218,7 +228,7 @@ export function BudgetBanner({ notice }: { notice: BudgetNotice | null }) {
       <span>{notice.text}</span>
       {status.scope === 'app' ? (
         <Link to="/settings/usage" className="shrink-0 font-medium underline underline-offset-4">
-          Open usage
+          Raise app budget
         </Link>
       ) : (
         <Link
@@ -226,7 +236,7 @@ export function BudgetBanner({ notice }: { notice: BudgetNotice | null }) {
           params={{ agentId: status.agentId ?? '' }}
           className="shrink-0 font-medium underline underline-offset-4"
         >
-          Open its settings
+          Raise agent budget
         </Link>
       )}
     </div>

@@ -178,8 +178,8 @@ describe('the timeline of a conversation', () => {
     const steps = buildTimeline(messages, log);
     expect(steps.map((step) => [step.kind, step.title])).toEqual([
       ['message', 'You sent a message'],
-      ['tool', 'bash'],
-      ['tool', 'write'],
+      ['tool', 'Run command'],
+      ['tool', 'Write file'],
       ['reply', 'Replied'],
       ['ask', 'Asked Helper'],
       ['budget', 'Hardac reached its $5 budget for October. Raise it in its settings.'],
@@ -200,6 +200,28 @@ describe('the timeline of a conversation', () => {
     expect(budget).toMatchObject({ outcome: 'refused' });
     // The approval is told with its call, not again.
     expect(steps.some((step) => step.kind === 'approval')).toBe(false);
+  });
+
+  it('strips diagnostic wrappers and Markdown from message previews', () => {
+    const steps = buildTimeline(
+      [
+        {
+          id: 'plain',
+          role: 'assistant',
+          text: '## Result\n**Done** [read more](https://example.com)\n<harness>\n[warning] Not available\n</harness>',
+        },
+      ],
+      [],
+    );
+    expect(steps[0]?.line).toBe('Result Done read more Not available');
+    expect(
+      entryLine(
+        logged({
+          kind: 'message',
+          detail: { preview: '**Hello** <harness>[info] Check</harness>' },
+        }),
+      ),
+    ).toBe('Hello Check');
   });
 
   it('works from the view alone: a finished call is done, a blocked one denied, a waiting one waits', () => {
@@ -264,7 +286,7 @@ describe('the timeline of a conversation', () => {
     const steps = buildTimeline(messages, [...log, ...earlier], { hasEarlier: true });
     expect(steps.slice(0, 2).map((step) => [step.title, step.line])).toEqual([
       ['Ann sent a message', 'start here'],
-      ['read', 'old.md'],
+      ['Read file', 'old.md'],
     ]);
     expect(steps.filter((step) => step.kind === 'message')).toHaveLength(2);
   });
@@ -400,7 +422,7 @@ describe('the What happened button', () => {
       'ask',
       'budget',
     ]);
-    expect(steps[1]!.textContent).toContain('bash');
+    expect(steps[1]!.textContent).toContain('Run command');
     expect(steps[1]!.textContent).toContain('ls notes');
     expect(steps[1]!.textContent).toContain('2.4 s');
     expect(steps[2]!.querySelector('[data-outcome="denied"]')?.textContent).toBe('Denied');

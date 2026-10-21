@@ -17,6 +17,7 @@ import { ModelPicker } from '~/components/chat/model-picker';
 import { RouteChooser, type RouteQuestion, routeOptions } from '~/components/chat/route-chooser';
 import { GetStarted } from '~/components/onboarding/get-started';
 import { FOCUS_RING } from '~/components/ui/focus-ring';
+import { BudgetBanner } from '~/components/usage/budget-parts';
 import { writeHandover } from '~/hooks/use-agent-thread';
 import {
   chattable,
@@ -26,6 +27,7 @@ import {
   useAgentThreads,
 } from '~/hooks/use-agents';
 import { useAttachments } from '~/hooks/use-attachments';
+import { useBudgets } from '~/hooks/use-budgets';
 import { usePendingElicitations } from '~/hooks/use-elicitations';
 import { routeMessage } from '~/hooks/use-judgments';
 import { useYou } from '~/hooks/use-memory';
@@ -34,6 +36,7 @@ import { ME_KEY, useCurrentUser } from '~/hooks/use-session';
 import { useTeams } from '~/hooks/use-teams';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { titleFromFiles } from '~/lib/attachments';
+import { budgetNotices } from '~/lib/budget';
 import { usePageTitle } from '~/lib/document-title';
 import { focusComposerOnArrival } from '~/lib/focus-after-navigation';
 import { greetingName } from '~/lib/greeting-name';
@@ -125,6 +128,8 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   // The agent the page is about: none with Auto (the fallback agent stays chosen underneath).
   const shown = auto ? null : agent;
   const talkingTo = auto ? 'your agents' : team ? team.name : agent?.name;
+  const budgets = useBudgets();
+  const budgetNotes = budgetNotices(shown?.id ?? '', budgets.data);
 
   const [draft, setDraft] = useState('');
   // The model and thinking level for the new conversation: local until the first message, which carries what changed.
@@ -381,6 +386,11 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
         </div>
       </div>
 
+      {budgetNotes.map((notice) => (
+        <div key={notice.status.scope} className="px-4 pb-2">
+          <BudgetBanner notice={notice} />
+        </div>
+      ))}
       <Composer
         value={draft}
         onChange={setDraft}

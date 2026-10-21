@@ -89,15 +89,7 @@ export function TotalsStats({ total }: { total: UsageTotals }) {
           ...(cached ? [`${compact.format(cached)} cache`] : []),
         ].join(' · ')}
       />
-      <Stat
-        label="Estimated cost"
-        value={<Cost totals={total} />}
-        hint={
-          total.unpricedRequests
-            ? `Not counting ${whole.format(total.unpricedRequests)} unpriced requests`
-            : undefined
-        }
-      />
+      <Stat label="Estimated cost" value={<Cost totals={total} />} />
     </>
   );
 }
@@ -145,6 +137,11 @@ export function DailyBars({
   const heights = barHeights(days.map(tokensOf));
   return (
     <>
+      <p className="mb-2 text-xs text-[var(--text-muted)]">
+        {days.some((day) => tokensOf(day) > 0)
+          ? 'Input, output and cached tokens. Bars are scaled to the busiest day.'
+          : 'No token usage in this period.'}
+      </p>
       <div className="flex h-36 items-end gap-px rounded-xl border border-[var(--border-subtle)] px-3 pt-3 pb-2">
         {days.map((day, index) => {
           const tokens = tokensOf(day);
@@ -211,13 +208,13 @@ export function UsageTable<T extends UsageTotals & { name: string }>({
               Requests
             </th>
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
-              In
+              Input tokens
             </th>
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
-              Out
+              Output tokens
             </th>
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
-              Cache
+              Cached tokens
             </th>
             <th scope="col" className="px-4 py-2.5 text-right font-medium">
               Est. cost

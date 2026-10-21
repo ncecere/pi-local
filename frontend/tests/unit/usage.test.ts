@@ -46,7 +46,8 @@ describe('costOf', () => {
   });
 
   it('shows under a cent as such', () => {
-    expect(costOf(totals({ requests: 1, costUsd: 0.0004 })).text).toBe('<$0.01');
+    expect(costOf(totals({ requests: 1, costUsd: 0.0004 })).text).toBe('<$0.001');
+    expect(costOf(totals({ requests: 1, costUsd: 0.0123 })).text).toBe('$0.012');
   });
 });
 

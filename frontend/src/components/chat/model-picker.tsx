@@ -13,6 +13,7 @@ import {
 } from '~/components/ui/dropdown-menu';
 import { FOCUS_RING } from '~/components/ui/focus-ring';
 import { useAgentCatalog } from '~/hooks/use-agents';
+import { useUnpricedModels } from '~/hooks/use-providers';
 import { useFeature } from '~/hooks/use-session';
 import {
   choiceLabel,
@@ -51,6 +52,7 @@ export const ModelPicker = memo(function ModelPicker({
   disabled?: boolean;
 }) {
   const on = useFeature('modelPerConversation');
+  const unpriced = useUnpricedModels();
   const catalog = useAgentCatalog(on);
   // The catalog says which models can think (`reasoning`).
   const catalogModels = catalog.data?.models;
@@ -113,7 +115,9 @@ export const ModelPicker = memo(function ModelPicker({
         >
           <DropdownMenuRadioItem value={AGENT_MODEL}>
             <span className="min-w-0 flex-1 truncate">
-              {agentModel ? `Agent's model (${agentModel.name})` : "Agent's model"}
+              {agentModel
+                ? `Agent's model (${agentModel.name})${unpriced.has(agentModel.id) ? ' · cost not counted' : ''}`
+                : "Agent's model"}
             </span>
           </DropdownMenuRadioItem>
           {groups.map((group) => (
@@ -121,7 +125,10 @@ export const ModelPicker = memo(function ModelPicker({
               <DropdownMenuLabel className="pt-2.5">{group.label}</DropdownMenuLabel>
               {group.models.map((model) => (
                 <DropdownMenuRadioItem key={model.id} value={model.id}>
-                  <span className="min-w-0 flex-1 truncate">{model.name}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {model.name}
+                    {unpriced.has(model.id) ? ' · cost not counted' : ''}
+                  </span>
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuGroup>

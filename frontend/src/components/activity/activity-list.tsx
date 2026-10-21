@@ -18,6 +18,7 @@ import {
   ACTIVITY_OUTCOMES,
   entryLine,
   entryProblem,
+  entryTitle,
   formatDuration,
   KIND_LABEL,
   outcomeLabel,
@@ -82,7 +83,7 @@ function Row({ entry, showAgent }: { entry: ActivityEntry; showAgent: boolean })
             {KIND_LABEL[entry.kind] ?? entry.kind}
           </span>
           <span className="min-w-0 break-words font-medium text-[var(--text-primary)]">
-            {entry.title}
+            {entryTitle(entry)}
           </span>
         </p>
         {who && <p className="mt-0.5 text-xs text-[var(--text-muted)]">{who}</p>}
