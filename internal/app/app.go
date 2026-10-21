@@ -286,6 +286,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}
 			return
 		}
+		a.Sup.Invalidate(c.AgentID)
 		a.publishAgent(c.AgentID)
 		// A failed agent given a working configuration (another model) is no longer failed.
 		a.Sup.Recheck(context.Background(), c.AgentID)
@@ -446,6 +447,7 @@ func (a *App) teamChanged(teamID string, team *teams.Team) {
 		a.Hub.Publish("team", map[string]any{"teamId": teamID, "deleted": false, "team": team})
 	}
 	for _, id := range a.Sup.Awake() {
+		a.Sup.Invalidate(id)
 		go func() {
 			if err := a.Sup.Wake(context.Background(), id); err != nil {
 				slog.Info("an agent's team changed", "agent", id, "err", err)
@@ -489,6 +491,7 @@ func (a *App) mcpChanged(slug string, server *mcp.Server) {
 		a.Hub.Publish("mcp", map[string]any{"slug": slug, "deleted": false, "server": server})
 	}
 	for _, ag := range a.Agents.UsingMCP(slug) {
+		a.Sup.Invalidate(ag.ID)
 		if status, _ := a.Sup.Status(ag.ID); status != supervisor.Awake {
 			continue
 		}
@@ -640,6 +643,7 @@ func (a *App) catalogChanged(provider string) {
 		if ag.Config.Model.Provider != provider {
 			continue
 		}
+		a.Sup.Invalidate(ag.ID)
 		if status, _ := a.Sup.Status(ag.ID); status != supervisor.Awake {
 			// One that failed because of this provider (its model was turned off) is fine again once it's back.
 			a.Sup.Recheck(context.Background(), ag.ID)

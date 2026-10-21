@@ -133,6 +133,9 @@ type agentState struct {
 	status    Status     // guarded by Supervisor.mu
 	lastError string     // guarded by Supervisor.mu
 	failures  int        // consecutive crashes, for the restart backoff; guarded by Supervisor.mu
+	// stale: its configuration changed since the runtime was checked; the next call resolves it again (Wake).
+	// Guarded by Supervisor.mu.
+	stale bool
 }
 
 type proc struct {
@@ -275,14 +278,23 @@ func (s *Supervisor) Wake(ctx context.Context, id string) error {
 	return err
 }
 
-// running is the agent's runtime when it is up and not stopping: what a call uses as it is. Every change to an
-// agent's configuration (its agent.yaml, model, keys, MCP servers, teams) calls Wake, which resolves it again and
-// restarts the runtime when it differs; a call need not (resolving reads the keychain, under the agent's lock).
+// Invalidate says an agent's configuration changed (its agent.yaml, model, keys, MCP servers, teams): its next call
+// resolves it again, and restarts the runtime if it differs, before the call goes through. Call it in the request
+// that made the change, so a message sent right after never reaches the old runtime.
+func (s *Supervisor) Invalidate(id string) {
+	st := s.state(id)
+	s.mu.Lock()
+	st.stale = true
+	s.mu.Unlock()
+}
+
+// running is the agent's runtime when it is up, not stopping and not stale: what a call uses as it is (resolving
+// reads the keychain, under the agent's lock). After a change (Invalidate) the call goes through wake.
 func (s *Supervisor) running(id string) *proc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.agents[id]
-	if !ok || st.proc == nil || s.closed {
+	if !ok || st.proc == nil || s.closed || st.stale {
 		return nil
 	}
 	if p := st.proc; p.alive() && !p.stopping {
@@ -298,6 +310,8 @@ func (s *Supervisor) wake(ctx context.Context, id string) (*proc, error) {
 	s.mu.Lock()
 	closed := s.closed
 	current := st.proc
+	// Resolved from here on: a change after this point marks it stale again.
+	st.stale = false
 	s.mu.Unlock()
 	if closed {
 		return nil, ErrClosed
