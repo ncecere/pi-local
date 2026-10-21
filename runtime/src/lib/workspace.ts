@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { lstat, mkdir, mkdtemp, realpath, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { defineExtension, type Extension } from "@earendil-works/pi-durable";
@@ -311,7 +311,9 @@ export function parseWorkspaceTools(raw: string | undefined): WorkspaceToolName[
  * pi's `read` (text files, and images, resized to fit the model), which also reads PDF, Word, Excel and PowerPoint
  * files: converted to Markdown once (kept in `convertedDir` by the file's path, size and time), then read like a text
  * file, with the same offset, limit and truncation. Without `convertedDir` (no temp directory) they are converted
- * into the environment's own temp directory each time.
+ * into the environment's own temp directory each time. Cache operations use the same environment guard as the
+ * source read; the eventual read of the converted file is too late to prevent an outside cache write. Like other
+ * environment operations, this prevents deterministic symlink escapes, not concurrent path-swap races.
  */
 export function createDocumentReadTool(convertedDir?: string) {
 	const inner = createReadTool({ images: imageProcessor });
@@ -334,7 +336,9 @@ export function createDocumentReadTool(convertedDir?: string) {
 				dir = temp.value;
 			}
 			const converted = join(dir, `${key}.md`);
-			if (!existsSync(converted)) {
+			const cached = await env.exists(converted, context);
+			if (!cached.ok) return errorResult(`${args.path} could not be converted: ${cached.error.message}`);
+			if (!cached.value) {
 				const bytes = await env.readBinaryFile(args.path, context);
 				if (!bytes.ok) return execute(args, api, context);
 				let markdown: string;
@@ -343,10 +347,13 @@ export function createDocumentReadTool(convertedDir?: string) {
 				} catch (error) {
 					return errorResult(error instanceof DocumentError ? `${error.message}.` : `${args.path} could not be read: ${(error as Error).message}`);
 				}
-				await mkdir(dir, { recursive: true });
+				const made = await env.createDir(dir, { recursive: true }, context);
+				if (!made.ok) return errorResult(`${args.path} could not be converted: ${made.error.message}`);
 				const tmp = `${converted}.${process.pid}.tmp`;
-				await writeFile(tmp, markdown, { mode: 0o600 });
-				await rename(tmp, converted);
+				const written = await env.writeFile(tmp, markdown, context);
+				if (!written.ok) return errorResult(`${args.path} could not be converted: ${written.error.message}`);
+				const renamed = await env.renameFile(tmp, converted, context);
+				if (!renamed.ok) return errorResult(`${args.path} could not be converted: ${renamed.error.message}`);
 			}
 			const result = await execute({ ...args, path: converted }, api, context);
 			// Its notes (truncation, "use offset=…") name the converted copy: the agent should go on with the original.

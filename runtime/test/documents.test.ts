@@ -1,8 +1,10 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { err, FileError } from "@earendil-works/pi-durable/env";
 import { strToU8, zipSync } from "fflate";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { DocumentError, documentKindOf, documentToMarkdown } from "../src/lib/documents.ts";
 import { createDocumentReadTool, createWorkspaceEnv } from "../src/lib/workspace.ts";
 import { docx, pdf, png, pptx, xlsx } from "./fixtures/documents.ts";
@@ -61,17 +63,29 @@ describe("documents as Markdown", () => {
 });
 
 describe("read, for documents", () => {
-	const setup = () => {
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+	const setup = (reuseCache = true) => {
 		const base = mkdtempSync(join(tmpdir(), "docread-"));
+		dirs.push(base);
 		const root = join(base, "workspace");
 		const temp = join(base, "tmp");
 		const env = createWorkspaceEnv({ root, tempDir: temp });
 		writeFileSync(join(root, "report.docx"), docx());
 		writeFileSync(join(root, "notes.txt"), "plain text\n");
-		const tool = createDocumentReadTool(join(temp, "converted"));
-		const run = (args: { path: string; offset?: number; limit?: number }) =>
-			tool.execute(args, { env, agent: async () => ({}), models: { getModel: () => undefined } } as never, {} as never) as Promise<{ output: { type: string; text?: string }[]; isError?: boolean }>;
-		return { root, temp, run };
+		const convertedDir = join(temp, "converted");
+		const tool = createDocumentReadTool(reuseCache ? convertedDir : undefined);
+		const run = (args: { path: string; offset?: number; limit?: number }, executionEnv = env) =>
+			tool.execute(args, { env: executionEnv, agent: async () => ({}), models: { getModel: () => undefined } } as never, {} as never) as Promise<{ output: { type: string; text?: string }[]; isError?: boolean }>;
+		const cachePath = async () => {
+			const info = await env.fileInfo("report.docx", {} as never);
+			if (!info.ok) throw info.error;
+			const key = createHash("sha256").update(`${info.value.path}\0${info.value.size}\0${info.value.mtimeMs}`).digest("hex").slice(0, 24);
+			return join(convertedDir, `${key}.md`);
+		};
+		return { base, root, temp, convertedDir, cachePath, env, run };
 	};
 	const text = (r: { output: { type: string; text?: string }[] }) => r.output.map((p) => p.text ?? "").join("\n");
 
@@ -85,6 +99,80 @@ describe("read, for documents", () => {
 		const later = await run({ path: "report.docx", offset: 5 });
 		expect(text(later)).toContain("Quarterly report");
 		expect(text(later)).not.toContain("# report.docx");
+	});
+
+	it("refuses a preexisting cache-directory symlink before writing Markdown outside the roots", async () => {
+		const { base, convertedDir, run } = setup();
+		const outside = join(base, "outside");
+		mkdirSync(outside);
+		symlinkSync(outside, convertedDir);
+		const result = await run({ path: "report.docx" }).catch((error: Error) => error);
+		expect(readdirSync(outside)).toEqual([]);
+		if (result instanceof Error) throw result; // failures must be returned as clear tool errors, not thrown
+		expect(result.isError).toBe(true);
+		expect(text(result)).toContain("could not be converted");
+		expect(text(result)).toContain("outside the agent's workspace");
+	});
+
+	it("refuses a dangling cache-tempfile symlink before it creates an outside target", async () => {
+		const { base, convertedDir, cachePath, run } = setup();
+		const outside = join(base, "outside");
+		mkdirSync(outside);
+		mkdirSync(convertedDir);
+		const converted = await cachePath();
+		const tmp = `${converted}.${process.pid}.tmp`;
+		symlinkSync(join(outside, "new.md"), tmp);
+		const result = await run({ path: "report.docx" }).catch((error: Error) => error);
+		expect(readdirSync(outside)).toEqual([]);
+		if (result instanceof Error) throw result;
+		expect(result.isError).toBe(true);
+		expect(lstatSync(tmp).isSymbolicLink()).toBe(true);
+		expect(existsSync(converted)).toBe(false);
+		expect(text(result)).toContain("could not be converted");
+		expect(text(result)).toContain("Unresolved symbolic link");
+	});
+
+	it("reuses a contained conversion and supports a contained cache-directory symlink", async () => {
+		const { temp, convertedDir, cachePath, run } = setup();
+		const contained = join(temp, "actual-cache");
+		mkdirSync(contained);
+		symlinkSync(contained, convertedDir);
+		expect((await run({ path: "report.docx" })).isError).toBeFalsy();
+		const converted = await cachePath();
+		expect(readFileSync(converted, "utf8")).toContain("Quarterly report");
+		writeFileSync(converted, "cached conversion sentinel\n");
+		const reused = await run({ path: "report.docx" });
+		expect(reused.isError).toBeFalsy();
+		expect(text(reused)).toContain("cached conversion sentinel");
+		expect(readdirSync(contained)).toEqual([basename(converted)]);
+	});
+
+	it("without convertedDir, still creates fresh private conversion directories in the environment's temp root", async () => {
+		const { temp, run } = setup(false);
+		for (let i = 0; i < 2; i++) {
+			const result = await run({ path: "report.docx" });
+			expect(result.isError).toBeFalsy();
+			expect(text(result)).toContain("Quarterly report");
+		}
+		const convertedDirs = readdirSync(temp);
+		expect(convertedDirs).toHaveLength(2);
+		for (const dir of convertedDirs) {
+			expect(dir).toMatch(/^converted-/);
+			expect(readdirSync(join(temp, dir))).toHaveLength(1);
+		}
+	});
+
+	it.each(["exists", "createDir", "writeFile", "renameFile"])("returns a clear tool error if cache %s fails", async (method) => {
+		const { env, run } = setup();
+		const failing = new Proxy(env, {
+			get(target, property) {
+				if (property === method) return async () => err(new FileError("permission_denied", `cache ${method} refused`));
+				return Reflect.get(target, property);
+			},
+		});
+		const result = await run({ path: "report.docx" }, failing);
+		expect(result.isError).toBe(true);
+		expect(text(result)).toContain(`report.docx could not be converted: cache ${method} refused`);
 	});
 
 	it("leaves other files to pi's read, and says when a document can't be read", async () => {
