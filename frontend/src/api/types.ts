@@ -329,6 +329,30 @@ export interface ProviderPreset {
   baseUrl: string;
   needsKey: boolean;
   note: string;
+  /** Where to get a key, or the software for a local server. */
+  signupUrl?: string;
+  /** Runs on this computer (Ollama, LM Studio): `GET /api/providers/detect` looks for it. */
+  local?: boolean;
+}
+
+/** A model server running on this computer (`GET /api/providers/detect`). */
+export interface DetectedServer {
+  /** The local preset it matches: "ollama", "lm-studio". */
+  preset: string;
+  name: string;
+  baseUrl: string;
+  /** Its chat models. */
+  models: { modelId: string; name: string }[];
+  /** The provider already using it, or null when it isn't set up. */
+  provider: string | null;
+}
+
+/** `POST /api/providers/setup`. */
+export interface ProviderSetupResult {
+  provider: Provider;
+  /** Everything it offers, `added` marked. */
+  available: DiscoveredModel[];
+  defaultModelId: string;
 }
 
 /** An account at a model service. Its key and header values are never returned. */

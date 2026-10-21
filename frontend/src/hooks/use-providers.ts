@@ -1,10 +1,12 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   api,
+  type DetectedServer,
   type DiscoveredModel,
   type Model,
   type Provider,
   type ProviderKindId,
+  type ProviderSetupResult,
   type ProvidersResponse,
 } from '~/api/client';
 import { AGENTS_KEY, CATALOG_KEY } from '~/hooks/use-agents';
@@ -102,6 +104,40 @@ export const useDeleteModel = () =>
   useModelsMutation(({ provider, modelId }: { provider: string; modelId: string }) =>
     api.delete<{ ok: true }>(modelPath(provider, modelId)),
   );
+
+/** Its own key, not under PROVIDERS_KEY: every model change shouldn't look for servers again. */
+export const DETECT_KEY = ['provider-detect'] as const;
+
+/** Model servers running on this computer (Ollama, LM Studio). Takes up to about a second. */
+export function useDetectedServers(enabled = true) {
+  return useQuery({
+    queryKey: DETECT_KEY,
+    queryFn: () => api.get<DetectedServer[]>('/api/providers/detect'),
+    enabled,
+    staleTime: 0,
+  });
+}
+
+export interface ProviderSetup {
+  preset: string;
+  apiKey?: string;
+  /** Models to add. Absent: every model of a local server, none of a remote one. */
+  models?: string[];
+}
+
+/** A provider from a preset in one step: created (or reused), its models listed, the chosen ones added. */
+export function useSetupProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ProviderSetup) =>
+      api.post<ProviderSetupResult>('/api/providers/setup', body),
+    onSettled: () =>
+      Promise.all([
+        invalidateModels(queryClient),
+        queryClient.invalidateQueries({ queryKey: DETECT_KEY }),
+      ]),
+  });
+}
 
 export const useSetDefaultModel = () =>
   useModelsMutation((modelId: string) =>

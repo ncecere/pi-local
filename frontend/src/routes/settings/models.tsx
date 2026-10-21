@@ -2,7 +2,7 @@ import { ChevronRight, Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-re
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import { errorMessage, type Model, type Provider, type ProviderKind } from '~/api/client';
-import { ConfirmDialog, ErrorNotice } from '~/components/models/fields';
+import { ConfirmDialog, ErrorNotice, RequestError } from '~/components/models/fields';
 import { DiscoverDialog, ModelDialog } from '~/components/models/model-dialogs';
 import { AddProviderDialog, EditProviderDialog } from '~/components/models/provider-dialogs';
 import { SettingsRow, SettingsSection } from '~/components/settings/settings-layout';
@@ -12,9 +12,11 @@ import { Switch } from '~/components/ui/switch';
 import { type AgentCatalog, useAgentCatalog } from '~/hooks/use-agents';
 import {
   useDeleteModel,
+  useDetectedServers,
   useProviders,
   usePutModel,
   useSetDefaultModel,
+  useSetupProvider,
   useUpdateProvider,
 } from '~/hooks/use-providers';
 import { usePageTitle } from '~/lib/document-title';
@@ -71,6 +73,58 @@ function DefaultModel({
         </select>
       </div>
     </SettingsRow>
+  );
+}
+
+/** Model servers running on this computer that aren't set up yet, each one click from being added. */
+function DetectedServers({ onAdded }: { onAdded: (provider: Provider) => void }) {
+  const detect = useDetectedServers();
+  const setup = useSetupProvider();
+  const found = (detect.data ?? []).filter(
+    (server) => server.provider === null && server.models.length > 0,
+  );
+  if (found.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {found.map((server) => {
+        const pending = setup.isPending && setup.variables?.preset === server.preset;
+        return (
+          <div
+            key={server.preset}
+            className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--accent-bright)]/30 bg-[var(--accent)]/8 px-4 py-3 text-sm"
+          >
+            <span className="min-w-0 flex-1">
+              {server.name} is running on this computer with {plural(server.models.length, 'model')}
+              .
+            </span>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              disabled={setup.isPending}
+              aria-label={`Add ${server.name}`}
+              onClick={() =>
+                setup.mutate(
+                  { preset: server.preset },
+                  {
+                    onSuccess: ({ provider }) => {
+                      toast(
+                        `${provider.name} added with ${plural(provider.models.length, 'model')}.`,
+                      );
+                      onAdded(provider);
+                    },
+                  },
+                )
+              }
+            >
+              {pending && <Spinner className="size-3.5 text-current" />}
+              Add it
+            </Button>
+          </div>
+        );
+      })}
+      <RequestError error={setup.error} what="This server" />
+    </div>
   );
 }
 
@@ -355,6 +409,7 @@ export function SettingsModelsPage() {
   return (
     <>
       <SettingsSection title="Models" first>
+        <DetectedServers onAdded={(provider) => expand(provider.id)} />
         <DefaultModel catalog={catalog.data} defaultModelId={defaultModelId} />
       </SettingsSection>
 

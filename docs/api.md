@@ -105,7 +105,16 @@ model `demo/demo-1` always exists and needs nothing.
 ```ts
 type ProviderKind = { id: "openai" | "anthropic" | "openai-compatible" | "openai-responses" | "anthropic-compatible";
   name: string; api: string; defaultBaseUrl: string | null };
-type ProviderPreset = { id: string; name: string; kind: string; baseUrl: string; needsKey: boolean; note: string };
+type ProviderPreset = { id: string; name: string; kind: string; baseUrl: string; needsKey: boolean; note: string;
+  signupUrl?: string;          // where to get a key, or the software for a local server
+  local?: boolean };           // runs on this computer (Ollama, LM Studio); detection looks for it
+type Detected = {              // a model server running on this computer
+  preset: string;              // the local preset it matches ("ollama", "lm-studio")
+  name: string; baseUrl: string;
+  models: { modelId: string; name: string }[];  // chat models only (no embedding models)
+  provider: string | null;     // the provider already using this server, if any
+};
+type Discovered = { modelId: string; name: string; contextWindow: number | null; added: boolean };
 type Provider = {
   id: string;                  // slug: 1–32 of [a-z0-9-], unique; what agent.yaml names
   name: string;                // 1–60 chars
@@ -137,6 +146,8 @@ type Model = {
 | `POST /api/providers` | Body `{id?, name, kind, baseUrl?, apiKey?, headers?: Record<string,string>}` (`id` defaults to a slug of the name; `baseUrl` to the kind's default). `201 Provider`. Errors: `invalid_id`, `id_taken`, `invalid_name`, `invalid_kind`, `invalid_base_url`, `invalid_headers`. |
 | `PATCH /api/providers/{p}` | Body `{name?, baseUrl?, apiKey?, headers?, enabled?}`. `apiKey: ""` removes the key; `headers` replaces them all. Answers `Provider`. Agents using it restart on the change. |
 | `DELETE /api/providers/{p}` | `{ok: true}`. `409 in_use` with `details.agents: [{id, name}]` while agents use one of its models. |
+| `GET /api/providers/detect` | `Detected[]`: the local presets' servers that answer (each looked for for up to about 1 s; nothing is configured). A server that isn't running is left out. Not cached. |
+| `POST /api/providers/setup` | One-step setup from a preset, for the first run. Body `{preset, apiKey?, models?: string[]}`. Creates the provider from the preset, or reuses the one already set up for it (a new `apiKey` replaces its key), lists its models, and adds `models`. Without `models`, a local preset gets every chat model (at most 20) and a remote one none (pick from `available`, then call again with `models`; the key isn't needed again). The first model added becomes the default model while the default is still `demo/demo-1`. Answers `{provider: Provider, available: Discovered[], defaultModelId}` (`available` marks `added`). Errors: `400 invalid_preset`, `400 invalid_key` (a keyed preset with no key stored or given: "Paste the API key from OpenAI."), `400 invalid_model` (not offered), `502 discovery_failed` with a message for people (wrong key, nothing answering). |
 | `POST /api/providers/{p}/discover` | Lists the provider's models from its API: `{models: [{modelId, name, contextWindow: number \| null, added: boolean}]}`. `502 discovery_failed` with a message for people. |
 | `PUT /api/providers/{p}/models/{modelId...}` | Adds or changes a model. Body `{name?, contextWindow?, maxTokens?, reasoning?, images?, inputPrice?, outputPrice?, enabled?}`. Answers `Model`. |
 | `DELETE /api/providers/{p}/models/{modelId...}` | `{ok: true}`, or `409 in_use` as above. |

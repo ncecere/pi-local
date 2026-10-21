@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { MessageSquare, Plus } from 'lucide-react';
+import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Agent, Team } from '~/api/client';
 import { AgentAvatar, agentStatusLabel } from '~/components/agent/agent-avatar';
@@ -13,13 +13,12 @@ import {
 } from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
 import { ElicitationList } from '~/components/chat/elicitation-card';
-import { Button } from '~/components/ui/button';
+import { GetStarted } from '~/components/onboarding/get-started';
 import { writeHandover } from '~/hooks/use-agent-thread';
 import {
   chattable,
   newThreadId,
   noteNewThread,
-  useAgentCatalog,
   useAgents,
   useAgentThreads,
 } from '~/hooks/use-agents';
@@ -31,7 +30,6 @@ import { agentKindLabel } from '~/lib/agent-groups';
 import { usePageTitle } from '~/lib/document-title';
 import { focusComposerOnArrival } from '~/lib/focus-after-navigation';
 import { greetingName } from '~/lib/greeting-name';
-import { onlyDemoModel } from '~/lib/models';
 import { chattableTeams } from '~/lib/teams';
 import { cn } from '~/lib/utils';
 
@@ -153,10 +151,8 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
 
   const firstName = me && greetingName(me.user.name, null);
   const loading = agentsQuery.isPending;
-  // First run: no agents at all, and maybe no model provider either (only the demo model).
+  // First run: no agents at all (the Get started card shows, and says whether a model is connected).
   const noAgents = agentsQuery.isSuccess && agentsQuery.data.length === 0;
-  const catalog = useAgentCatalog(noAgents);
-  const demoOnly = noAgents && catalog.data !== undefined && onlyDemoModel(catalog.data.models);
 
   return (
     <div
@@ -168,7 +164,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
         <div className="mx-auto w-full max-w-[41.75rem]">
           <h1 className="flex flex-col items-center gap-3 text-center text-[1.375rem] font-bold leading-tight tracking-tight md:flex-row md:text-left md:text-[1.875rem]">
             {agent && <AgentAvatar agent={agent} size="lg" />}
-            <span className={cn(!agent && !loading && 'text-[var(--text-secondary)]')}>
+            <span className={cn(!agent && !loading && !noAgents && 'text-[var(--text-secondary)]')}>
               {agent ? (
                 <>
                   What should {talkingTo} work on
@@ -186,6 +182,8 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
                 </>
               ) : loading ? (
                 <span className="invisible">Loading</span>
+              ) : noAgents ? (
+                'Welcome to Pi Local'
               ) : (
                 'No agents yet'
               )}
@@ -229,28 +227,8 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
             </fieldset>
           )}
 
-          {noAgents ? (
-            <div className="mt-6 flex flex-col items-center gap-3 md:items-start">
-              <Button asChild variant="primary" size="lg">
-                <Link to="/settings/agents" search={{ new: true }}>
-                  <Plus />
-                  Make an agent
-                </Link>
-              </Button>
-              {demoOnly && (
-                <p className="text-center text-sm text-[var(--text-muted)] md:text-left">
-                  Add a model provider first in{' '}
-                  <Link
-                    to="/settings/models"
-                    className="text-[var(--accent-bright)] underline-offset-4 hover:underline"
-                  >
-                    Settings → Models
-                  </Link>
-                  , or try the built-in demo model.
-                </p>
-              )}
-            </div>
-          ) : (
+          <GetStarted className="mt-7" />
+          {!noAgents && (
             <p className="mt-4 hidden text-sm md:block">
               <Link to="/settings/agents" className="text-[var(--accent-bright)] hover:underline">
                 New agent

@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronRight, KeyRound, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronRight, ExternalLink, KeyRound, Trash2 } from 'lucide-react';
 import { type FormEvent, useId, useState } from 'react';
 import { toast } from 'sonner';
 import type { Provider, ProviderKind, ProviderKindId, ProviderPreset } from '~/api/client';
@@ -64,23 +64,45 @@ function PresetPicker({
   presets: ProviderPreset[];
   onPick: (preset: ProviderPreset) => void;
 }) {
+  const id = useId();
   return (
     <ul className="flex flex-col gap-2" aria-label="Kinds of provider">
       {presets.map((preset) => (
-        <li key={preset.id}>
-          <button
-            type="button"
-            onClick={() => onPick(preset)}
-            className="flex w-full items-center gap-3 rounded-lg border border-[var(--border-subtle)] px-3 py-2.5 text-left text-sm transition-colors hover:bg-[var(--bg-control)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-bright)]"
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block font-medium">{preset.name}</span>
-              {preset.note && (
-                <span className="block text-xs text-[var(--text-muted)]">{preset.note}</span>
-              )}
-            </span>
-            <ChevronRight className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
-          </button>
+        // The whole row picks the preset (the button stretches over it); the link sits above it.
+        <li
+          key={preset.id}
+          className="relative flex w-full items-center gap-3 rounded-lg border border-[var(--border-subtle)] px-3 py-2.5 text-left text-sm transition-colors hover:bg-[var(--bg-control)] has-[button:focus-visible]:outline-2 has-[button:focus-visible]:outline-offset-2 has-[button:focus-visible]:outline-[var(--accent-bright)]"
+        >
+          <span className="min-w-0 flex-1">
+            <button
+              type="button"
+              onClick={() => onPick(preset)}
+              aria-describedby={preset.note ? `${id}-${preset.id}-note` : undefined}
+              className="block text-left font-medium outline-none after:absolute after:inset-0 after:rounded-lg"
+            >
+              {preset.name}
+            </button>
+            {(preset.note || preset.signupUrl) && (
+              <span className="block text-xs text-[var(--text-muted)]">
+                <span id={`${id}-${preset.id}-note`}>{preset.note}</span>
+                {preset.signupUrl && (
+                  <>
+                    {preset.note && ' '}
+                    <a
+                      href={preset.signupUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="relative z-10 inline-flex items-center gap-1 text-[var(--accent-bright)] underline-offset-4 hover:underline"
+                    >
+                      {preset.local ? 'Download' : 'Get a key'}
+                      <ExternalLink className="size-3" aria-hidden="true" />
+                    </a>
+                  </>
+                )}
+              </span>
+            )}
+          </span>
+          <ChevronRight className="size-4 shrink-0 text-[var(--text-muted)]" aria-hidden />
         </li>
       ))}
     </ul>
