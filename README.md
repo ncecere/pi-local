@@ -12,16 +12,25 @@ reply finishes the next time you open the app.
   - steer a reply in progress
   - edit a message or branch a conversation
   - search everything said
-  - attach files
+  - attach files (or paste screenshots); agents read PDF, Word, Excel and PowerPoint
+  - pick the model and thinking level per conversation
+  - agents ask you (choices, yes/no), notify you, and keep a checklist beside the conversation
 - **Models:**
   - OpenAI, Anthropic, Ollama, LM Studio, OpenRouter, LiteLLM or any compatible server
   - keys in the macOS keychain
   - usage and estimated cost
+  - web search (Brave, Tavily, SerpApi or SearXNG) and reading pages
 - **Agents:**
   - kinds: **assistant**, **researcher**, and **coding**, which works like the pi coding agent in a project folder you
     choose: pi's coding prompt, `read`/`write`/`edit`/`bash`, and the project's `AGENTS.md` or `CLAUDE.md`
   - instructions and a raw `agent.yaml`, logs, wake and sleep
   - duplicate, export and import
+  - templates (Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner, Coding); save your own,
+    import and export them
+- **Memory.** An About me card every agent knows, facts agents learn about you (guesses wait for your review), each
+  agent's own notes, and which agents see which categories: Settings → You.
+- **Fast judgments (optional).** A TypeSafe System One model picks the agent for a message you didn't address
+  ("Auto"), and loads the right tools for agents with large MCP servers. Off unless set up; self-hosted works.
 - **Teams, and agents asking agents.** An agent may ask the agents it is allowed to ask (its `canCall`, or its team);
   each answers in a conversation of its own that you can read.
 - **Workspace tools.** `read`, `write`, `edit` and `bash` in the agent's own folder or a project folder, with
@@ -33,7 +42,7 @@ reply finishes the next time you open the app.
 - **Always on:**
   - closing the window keeps Pi Local in the menu bar
   - schedules (one-time or cron) fire, and agents may set their own
-  - notifications when something needs you
+  - notifications when something needs you: approve, deny or answer yes/no right from them
   - launch at login
 
 - **Updates** itself from GitHub Releases, installing only archives signed with the project's release key.
