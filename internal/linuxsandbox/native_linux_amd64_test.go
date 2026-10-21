@@ -413,6 +413,9 @@ exec /bin/sleep 60
 			}
 			var stderr synchronizedBuffer
 			cmd.Stderr = &stderr
+			// Bound exec's stderr copier even if an uncollected descendant
+			// retains its write endpoint after the owned root is killed.
+			cmd.WaitDelay = fixtureWaitDelay
 			if err := cmd.Start(); err != nil {
 				_ = pipe.Close()
 				t.Fatal(err)
