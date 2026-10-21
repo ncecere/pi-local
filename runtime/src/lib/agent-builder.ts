@@ -33,6 +33,18 @@ export function agentBuilder(options: { gatewayUrl: string; key: string; fetch?:
 				{ additionalProperties: false },
 			),
 		),
+		knowledge: Type.Optional(
+			Type.Object(
+				{ folders: Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 20, description: "Existing document folders by full path; [] clears. Broad roots and symlink folders are refused." }) },
+				{ additionalProperties: false, description: "Replace knowledge folders. Omit to keep unchanged on update." },
+			),
+		),
+		skills: Type.Optional(
+			Type.Array(Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }), {
+				maxItems: 100,
+				description: "Installed shared skill names only, never imports or file paths. [] clears; omit to keep unchanged on update.",
+			}),
+		),
 		schedule: Type.Optional(
 			Type.Object(
 				{
@@ -54,8 +66,8 @@ export function agentBuilder(options: { gatewayUrl: string; key: string; fetch?:
 			name,
 			description:
 				name === "create_agent"
-					? "Propose a new agent with the person. Always waits for approval of the complete configuration, including defaults and first schedule. No credentials, skills, knowledge or setup commands are accepted."
-					: "Propose changes to an agent you created (never yourself or unrelated agents). Always asks human approval. Omitted fields stay unchanged; schedule adds a first schedule, not shell automation.",
+					? "Propose a new agent with the person, including document knowledge folders and installed shared skills by name. Always requires human approval of the complete agent.yaml, defaults and first schedule, regardless of approval profile. No credentials or setup commands are accepted."
+					: "Propose changes to an agent you created (never yourself or unrelated agents), including knowledge folders and installed shared skills by name. Always requires human approval of the complete agent.yaml regardless of profile. Omitted fields stay unchanged; empty arrays clear selections. Schedule adds a first schedule, not shell automation. No credentials or setup commands.",
 			parameters: Type.Object(
 				{
 					...fields,

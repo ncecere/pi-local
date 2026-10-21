@@ -19,16 +19,18 @@ import (
 )
 
 // BuilderInput deliberately supports only available configuration. Unknown fields (including
-// knowledge, skills, credentials and setup commands) are errors, not ignored promises.
+// credentials and setup commands) are errors, not ignored promises.
 type BuilderInput struct {
-	Agent        string           `json:"agent,omitempty"`
-	TemplateID   *string          `json:"templateId,omitempty"`
-	Name         *string          `json:"name,omitempty"`
-	Description  *string          `json:"description,omitempty"`
-	Instructions *string          `json:"instructions,omitempty"`
-	ModelID      *string          `json:"modelId,omitempty"`
-	Workspace    *workspaceInput  `json:"workspace,omitempty"`
-	Schedule     *schedules.Input `json:"schedule,omitempty"`
+	Agent        string            `json:"agent,omitempty"`
+	TemplateID   *string           `json:"templateId,omitempty"`
+	Name         *string           `json:"name,omitempty"`
+	Description  *string           `json:"description,omitempty"`
+	Instructions *string           `json:"instructions,omitempty"`
+	ModelID      *string           `json:"modelId,omitempty"`
+	Workspace    *workspaceInput   `json:"workspace,omitempty"`
+	Knowledge    *agents.Knowledge `json:"knowledge,omitempty"`
+	Skills       *[]string         `json:"skills,omitempty"`
+	Schedule     *schedules.Input  `json:"schedule,omitempty"`
 }
 
 type builderProposal struct {
@@ -56,6 +58,16 @@ func strictBuilder(raw []byte, into any) error {
 	}
 	if err := d.Decode(new(any)); err != io.EOF {
 		return builderRefuse("Send exactly one configuration.")
+	}
+	return nil
+}
+
+// Builders select installed shared skills by name; they never import skills or write their files.
+func (a *API) builderSkills(names []string) error {
+	for _, name := range names {
+		if a.Skills == nil || !a.Skills.Has(name) {
+			return builderRefuse("Shared skill %q is missing or unusable. Choose an installed shared skill by name.", name)
+		}
 	}
 	return nil
 }
@@ -119,7 +131,7 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 			}
 			return json.RawMessage(proposalText), nil
 		}
-		patch := agentInput{Name: config.Name, Description: config.Description, Instructions: config.Instructions, ModelID: config.ModelID, TemplateID: config.TemplateID, Workspace: config.Workspace}
+		patch := agentInput{Name: config.Name, Description: config.Description, Instructions: config.Instructions, ModelID: config.ModelID, TemplateID: config.TemplateID, Workspace: config.Workspace, Knowledge: config.Knowledge, Skills: config.Skills}
 		var cfg agents.Config
 		var tmpl *templates.Template
 		revision := 0
@@ -153,11 +165,14 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 			err = patch.apply(&cfg)
 			if err == nil {
 				cfg.Normalize()
-				err = cfg.Validate()
+				err = cfg.ValidateChange(current.Config)
 			}
 		}
 		if err != nil {
 			return nil, builderRefuse("%s", err)
+		}
+		if err := a.builderSkills(cfg.Skills); err != nil {
+			return nil, err
 		}
 		if a.Agents.ModelAvailable != nil && cfg.Model != agents.DemoModel && !a.Agents.ModelAvailable(cfg.Model) {
 			return nil, builderRefuse("Choose an available model.")
@@ -245,6 +260,9 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 	}
 	cfg, err := agents.ParseConfig([]byte(proposal.YAML))
 	if err != nil {
+		return nil, err
+	}
+	if err := a.builderSkills(cfg.Skills); err != nil {
 		return nil, err
 	}
 	commit := func(tx *sql.Tx) error {

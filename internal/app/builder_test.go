@@ -126,7 +126,7 @@ func TestBuilderDenialCapabilityAndUnsupportedSettings(t *testing.T) {
 	if _, err := h.app.API.BuilderCall(t.Context(), builder, "apply", replay); err == nil {
 		t.Fatal("denied gateway apply succeeded")
 	}
-	for i, field := range []string{"knowledge", "skills", "setupCommand"} {
+	for i, field := range []string{"credentials", "setupCommand", "imports", "supportingFiles", "unknownSetting"} {
 		raw, _ := json.Marshal(map[string]any{"key": field, "approvalId": "ap_test", "tool": "create_agent", "configuration": map[string]any{"name": "Bad", field: map[string]any{}}})
 		if _, err := h.app.API.BuilderCall(t.Context(), builder, "prepare", raw); err == nil || !strings.Contains(err.Error(), field) {
 			t.Fatalf("unsupported %d: %v", i, err)
