@@ -6,6 +6,7 @@ import { abortBackground, type LiveWork, liveWork, olderThan, reportBackground }
 import { type Approvals, type DecisionInput, parseApprovalPolicy, waitingThreads } from "./approvals.ts";
 import type { ThreadStore } from "./threads.ts";
 import { DELTA_VERSION, DeltaStream } from "./delta.ts";
+import { CallIdentityReader } from "./call-identity.ts";
 import { EXPOSED_KIND } from "./define.ts";
 import { CONTRACT_VERSION, PI_DURABLE_VERSION } from "./version.ts";
 import {
@@ -81,6 +82,7 @@ export function createRuntimeServer(options: RuntimeOptions): {
 	touch: () => void;
 } {
 	const { harness, threads, approvals } = options;
+	const callIdentities = new CallIdentityReader(harness);
 	const exposed: ExposedDocuments = options.documents ?? new Map();
 	const expected = Buffer.from(`Bearer ${options.token}`);
 	let lastActivity = Date.now();
@@ -130,6 +132,7 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			value.docs["pi.live"] as never,
 			await documentRefs(harness, conversation.id, exposed),
 			approvals?.viewOf(threadId, conversation.id as unknown as number),
+			await callIdentities.read(value.entries, value.docs["pi.live"] as never),
 		);
 	};
 
@@ -381,35 +384,42 @@ export function createRuntimeServer(options: RuntimeOptions): {
 		let approvalsSeen = -1;
 		let approvalsVersion = 0;
 		let shown = approvals?.viewOf(threadId, conversation.id as unknown as number);
-		const current = (value: typeof watch.value): { view: ChatView; changed: boolean } => {
+		const current = async (value: typeof watch.value): Promise<{ view: ChatView; changed: boolean }> => {
+			const live = value.docs["pi.live"] as never as Parameters<typeof liveParts>[0];
+			const identities = await callIdentities.read(value.entries, live);
 			const changed = value.entries !== entries || approvalsSeen !== approvalsVersion;
 			if (changed) {
 				entries = value.entries;
 				approvalsSeen = approvalsVersion;
 				shown = approvals?.viewOf(threadId, conversation.id as unknown as number);
-				messages = buildMessages(value.entries, shown?.byCall);
+				messages = buildMessages(value.entries, shown?.byTask, identities);
 			}
-			const live = value.docs["pi.live"] as never as Parameters<typeof liveParts>[0];
 			const documents = docs.refs();
 			const pending = shown === undefined || shown.pending.length === 0 ? {} : { approvals: shown.pending };
 			return {
-				view: { busy: live?.run !== undefined, messages, ...liveParts(live), ...(documents === undefined ? {} : { documents }), ...pending },
+				view: { busy: live?.run !== undefined, messages, ...liveParts(live, identities), ...(documents === undefined ? {} : { documents }), ...pending },
 				changed,
 			};
 		};
 		const deltas = options.format === "delta" ? new DeltaStream(options.limit, options.lastSeq) : undefined;
 		const page: MessagePage | undefined = options.limit === undefined ? undefined : { limit: options.limit };
+		// Resolving task inputs is asynchronous. Serialize frames so an older read cannot overtake a newer delta.
+		let sending: Promise<void> = Promise.resolve();
 		const send = (value: typeof watch.value) => {
-			const { view, changed } = current(value);
-			if (deltas === undefined) {
-				response.write(`event: view\ndata: ${JSON.stringify(page === undefined ? view : pageView(view, page))}\n\n`);
-				return;
-			}
-			let out = "";
-			for (const event of deltas.next(view, changed)) out += `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-			if (out !== "") response.write(out);
+			const next = sending.then(async () => {
+				const { view, changed } = await current(value);
+				if (deltas === undefined) {
+					response.write(`event: view\ndata: ${JSON.stringify(page === undefined ? view : pageView(view, page))}\n\n`);
+					return;
+				}
+				let out = "";
+				for (const event of deltas.next(view, changed)) out += `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+				if (out !== "") response.write(out);
+			});
+			sending = next.catch((error) => console.error("[runtime] chat identities:", error));
+			return next;
 		};
-		send(watch.value);
+		await send(watch.value);
 		if (options.once) {
 			await watch.stop();
 			await docs.stop();
@@ -422,7 +432,7 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			touch();
 			timer ??= setTimeout(() => {
 				timer = undefined;
-				send(latest);
+				void send(latest).catch(() => response.end());
 			}, 100);
 		};
 		docs.onChange = schedule;

@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { builtinSummary, changesThings, DENIED_MESSAGE, evaluate, parsePolicy, type RulePolicy, type Source, type ToolInfo, toolMatches } from "./approval-rules.ts";
 import { redactArguments } from "./redact.ts";
+import { taskIdentity } from "./call-identity.ts";
 import type { ThreadStore } from "./threads.ts";
 import { type Author, type ChatApproval, USER_ENTRY, type ViewApprovals } from "./view.ts";
 
@@ -314,13 +315,17 @@ export class Approvals implements ApprovalRequester {
 	/** What a thread's chat view shows: the approvals of its own conversation's calls, and its pending requests. */
 	viewOf(threadId: string, conversationId: number): ViewApprovals {
 		const records = this.list(threadId);
-		const byCall = new Map<string, ChatApproval>();
-		for (const r of records) if (r.conversationId === conversationId) byCall.set(r.callId, chatApproval(r, false));
+		const byTask = new Map<string, ChatApproval>();
+		for (const r of records) if (r.conversationId === conversationId) {
+			const key = taskIdentity(r.taskId);
+			// Several keyed hooks can ask about the same task. Do not let a completed hook hide a pending one.
+			if (!byTask.has(key) || r.status === "pending") byTask.set(key, chatApproval(r, false));
+		}
 		const pending = records
 			.filter((r) => r.status === "pending")
 			.sort((a, b) => a.requestedAt - b.requestedAt)
 			.map((r) => chatApproval(r, true));
-		return { byCall, pending };
+		return { byTask, pending };
 	}
 
 	pending(): ApprovalRecord[] {
@@ -637,6 +642,7 @@ function blockMessage(record: ApprovalRecord): string {
 export function chatApproval(r: ApprovalRecord, withArguments: boolean): ChatApproval {
 	return {
 		id: r.id,
+		taskId: taskIdentity(r.taskId),
 		callId: r.callId,
 		tool: r.tool,
 		status: r.status,

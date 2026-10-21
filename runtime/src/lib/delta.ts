@@ -231,6 +231,10 @@ export class DeltaStream {
 
 	/** Adds the tool changes; false when the client's tools aren't in the current order (send them whole). */
 	private diffTools(held: readonly ChatTool[], now: readonly ChatTool[], messages: readonly ChatMessage[], changes: Change[]): boolean {
+		// A provider may reuse its ID in a later round, even between coalesced frames. Identity changes (including a
+		// sequential slot gaining its task) require replacement; output deltas must never cross call occurrences.
+		if (held.some((before) => now.some((tool) => tool.callId === before.callId &&
+			(tool.instanceId !== before.instanceId || tool.taskId !== before.taskId)))) return false;
 		const ids = new Set(now.map((t) => t.callId));
 		const kept = held.filter((t) => ids.has(t.callId));
 		if (!kept.every((t, i) => now[i]?.callId === t.callId)) return false;
@@ -238,7 +242,7 @@ export class DeltaStream {
 		for (const t of held) {
 			if (!ids.has(t.callId)) {
 				out.push({ type: "tool.removed", callId: t.callId });
-				this.seen.delete(t.callId);
+				this.seen.delete(t.instanceId ?? t.taskId ?? t.callId);
 			}
 		}
 		for (let i = 0; i < now.length; i++) {
@@ -271,11 +275,13 @@ export class DeltaStream {
 		// The call is in one of the last replies.
 		for (let i = messages.length - 1; i >= Math.max(0, messages.length - 20) && startedAt === undefined; i--) {
 			const m = messages[i]!;
-			if (m.role === "assistant") startedAt = m.toolCalls?.find((c) => c.id === tool.callId)?.startedAt;
+			if (m.role === "assistant") startedAt = m.toolCalls?.find((c) =>
+				tool.instanceId !== undefined ? c.instanceId === tool.instanceId : tool.taskId !== undefined ? c.taskId === tool.taskId : c.id === tool.callId)?.startedAt;
 		}
 		if (startedAt === undefined) {
-			if (!this.seen.has(tool.callId)) this.seen.set(tool.callId, this.now());
-			startedAt = this.seen.get(tool.callId)!;
+			const key = tool.instanceId ?? tool.taskId ?? tool.callId;
+			if (!this.seen.has(key)) this.seen.set(key, this.now());
+			startedAt = this.seen.get(key)!;
 		}
 		return { startedAt, elapsedMs: Math.max(0, this.now() - startedAt) };
 	}

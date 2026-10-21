@@ -206,7 +206,10 @@ export function toolOutputText(part: Record<string, unknown>): string | null {
 
 interface Reply {
   message: AgentUIMessage;
+  /** All occurrences, keyed by stable source identity, not reusable provider ID. */
   tools: Map<string, DynamicToolUIPart>;
+  /** Compatibility for old DTOs without identities: only this assistant step's calls. */
+  round: Map<string, string>;
   /** What the steps recorded, accumulated: merged into the reply's metadata after each step. */
   recorded: Pick<ReplyMetadata, 'at' | 'model' | 'usage' | 'stopReason'>;
 }
@@ -237,6 +240,7 @@ export function viewToMessages(
       reply = {
         message: { id: replyIdFor(question), role: 'assistant', parts: [], metadata: {} },
         tools: new Map(),
+        round: new Map(),
         recorded: {},
       };
       messages.push(reply.message);
@@ -280,14 +284,23 @@ export function viewToMessages(
     if (thinking) parts.push({ type: 'reasoning', text: thinking, state: 'streaming' });
     if (text) parts.push({ type: 'text', text, state: 'streaming' });
     for (const slot of view.tools ?? []) {
-      const part = live.tools.get(slot.callId);
+      const key =
+        slot.instanceId ??
+        (slot.taskId ? `task:${slot.taskId}` : live.round.get(slot.callId)) ??
+        `live:${slot.callId}`;
+      const part = live.tools.get(key);
       if (part && part.state === 'input-available') {
-        if (slot.output) part.toolMetadata = { liveOutput: slot.output };
+        if (slot.taskId) part.toolMetadata = { ...(part.toolMetadata ?? {}), taskId: slot.taskId };
+        if (slot.output)
+          part.toolMetadata = { ...(part.toolMetadata ?? {}), liveOutput: slot.output };
         const metadata = withDetails(part.toolMetadata, slot.details, slot.detailsOmitted);
         if (metadata) part.toolMetadata = metadata;
       } else if (!part) {
         const metadata = withDetails(
-          slot.output ? { liveOutput: slot.output } : undefined,
+          {
+            ...(slot.output ? { liveOutput: slot.output } : {}),
+            ...(slot.taskId ? { taskId: slot.taskId } : {}),
+          },
           slot.details,
           slot.detailsOmitted,
         );
@@ -295,12 +308,12 @@ export function viewToMessages(
         const added: DynamicToolUIPart = {
           type: 'dynamic-tool',
           toolName: slot.name,
-          toolCallId: slot.callId,
+          toolCallId: slot.instanceId ?? key,
           state: 'input-available',
           input: {},
           ...(metadata ? { toolMetadata: metadata } : {}),
         };
-        live.tools.set(slot.callId, added);
+        live.tools.set(key, added);
         parts.push(added);
       }
     }
@@ -313,14 +326,30 @@ export function viewToMessages(
   const orphans: ChatApproval[] = [];
   for (const approval of view?.approvals ?? []) {
     if (approval.status !== 'pending') continue;
-    const owner = replies.find((candidate) => candidate.tools.has(approval.callId));
-    const part = owner?.tools.get(approval.callId);
-    if (!owner || !part) {
+    // Match the durable request/task, never the first (or last) reuse of a provider ID.
+    const matches = replies.flatMap((owner) =>
+      [...owner.tools.values()]
+        .filter(
+          (part) =>
+            approvalOf(part)?.id === approval.id ||
+            (approval.taskId !== undefined && part.toolMetadata?.taskId === approval.taskId),
+        )
+        .map((part) => ({ owner, part })),
+    );
+    const match = matches.length === 1 ? matches[0] : undefined;
+    const owner = match?.owner;
+    const part = match?.part;
+    if (
+      !owner ||
+      !part ||
+      part.state === 'output-available' ||
+      part.state === 'output-error' ||
+      (approvalOf(part)?.status === 'pending' && approvalOf(part)?.id !== approval.id)
+    ) {
+      // Even an inconsistent completed snapshot must not silently discard a pending record.
       orphans.push(approval);
       continue;
     }
-    // A result already in: the request is over, whatever the list says.
-    if (part.state === 'output-available' || part.state === 'output-error') continue;
     const next = withApproval(part, { ...(approvalOf(part) ?? {}), ...approval });
     replacePart(owner, part, next);
   }
@@ -406,13 +435,32 @@ export function supersededSteps(
   }
   settle(streamingAgain);
   const abandonedCalls = new Set<string>();
+  const abandonedLegacyResults = new Set<ChatMessage>();
+  let round: ChatAssistantMessage | undefined;
+  for (const message of messages) {
+    if (message.role === 'user') round = undefined;
+    if (message.role === 'assistant') round = message;
+    if (
+      message.role === 'tool' &&
+      !message.instanceId &&
+      round &&
+      replaced.includes(round) &&
+      round.toolCalls?.some((call) => call.id === message.toolCallId)
+    )
+      abandonedLegacyResults.add(message);
+  }
   for (const step of replaced) {
     skip.add(step);
-    for (const call of step.toolCalls ?? []) abandonedCalls.add(call.id);
+    for (const call of step.toolCalls ?? [])
+      if (call.instanceId) abandonedCalls.add(call.instanceId);
   }
-  if (abandonedCalls.size > 0)
-    for (const message of messages)
-      if (message.role === 'tool' && abandonedCalls.has(message.toolCallId)) skip.add(message);
+  for (const message of messages)
+    if (
+      message.role === 'tool' &&
+      ((message.instanceId && abandonedCalls.has(message.instanceId)) ||
+        abandonedLegacyResults.has(message))
+    )
+      skip.add(message);
   return skip;
 }
 
@@ -420,19 +468,26 @@ function addAssistantStep(reply: Reply, message: ChatAssistantMessage) {
   const parts = reply.message.parts;
   if (message.thinking) parts.push({ type: 'reasoning', text: message.thinking, state: 'done' });
   if (message.text) parts.push({ type: 'text', text: message.text, state: 'done' });
+  reply.round.clear();
   for (const call of message.toolCalls ?? []) {
+    const key = call.instanceId ?? `${message.id}/tool/${encodeURIComponent(call.id)}`;
+    if (!call.instanceId) reply.round.set(call.id, key);
+    const metadata = {
+      ...(call.taskId ? { taskId: call.taskId } : {}),
+      ...(call.startedAt !== undefined ? { startedAt: call.startedAt, endedAt: call.endedAt } : {}),
+    };
     const plain: DynamicToolUIPart = {
       type: 'dynamic-tool',
       toolName: call.name,
-      toolCallId: call.id,
+      toolCallId:
+        call.instanceId ??
+        ([...reply.tools.values()].some((part) => part.toolCallId === call.id) ? key : call.id),
       state: 'input-available',
       input: call.arguments ?? {},
-      ...(call.startedAt !== undefined
-        ? { toolMetadata: { startedAt: call.startedAt, endedAt: call.endedAt } }
-        : {}),
+      ...(Object.keys(metadata).length > 0 ? { toolMetadata: metadata } : {}),
     };
     const part = call.approval ? withApproval(plain, call.approval) : plain;
-    reply.tools.set(call.id, part);
+    reply.tools.set(key, part);
     parts.push(part);
   }
   // The latest step decides how the reply ended: a failure, then a retry that
@@ -467,7 +522,7 @@ function recordStep(reply: Reply, message: ChatAssistantMessage): Reply['recorde
 }
 
 function addToolResult(reply: Reply, message: ChatToolMessage) {
-  const id = message.toolCallId ?? '';
+  const id = message.instanceId ?? reply.round.get(message.toolCallId) ?? `result:${message.id}`;
   const text = message.text ?? '';
   const existing = reply.tools.get(id);
   // Its timing, from the call, stays with it when the result arrives; its details come with the result.
@@ -475,7 +530,7 @@ function addToolResult(reply: Reply, message: ChatToolMessage) {
   const base = {
     type: 'dynamic-tool' as const,
     toolName: existing?.toolName ?? message.name ?? 'tool',
-    toolCallId: id,
+    toolCallId: existing?.toolCallId ?? message.instanceId ?? message.toolCallId,
     input: existing?.input ?? {},
     ...(metadata ? { toolMetadata: metadata } : {}),
   };
@@ -500,7 +555,8 @@ function replacePart(reply: Reply, previous: DynamicToolUIPart, next: DynamicToo
   const index = parts.indexOf(previous);
   if (index >= 0) parts[index] = next;
   else parts.push(next);
-  reply.tools.set(next.toolCallId, next);
+  const key = [...reply.tools].find(([, part]) => part === previous)?.[0];
+  if (key !== undefined) reply.tools.set(key, next);
 }
 
 /**
