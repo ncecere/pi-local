@@ -2,9 +2,40 @@
 
 Each version's section is its release notes on GitHub.
 
-## 0.3.0
+## 0.4.0
 
-Trust and control.
+Learning, knowledge and connections.
+
+- **Conversation learning:** optional idle and before-compaction suggestions, behind one global switch that starts
+  off. Inferred facts stay suggestions until reviewed. Facts show their source/trust and edit history; agents can
+  search only their own conversations. Optional fast judgments filter suggestions.
+- **Knowledge folders:** index selected local text, Markdown, PDF and Office files; search passages with citations,
+  see indexing errors and rescan. Document Q&A is a starting template. Knowledge files are read-only to file tools;
+  optional fast judgments rerank results, respect stopped budgets and record unpriced auxiliary usage.
+- **Skills and prompts:** per-agent/shared skills, ZIP import and supporting-file viewing; a prompt library with
+  import/export, placeholders and keyboard slash commands.
+- **Canvas:** keep Markdown, code, CSV and HTML artifacts beside a conversation; edit, review versions, copy,
+  download or save to the workspace. HTML previews strip active/navigation content and use a no-script sandbox.
+- **Agent builder:** propose agents and owned-agent updates with knowledge folders, installed skills and schedules.
+  Every change requires human approval of the full normalized configuration, regardless of permission profile.
+  Stale proposals are refused; committed updates recover their config files after interruption.
+- **Concierge:** a front door that can ask only the agents explicitly allowed by your choices or team permissions.
+  It does not select models automatically.
+- **Connections:** a curated MCP gallery with agent selection and honest sign-in/error states. Some services require
+  advanced custom OAuth/token setup; opening a browser is not treated as successful sign-in.
+- **Personal helpers:** Apple Calendar, Reminders and Notes connections on macOS; Apple creations require native-host
+  confirmation. Calendar reads are bounded and do not expand recurring instances. Meeting helper is capability-gated;
+  Inbox helper appears only for a tested compatible mail connection and selects two read-only mail tools, with reply
+  drafts kept in chat—not sent or saved to the mailbox.
+
+Optional embeddings and a dedicated fast-judgment recommendation inside Concierge are not included. Native Automation
+permission and real cloud sign-in round-trips are not claimed as tested; see the verification record in `docs/qa/v0.4.md`.
+
+## 0.3.1
+
+Trust and control. This is the first published v0.3 build: the v0.3.0 tag passed application checks, but its packaging
+job stopped before publication because Corepack selected the wrong pnpm version. Packaging now enters each project's
+directory before running its pinned package manager. The original tag is retained unchanged.
 
 - **Approval profiles and rules:** choose Careful, Balanced, Trusting or Custom. Add rules for tools and arguments,
   approve once or remember a command, and always ask before built-in risky operations. Optional fast judgments can
@@ -26,6 +57,11 @@ Trust and control.
   the same guarded cache operations.
 - **Distribution notices:** packaged dependency licenses, copyright notices and pinned provenance now ship inside
   the app, assembled and checked before signing.
+
+## 0.3.0
+
+Unpublished packaging attempt. The tag is retained for traceability; use v0.3.1 for the tested application features
+and corrected distribution packaging.
 
 ## 0.2.0
 

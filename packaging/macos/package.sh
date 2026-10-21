@@ -36,8 +36,10 @@ echo "✓ Node verified ($got)"
 
 # 2. Frozen installs, then the runtime bundle, the UI, and the binary (both embedded).
 # Include frontend devDependencies: they contain the UI's shipped runtime libraries.
-pnpm --dir runtime install --frozen-lockfile
-pnpm --dir frontend install --frozen-lockfile
+# Corepack selects packageManager from its invocation cwd, not pnpm's --dir argument.
+# Enter each project first so release runners use its pinned version rather than the root default.
+(cd runtime && pnpm install --frozen-lockfile)
+(cd frontend && pnpm install --frozen-lockfile)
 make runtime frontend >/dev/null
 case "$NODE_ARCH" in arm64) GO_NOTICE_ARCH=arm64 ;; x64) GO_NOTICE_ARCH=amd64 ;; esac
 export GOOS=darwin GOARCH="$GO_NOTICE_ARCH" CGO_ENABLED=1
