@@ -1063,6 +1063,11 @@ func (a *App) WriteDiagnostics(w io.Writer) error {
 	}
 	if servers, err := a.MCP.List(ctx); err == nil {
 		in.MCPServers = servers
+		for _, server := range servers {
+			if server.LastError != nil && *server.LastError != "" {
+				in.ServiceErrors = append(in.ServiceErrors, fmt.Sprintf("[MCP: %s] %s", server.Name, *server.LastError))
+			}
+		}
 	}
 	for _, ag := range a.Agents.List() {
 		status, lastErr := a.Sup.Status(ag.ID)

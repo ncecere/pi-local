@@ -16,6 +16,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -386,6 +387,9 @@ func (a *Approvals) checkRules() error {
 			}
 			if v == "" || utf8.RuneCountInString(v) > MaxRuleArgGlobSize {
 				return invalid("invalid_approval_rules", "The pattern for %s is 1 to %d characters.", k, MaxRuleArgGlobSize)
+			}
+			if strings.ContainsFunc(v, unicode.IsControl) {
+				return invalid("invalid_approval_rules", "The pattern for %s can't contain control characters or line breaks.", k)
 			}
 		}
 		if len(r.Args) == 0 {

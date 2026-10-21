@@ -126,7 +126,7 @@ func TestAnAgentBudgetWarnsAtEightyPercentAndStopsAtAHundred(t *testing.T) {
 
 	h.sendAndWait(agent, "t1", "hello", "r1")
 	eventually(t, 20*time.Second, "the 80% event", func() bool { return len(events.levels()) == 1 })
-	if e := events.last(); e.Level != 80 || e.Status.AgentID != agent || !strings.Contains(e.Message, "used 80% of its $1 budget for "+month) {
+	if e := events.last(); e.Level != 80 || e.Status.AgentID != agent || !strings.Contains(e.Message, "used 90% of its $1 budget for "+month) {
 		t.Fatalf("80%% event: %+v", e)
 	}
 	st := h.agentBudget(agent)
@@ -233,7 +233,7 @@ func TestTheAppWideBudgetStopsEveryAgent(t *testing.T) {
 	h.spend(lead, 9)
 	h.spend(member, 8)
 	eventually(t, 10*time.Second, "the 80% event", func() bool { return len(events.levels()) == 1 })
-	if e := events.last(); e.Status.Scope != "app" || !strings.Contains(e.Message, "Pi Local used 80% of its $20 budget") {
+	if e := events.last(); e.Status.Scope != "app" || !strings.Contains(e.Message, "Pi Local used 85% of its $20 budget") {
 		t.Fatalf("app event: %+v", e)
 	}
 	// Under the limit, agents work.

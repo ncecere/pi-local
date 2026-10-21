@@ -164,11 +164,14 @@ and runtime contract stay compatible with PDP's.
    memory suggestions, knowledge reranking and trigger matching, each with its own switch. Model routing is out. The
    service URL, key and models are configurable (self-hosted works), and the model version is pinned.
 9. **Not wanted:** a global quick-ask hotkey; model routing.
-10. **Releases:** each version ships when it's done (v0.2.0 …), with patch releases between. For each one: build,
-    test, end-to-end QA and fixes, then tag after review.
+10. **Releases:** each version ships when it's ready (v0.2.0 …), with patch releases between. Build, test,
+    review, end-to-end QA and fix, then tag; verify the released artifacts and run a post-release smoke test. The agent
+    may cut pre-1.0 releases autonomously. The person chooses when to launch v1.0.
 11. **Connections gallery, first set** (v0.4): sign-in-and-done remote MCP servers (Notion, GitHub, Linear, Atlassian,
     Asana); Microsoft 365 and Google for mail, calendar and files, marked Advanced until their servers don't need your own
     OAuth app; Apple Calendar, Reminders and Notes on this computer (macOS first).
+12. **Implementation agents:** use `openai-codex/gpt-6.1-sol` for implementation, reviews and QA. No Anthropic models;
+    interrupted Claude work is recovered from its files by fresh GPT agents, not resumed on its old provider.
 
 ## Still open
 

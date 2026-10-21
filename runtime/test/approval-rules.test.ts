@@ -44,6 +44,22 @@ describe("matching a rule", () => {
 		expect(ruleMatches({ tool: "t", args: { x: "a*c" }, action: "ask" }, "t", { x: "a\nb\nc" })).toBe(true);
 	});
 
+	it("command-prefix rules respect whole words and include the bare command", () => {
+		for (const action of ["allow", "ask", "deny"] as const) {
+			const ls: ApprovalRule = { tool: "bash", args: { command: "ls *" }, action };
+			expect(ruleMatches(ls, "bash", bash("ls"))).toBe(true);
+			expect(ruleMatches(ls, "bash", bash("ls -la"))).toBe(true);
+			expect(ruleMatches(ls, "bash", bash("lsof -v"))).toBe(false);
+			const status: ApprovalRule = { tool: "bash", args: { command: "git status *" }, action };
+			expect(ruleMatches(status, "bash", bash("git status"))).toBe(true);
+			expect(ruleMatches(status, "bash", bash("git status --short"))).toBe(true);
+			expect(ruleMatches(status, "bash", bash("git status-other"))).toBe(false);
+			expect(ruleMatches(status, "bash", bash("git status; echo hi"))).toBe(action !== "allow");
+		}
+		// Non-shell globs retain their normal meaning.
+		expect(ruleMatches({ tool: "other", args: { name: "ls *" }, action: "allow" }, "other", { name: "ls" })).toBe(false);
+	});
+
 	it("an allow rule doesn't cover a path that climbs out with ..", () => {
 		const allow: ApprovalRule = { tool: "write", args: { path: "docs/*" }, action: "allow" };
 		expect(ruleMatches(allow, "write", { path: "docs/a.md" })).toBe(true);
@@ -251,7 +267,7 @@ describe("rules and profiles in an agent", () => {
 		await agent.send("t", "one");
 		const request = await agent.pendingApproval("t");
 		expect(request).toMatchObject({ tool: "write", source: "profile" });
-		expect(request.summary).toBeUndefined();
+		expect(request.summary).toBe("Careful asks before this tool changes something.");
 		// "Always allow": the platform adds a rule and pushes the policy; the waiting call is approved as usual.
 		expect((await post({ profile: "careful", builtin: BUILTIN, rules: [{ id: "r_1", tool: "write", action: "allow" }] })).status).toBe(200);
 		await agent.decide(request.id, "approve");

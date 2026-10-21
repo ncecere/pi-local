@@ -13,7 +13,7 @@ import {
 	type ToolHookCall,
 	ToolTask,
 } from "@earendil-works/pi-durable";
-import { changesThings, DENIED_MESSAGE, describeRule, evaluate, parsePolicy, type RulePolicy, type Source, type ToolInfo, toolMatches } from "./approval-rules.ts";
+import { builtinSummary, changesThings, DENIED_MESSAGE, evaluate, parsePolicy, type RulePolicy, type Source, type ToolInfo, toolMatches } from "./approval-rules.ts";
 import { redactArguments } from "./redact.ts";
 import type { ThreadStore } from "./threads.ts";
 import { type Author, type ChatApproval, USER_ENTRY, type ViewApprovals } from "./view.ts";
@@ -209,7 +209,7 @@ export class Approvals implements ApprovalRequester {
 		const v = evaluate({ ...this.policy, sandboxed: this.policy.sandboxed === true && this.shellSandboxed }, call.name, call.arguments ?? {}, info);
 		if (v.action === "deny") return { block: DENIED_MESSAGE };
 		if (v.action === "ask") {
-			const summary = v.source === "builtin" ? `Asked because it matches a built-in rule (${describeRule(v.rule!)}).` : v.source === "rule" ? "Asked because of one of your approval rules." : undefined;
+			const summary = v.source === "builtin" ? builtinSummary(v.rule!) : v.source === "rule" ? "Asked because of one of your approval rules." : v.source === "profile" ? `${this.policy.profile === "careful" ? "Careful" : "Balanced"} asks before this tool changes something.` : undefined;
 			return { ask: { source: v.source, ...(summary === undefined ? {} : { summary }) } };
 		}
 		if (v.explicit || this.judge === undefined || !changesThings(call.name, info)) return undefined;

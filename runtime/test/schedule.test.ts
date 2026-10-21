@@ -6,6 +6,7 @@ import { AgentDoc } from "@earendil-works/pi-durable";
 import { assistantAgent, defineAgent, defineExtension, defineSubagent, defineTool, Type } from "@pdp/runtime";
 import { answer, fakeModel, startTestAgent, type TestAgent, toolCall } from "@pdp/runtime/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatScheduleTime } from "../src/lib/schedule.ts";
 
 // The schedule tools (agent-made schedules, docs/triggers.md) against a fake gateway: what they send with the agent's
 // own credential, what the model reads back, and when the library adds them.
@@ -112,6 +113,11 @@ async function start(definition = assistantAgent, environment: Record<string, st
 }
 
 describe("the schedule tools", () => {
+	it("formats a reminder in its time zone, including daylight saving", () => {
+		expect(formatScheduleTime("2026-10-21T07:00:00Z", "America/New_York", "en-US")).toContain("3:00 AM");
+		expect(formatScheduleTime("2026-10-21T07:00:00Z", "Europe/Paris", "en-US")).toContain("9:00 AM");
+		expect(formatScheduleTime(null, "UTC")).toBe("no next run");
+	});
 	it("schedule, list and cancel with the agent's credential, naming the thread", async () => {
 		const gw = await fakeGateway();
 		const seen: ModelContext[] = [];
@@ -131,14 +137,16 @@ describe("the schedule tools", () => {
 			auth: `Bearer ${KEY}`,
 			body: { at: "2026-10-21T09:00", timezone: "Europe/Paris", message: "Check the deploy", thread: "this", threadId: "t1" },
 		});
-		expect(lastText(seen[0]!)).toMatch(/Reminder set for 2026-10-21T07:00:00Z \(UTC\)\. It will fire in this conversation\. ID 00000000-0000-0000-0000-000000000001/);
+		expect(lastText(seen[0]!)).toContain(`Reminder set for ${formatScheduleTime("2026-10-21T07:00:00Z", "Europe/Paris")}. It will fire in this conversation. ID 00000000-0000-0000-0000-000000000001`);
 
 		// A cron expression is recurring work; "new" starts a new conversation each time.
 		model.reply(toolCall("schedule", { when: "0 9 * * 1", message: "Weekly summary", thread: "new" }, { id: "s2" }), capture(seen));
 		await agent.send("t1", "Every Monday, write a summary");
 		await agent.settled("t1", { messages: 4 });
-		expect(gw.seen[1]!.body).toEqual({ cron: "0 9 * * 1", timezone: "UTC", message: "Weekly summary", thread: "new", threadId: "t1" });
-		expect(lastText(seen[1]!)).toMatch(/Recurring schedule set: cron "0 9 \* \* 1" \(UTC\).*It will fire in a new conversation each time\./);
+		const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+		expect(gw.seen[1]!.body).toEqual({ cron: "0 9 * * 1", timezone: localZone, message: "Weekly summary", thread: "new", threadId: "t1" });
+		expect(lastText(seen[1]!)).toContain(`Recurring schedule set: cron "0 9 * * 1" (${localZone})`);
+		expect(lastText(seen[1]!)).toContain("It will fire in a new conversation each time.");
 
 		model.reply(toolCall("list_schedules", {}, { id: "l1" }), capture(seen));
 		await agent.send("t1", "What have you scheduled?");

@@ -349,6 +349,17 @@ describe("hints", () => {
 		expect(hint(failure, { ...policy, network: false })).toContain("The network is off for this agent");
 	});
 
+	it("distinguishes socket permission failures and silent curl from write failures", () => {
+		const off = { ...policy, network: false };
+		const python = 'File "<string>", line 1\n  s.connect(("example.com", 443))\nPermissionError: [Errno 1] Operation not permitted';
+		expect(sandboxHint(python, off, rules)).toContain("The network is off");
+		expect(sandboxHint(python, off, rules)).not.toContain("only write");
+		expect(sandboxHint("", off, rules, { command: "curl -s https://example.com", exitCode: 7 })).toContain("The network is off");
+		expect(sandboxHint("", policy, rules, { command: "curl -s https://example.com", exitCode: 7 })).toBeUndefined();
+		expect(sandboxHint("", off, rules, { command: "curl -s https://example.com", exitCode: 0 })).toBeUndefined();
+		expect(sandboxHint("", off, rules, { command: "false", exitCode: 7 })).toBeUndefined();
+	});
+
 	it("scans a bounded tail", () => {
 		const scan = new OutputScan();
 		for (let i = 0; i < 100; i++) scan.push("x".repeat(10_000));

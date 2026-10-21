@@ -2,6 +2,24 @@
 
 Each version's section is its release notes on GitHub.
 
+## 0.3.0
+
+Trust and control.
+
+- **Approval profiles and rules:** choose Careful, Balanced, Trusting or Custom. Add rules for tools and arguments,
+  approve once or remember a command, and always ask before built-in risky operations. Optional fast judgments can
+  add an approval, never remove one.
+- **Sandboxed commands on macOS:** new agents run commands with writes limited to their workspace and temporary
+  folders, protected credential locations, and a network switch. Existing agents keep their previous setting.
+- **Hide secrets:** credentials are removed from tool results before reaching the model or transcript, and from logs.
+  Each agent has an on/off switch for result scrubbing; logs remain scrubbed.
+- **Monthly budgets:** limits for an agent or the whole app, with warnings near the limit and a choice to stop or keep
+  working. Usage filters, monthly views, and list prices for recognized models make spending easier to understand.
+- **Backups and restore:** automatic daily backups, manual backups, a backup before an update installs, and restore
+  with your current data moved aside. Secrets aren't included. Save a redacted diagnostics bundle when reporting a bug.
+- **Activity:** see calls, approvals, messages and scheduled runs in Settings, on each agent, or in a conversation's
+  “What happened” panel. Filter and export the log as CSV.
+
 ## 0.2.0
 
 Works out of the box, every day.

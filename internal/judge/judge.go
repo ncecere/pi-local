@@ -236,8 +236,8 @@ func (s *Service) Models(ctx context.Context) ([]string, error) {
 	return s.ModelsAt(ctx, "", "")
 }
 
-// ModelsAt lists the models at an address and with a key not saved yet (the settings form's), each falling back to
-// the saved one when empty.
+// ModelsAt lists the models at the settings form's address and key. An empty address uses the saved one; the saved
+// key is reused only for the saved origin, never sent to a newly typed server.
 func (s *Service) ModelsAt(ctx context.Context, address, apiKey string) ([]string, error) {
 	st := s.Settings()
 	base := st.URL
@@ -249,7 +249,9 @@ func (s *Service) ModelsAt(ctx context.Context, address, apiKey string) ([]strin
 		base = address
 	}
 	key := strings.TrimSpace(apiKey)
-	if key == "" {
+	savedURL, savedErr := url.Parse(st.URL)
+	targetURL, targetErr := url.Parse(base)
+	if key == "" && savedErr == nil && targetErr == nil && strings.EqualFold(savedURL.Scheme, targetURL.Scheme) && strings.EqualFold(savedURL.Host, targetURL.Host) {
 		key, _ = s.secrets.Get(keyName)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)

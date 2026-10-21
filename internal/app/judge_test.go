@@ -150,4 +150,17 @@ func TestFastJudgmentsListModelsWithTheTypedAddressAndKey(t *testing.T) {
 	}
 	h.mustDo("POST", "/api/settings/judgments/models", map[string]string{"url": srv.URL, "apiKey": "wrong"}, 502)
 	h.mustDo("POST", "/api/settings/judgments/models", map[string]string{"url": "ftp://x"}, 400)
+
+	// Typing a different service must not send the previously stored key to it.
+	h.mustDo("PUT", "/api/settings/judgments", map[string]any{"url": srv.URL, "apiKey": "saved-key"}, 200)
+	received := make(chan string, 1)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.Header.Get("Authorization")
+		w.Write([]byte(`{"models":[{"name":"self-hosted"}]}`))
+	}))
+	defer other.Close()
+	h.mustDo("POST", "/api/settings/judgments/models", map[string]string{"url": other.URL}, 200)
+	if <-received != "" {
+		t.Fatal("a saved credential was sent to another service")
+	}
 }

@@ -432,8 +432,9 @@ type ApprovalRule = {
 ```
 
 `args` globs match the argument's string value (a number or boolean as written, anything else as its JSON); `*` is any
-characters, everything else is literal and case-sensitive: `{command: "git status*"}`. An argument the call doesn't
-have doesn't match. Two guards keep a glob from being walked around:
+characters, everything else is literal and case-sensitive: `{command: "git status *"}`. For bash's `command` only,
+trailing ` *` also includes the bare command (`git status` and `git status --short`, not `git status-other`). Argument
+patterns cannot contain control characters. An argument the call doesn't have doesn't match. Two guards keep a glob from being walked around:
 - For `bash`'s `command`, an **allow** rule only matches a *simple* command: one with no `;`, `&`, `|`, backticks,
   `$(…)`, line breaks or redirects (`2>&1` and `>/dev/null` don't count). `git status && rm -rf ~` is not `git
   status*`. An **ask** or **deny** rule matches the whole command or any part of a compound one.
@@ -477,7 +478,7 @@ Templates carry the profile and tools but never rules.
 
 **Approve and always allow this.** The approval card offers it unless the request came from a `builtin` or `rule` ask
 or an agent's own code (`source`). It adds the rule, then approves: for `bash` the command's first word and subcommand
-(`git status --short` → `{tool: "bash", args: {command: "git status*"}}`; an option counts as the subcommand, so `git --version` → `git --version*`, not every `git` command; `cat notes.md` → `cat*`), for any other tool the
+(`git status --short` → `{tool: "bash", args: {command: "git status *"}}`; an option counts as the subcommand, so `git --version` → `git --version *`, not every `git` command; `cat notes.md` → `cat *`), for any other tool the
 tool alone. It isn't offered for a compound command (an allow rule would never match it).
 
 **Fast-judgment tightening.** With fast judgments on and the `approvals` use switched on (Settings → Models), a call
@@ -954,7 +955,7 @@ type JudgmentSettings = {
 | `GET /api/settings/judgments` | `{settings: JudgmentSettings, uses: string[], defaultUrl, defaultModel}`. `uses`: agentRouting, toolPreselection, inbox, approvals, memory, knowledge, triggers. |
 | `PUT /api/settings/judgments` | Body `{enabled?, url?, model?, apiKey?, uses?: {name: boolean}, threshold?}`. `apiKey` left out keeps the stored key; `""` removes it. Answers `JudgmentSettings`. Errors: `400 invalid_key` ("Paste a TypeSafe API key…", turning it on at TypeSafe's address without a key), `invalid_url`, `invalid_model`, `invalid_threshold`, `invalid_use`. |
 | `GET /api/settings/judgments/models` | The service's models: `string[]`. `502 judge_failed` with a message. |
-| `POST /api/settings/judgments/models` | Body `{url?, apiKey?}`: the same list with values not saved yet (the settings form's); each falls back to the saved one when empty. Nothing is saved. |
+| `POST /api/settings/judgments/models` | Body `{url?, apiKey?}`: the same list with values not saved yet (the settings form's); an empty address uses the saved one, and an empty key uses the saved key only at the saved origin (never a different typed server). Nothing is saved. |
 | `POST /api/settings/judgments/test` | One yes/no question with the saved settings: `{model, answer}`. `502 judge_failed` with a message for people. |
 | `POST /api/route` | Body `{text}`: which agent should take a message sent without one. `{agentId, decided: boolean, confidence, alternatives: [{agentId, probability}], model}`; `decided` only above the threshold. `409 off` when agent routing is off; `400 invalid_text`. |
 

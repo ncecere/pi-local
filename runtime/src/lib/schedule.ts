@@ -46,10 +46,22 @@ function text(value: string, isError = false) {
 	return { output: [{ type: "text" as const, text: value }], ...(isError ? { isError: true } : {}) };
 }
 
+/** A schedule's time, as a local date and clock reading with its time zone (never a bare UTC timestamp). */
+export function formatScheduleTime(iso: string | null, timezone: string, locale?: string): string {
+	if (iso === null) return "no next run";
+	const at = new Date(iso);
+	if (!Number.isFinite(at.getTime())) return iso;
+	try {
+		return `${new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(at)} (${timezone})`;
+	} catch {
+		return `${at.toISOString()} (UTC)`;
+	}
+}
+
 /** A schedule in one line, for the model. */
 function describe(s: AgentSchedule): string {
 	const when = s.once ? "once" : `cron "${s.cron}" (${s.timezone})`;
-	const next = s.paused ? `paused${s.pausedReason === "failures" ? " after failed runs" : ""}` : s.nextFireAt ? `next ${s.nextFireAt}` : "firing now";
+	const next = s.paused ? `paused${s.pausedReason === "failures" ? " after failed runs" : ""}` : s.nextFireAt ? `next ${formatScheduleTime(s.nextFireAt, s.timezone)}` : "firing now";
 	const where = s.threadId ? `in conversation ${s.threadId}` : "in a new conversation each time";
 	return `- ${s.id} "${s.name}": ${when}, ${next}, ${where}. Message: ${JSON.stringify(s.message.length > 200 ? `${s.message.slice(0, 199)}…` : s.message)}`;
 }
@@ -90,7 +102,7 @@ export function scheduleExtension(options: ScheduleOptions): Extension {
 			"The answer says where it will fire. Use get_time first if you need the current time.",
 		parameters: Type.Object({
 			when: Type.String({ description: "ISO 8601 date and time (one-time) or a cron expression (recurring)" }),
-			timezone: Type.Optional(Type.String({ description: "IANA time zone, such as Europe/Paris (default UTC)" })),
+			timezone: Type.Optional(Type.String({ description: "IANA time zone, such as Europe/Paris (default: this computer's time zone)" })),
 			message: Type.String({ description: "What you will be told when it fires" }),
 			thread: Type.Optional(Type.Union([Type.Literal("this"), Type.Literal("new")])),
 			name: Type.Optional(Type.String({ description: "A short name people will see (optional)" })),
@@ -100,7 +112,7 @@ export function scheduleExtension(options: ScheduleOptions): Extension {
 			const threadId = await options.threadOf(api.conversationId as number);
 			const body = {
 				...(ISO_TIME.test(when) ? { at: when } : { cron: when }),
-				timezone: args.timezone ?? "UTC",
+				timezone: args.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
 				message: args.message,
 				thread: args.thread ?? "this",
 				...(args.name ? { name: args.name } : {}),
@@ -109,7 +121,7 @@ export function scheduleExtension(options: ScheduleOptions): Extension {
 			const res = await call<{ schedule: AgentSchedule; where: "this" | "new"; whyNotHere?: string }>("POST", "/schedules", body, context);
 			if (!res.ok) return text(`Not scheduled: ${res.message}`, true);
 			const { schedule: s, where, whyNotHere } = res.data;
-			const what = s.once ? `Reminder set for ${s.nextFireAt} (UTC)` : `Recurring schedule set: cron "${s.cron}" (${s.timezone}), first at ${s.nextFireAt} (UTC)`;
+			const what = s.once ? `Reminder set for ${formatScheduleTime(s.nextFireAt, s.timezone)}` : `Recurring schedule set: cron "${s.cron}" (${s.timezone}), first at ${formatScheduleTime(s.nextFireAt, s.timezone)}`;
 			const place =
 				where === "this"
 					? "It will fire in this conversation."
@@ -127,7 +139,7 @@ export function scheduleExtension(options: ScheduleOptions): Extension {
 			const res = await call<AgentSchedule[]>("GET", "/schedules", undefined, context);
 			if (!res.ok) return text(`Couldn't list schedules: ${res.message}`, true);
 			if (res.data.length === 0) return text("You have no schedules.");
-			return text(`Your schedules (times in UTC):\n${res.data.map(describe).join("\n")}`);
+			return text(`Your schedules (each in its time zone):\n${res.data.map(describe).join("\n")}`);
 		},
 	});
 

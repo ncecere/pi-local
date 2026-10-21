@@ -112,7 +112,7 @@ func TestASandboxedShellRunsWithoutAskingAndStaysInItsWorkspace(t *testing.T) {
 
 	// The built-in rules still ask.
 	req, _ = h.run(agent, "t5", "rm -rf nothing-here")
-	if req == nil || req.Summary == nil || !strings.Contains(*req.Summary, "built-in rule") {
+	if req == nil || req.Summary == nil || !strings.Contains(*req.Summary, "always asks") {
 		t.Fatalf("rm -rf should still ask: %+v", req)
 	}
 	h.settle(agent, "t5", req, "deny")

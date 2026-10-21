@@ -107,9 +107,12 @@ function argMatches(glob: string, raw: string, action: RuleAction, shell: boolea
 	const re = globToRegExp(glob);
 	if (shell) {
 		const { simple, segments } = shellParts(raw);
+		// A command-prefix rule includes the bare command, but not another program/subcommand with the same prefix:
+		// `ls *` matches `ls` and `ls -la`, never `lsof`; `git status *` never matches `git status-other`.
+		const matches = (command: string) => re.test(command) || (glob.endsWith(" *") && command === glob.slice(0, -2));
 		// An allow only covers a simple command; ask and deny also see each part of a compound one.
-		if (action === "allow") return simple && re.test(raw.trim());
-		return re.test(raw.trim()) || segments.some((s) => re.test(s));
+		if (action === "allow") return simple && matches(raw.trim());
+		return matches(raw.trim()) || segments.some(matches);
 	}
 	if (action === "allow" && climbs(raw)) return false;
 	return re.test(raw);
@@ -198,6 +201,16 @@ export function evaluate(policy: RulePolicy, name: string, args: unknown, info?:
 		return policy.tools.some((pattern) => toolMatches(pattern, name)) ? { action: "ask", source: "tools" } : { action: "allow", explicit: false };
 	}
 	return profileAsks(policy.profile, name, info, policy.sandboxed === true) ? { action: "ask", source: "profile" } : { action: "allow", explicit: false };
+}
+
+/** A plain explanation for a built-in ask rule. */
+export function builtinSummary(rule: ApprovalRule): string {
+	const pattern = rule.args?.command;
+	if (pattern === "sudo *") return "Asked because it uses sudo (always asks).";
+	if (pattern === "rm -rf*") return "Asked because it removes files recursively (always asks).";
+	if (pattern === "git push --force*") return "Asked because it force-pushes changes (always asks).";
+	if (pattern === "* | sh" || pattern === "curl * | *sh") return "Asked because it pipes text into a shell to run (always asks).";
+	return "This command always asks for approval.";
 }
 
 /** A rule as a person reads it: `bash (command: git status*)`. */

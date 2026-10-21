@@ -90,7 +90,8 @@ export function sandboxedExec(base: Pick<ExecutionEnv, "exec">, options: Sandbox
 			context,
 		);
 		if (rules !== undefined && !context.abortSignal?.aborted) {
-			const hint = sandboxHint(scan.value, options.policy, rules);
+			const execution = result.ok ? { command: typeof command === "string" ? command : command.join(" "), exitCode: result.value.exitCode } : undefined;
+			const hint = sandboxHint(scan.value, options.policy, rules, execution);
 			if (hint !== undefined) original?.(`\n${hint}\n`, context, { stream: "stderr" } as never);
 		}
 		return result;

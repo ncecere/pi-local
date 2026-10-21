@@ -124,7 +124,7 @@ func TestDenyRulesAskRulesAndBuiltInRules(t *testing.T) {
 	}
 	// Built-in rules ask under every profile, and an allow rule doesn't loosen them.
 	req, _ = h.run(agent, "t4", "sudo -n true")
-	if req == nil || req.Summary == nil || !strings.Contains(*req.Summary, "built-in rule") {
+	if req == nil || req.Summary == nil || !strings.Contains(*req.Summary, "always asks") {
 		t.Fatalf("a built-in rule: %+v", req)
 	}
 	if got := h.settle(agent, "t4", req, "deny"); !strings.Contains(got, "denied by") {
@@ -268,6 +268,9 @@ func TestAlwaysAllowAddsARuleThatIsListedAndRemoved(t *testing.T) {
 	}
 	for _, bad := range []map[string]any{
 		{"tool": "bad tool!"}, {"tool": "bash", "action": "maybe"}, {"tool": "bash", "args": map[string]string{"bad name": "x"}}, {"tool": "bash", "args": map[string]string{"command": ""}},
+		{"tool": "bash", "args": map[string]string{"command": "x\x00"}},
+		{"tool": "bash", "args": map[string]string{"command": "echo hi\nls"}},
+		{"tool": "bash", "args": map[string]string{"command": "x\x7f"}},
 	} {
 		if code, data := h.do("POST", "/api/agents/"+agent+"/approval-rules", bad); code != 400 || !strings.Contains(string(data), "invalid_approval_rules") {
 			t.Fatalf("%v: %d %s", bad, code, data)

@@ -57,7 +57,7 @@ const NETWORK_FAILURE =
  * The hint to add after a command's output, or undefined when the output shows nothing the sandbox did. `rules` is what
  * the sandbox allows (to say which of its walls a path hit).
  */
-export function sandboxHint(output: string, policy: SandboxPolicy, rules: SandboxRules): string | undefined {
+export function sandboxHint(output: string, policy: SandboxPolicy, rules: SandboxRules, execution?: { command: string; exitCode: number }): string | undefined {
 	const parts: string[] = [];
 	const paths = blockedPaths(output, policy.workspace);
 	const closed = paths.filter((p) => !rules.canRead(p) || !rules.canWrite(p));
@@ -69,7 +69,10 @@ export function sandboxHint(output: string, policy: SandboxPolicy, rules: Sandbo
 	if (unwritable.length > 0) {
 		parts.push(`The sandbox blocked writing outside the workspace: ${unwritable.join(", ")}. Commands can write in the workspace, its temp folder and /tmp.`);
 	}
-	if (!policy.network && NETWORK_FAILURE.test(output)) {
+	// Python often puts `socket.connect` on a different line from EPERM. Silent curl reports only an exit code.
+	const socketPermission = /operation not permitted/i.test(output) && /socket\.|\.connect\s*\(/i.test(output);
+	const silentCurl = execution !== undefined && /(?:^|\s|[;&|])curl(?:\s|$)/.test(execution.command) && [5, 6, 7].includes(execution.exitCode);
+	if (!policy.network && (NETWORK_FAILURE.test(output) || socketPermission || silentCurl)) {
 		parts.push("The network is off for this agent, so commands can't connect to anything (that may be why this failed).");
 	}
 	if (parts.length === 0 && paths.length === 0 && /operation not permitted/i.test(output)) {

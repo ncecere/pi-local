@@ -56,6 +56,8 @@ type Input struct {
 	MCPServers any
 	Agents     []Agent
 	AppLog     []string
+	// ServiceErrors include catalog errors (for example MCP probe failures), even when no log line was written.
+	ServiceErrors []string
 }
 
 // personalSettings are settings that describe the person, not the app.
@@ -143,6 +145,9 @@ func Write(w io.Writer, in Input) error {
 	}
 
 	var errorsText strings.Builder
+	for _, message := range in.ServiceErrors {
+		fmt.Fprintln(&errorsText, message)
+	}
 	noteErrors := func(source string, lines []string) {
 		found := ErrorLines(lines)
 		for _, line := range found[max(0, len(found)-100):] {

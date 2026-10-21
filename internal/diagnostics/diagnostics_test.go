@@ -59,7 +59,8 @@ func TestDiagnosticsHaveNoSecretsAndNoConversations(t *testing.T) {
 			ID: "ag_aaaaaaaaaaaaaaaa", Name: "Helper", Kind: "assistant", Model: "openai/gpt-5", Status: "error", LastError: "the key sk-abcdefghijklmnopqrstuvwxyz0123 was refused",
 			ConfigYAML: "name: Helper\ninstructions: '[omitted, 40 characters]'\napprovals:\n  tools: [bash]\n", LogPath: log,
 		}},
-		AppLog: []string{"time=2026-10-21T09:00:00Z level=INFO msg=started", "time=2026-10-21T09:00:01Z level=WARN msg=\"a backup failed\" err=\"disk full\""},
+		AppLog:        []string{"time=2026-10-21T09:00:00Z level=INFO msg=started", "time=2026-10-21T09:00:01Z level=WARN msg=\"a backup failed\" err=\"disk full\""},
+		ServiceErrors: []string{"[MCP: Broken connection] probe refused the key sk-abcdefghijklmnopqrstuvwxyz0123"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +99,7 @@ func TestDiagnosticsHaveNoSecretsAndNoConversations(t *testing.T) {
 		t.Errorf("log: …%s", runtimeLog[len(runtimeLog)-500:])
 	}
 	errs := files["recent-errors.txt"]
-	for _, want := range []string{"[Helper] the agent's status is \"error\"", "[Helper] [pi-local] model call failed", "uncaught exception", "[app] time=2026-10-21T09:00:01Z level=WARN"} {
+	for _, want := range []string{"[MCP: Broken connection] probe refused the key [redacted", "[Helper] the agent's status is \"error\"", "[Helper] [pi-local] model call failed", "uncaught exception", "[app] time=2026-10-21T09:00:01Z level=WARN"} {
 		if !strings.Contains(errs, want) {
 			t.Errorf("recent errors lack %q:\n%s", want, errs)
 		}
