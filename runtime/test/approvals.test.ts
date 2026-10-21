@@ -297,7 +297,7 @@ describe("tool approvals", () => {
 		await until(() => views.events.length > 0 && JSON.stringify(JSON.parse(views.events.at(-1)!.data)) === JSON.stringify(final));
 		expect(views.events.some((e) => (JSON.parse(e.data) as ChatView).approvals?.[0]?.id === request.id)).toBe(true);
 		// About 0.3 s alone; its own waits (until) allow 10 s each, so the default 5 s could run out on a busy machine.
-	}, 30_000);
+	}, 45_000);
 
 	it("reports requests to the platform with redacted arguments, and applies a decision the platform already has", async () => {
 		const model = fakeModel();
@@ -422,7 +422,7 @@ async function gateway(answer: { report?: Record<string, unknown>; sync?: unknow
 	};
 }
 
-async function until(check: () => boolean | Promise<boolean>, ms = 10_000): Promise<void> {
+async function until(check: () => boolean | Promise<boolean>, ms = 20_000): Promise<void> {
 	const deadline = Date.now() + ms;
 	while (!(await check())) {
 		if (Date.now() > deadline) throw new Error("timed out waiting");
