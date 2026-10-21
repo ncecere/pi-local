@@ -89,7 +89,7 @@ const (
 
 var threadIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-var prefLimits = map[string]int{"inbox": 512 << 10, "appearance": 16 << 10}
+var prefLimits = map[string]int{"inbox": 512 << 10, "appearance": 16 << 10, "onboarding": 4 << 10}
 
 // Handler builds the routes.
 func (a *API) Handler() http.Handler {

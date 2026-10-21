@@ -60,6 +60,13 @@ func TestFirstRunWithAKeyedProvider(t *testing.T) {
 	remote.models = []map[string]any{{"id": "big-1"}, {"id": "small-1"}}
 	h.app.Catalog.SetPresetURL("openrouter", remote.URL+"/v1")
 
+	// A rejected key leaves nothing behind.
+	remote.status = 401
+	h.mustDo("POST", "/api/providers/setup", map[string]any{"preset": "openrouter", "apiKey": "wrong"}, 502)
+	if list := decodeInto[struct{ Providers []struct{ ID string } }](t, h.mustDo("GET", "/api/providers", nil, 200)); len(list.Providers) != 0 {
+		t.Fatalf("a provider with a rejected key was kept: %+v", list.Providers)
+	}
+	remote.status = 0
 	// A key is needed; with it, nothing is added until the person picks.
 	h.mustDo("POST", "/api/providers/setup", map[string]any{"preset": "openrouter"}, 400)
 	res := decodeInto[struct {
@@ -78,7 +85,7 @@ func TestFirstRunWithAKeyedProvider(t *testing.T) {
 	if res2.DefaultModelID != "openrouter/small-1" {
 		t.Fatalf("after picking: %+v", res2)
 	}
-	if !strings.Contains(remote.seen()[0].Auth, "sk-or-test") {
+	if !strings.Contains(remote.seen()[len(remote.seen())-1].Auth, "sk-or-test") {
 		t.Fatal("the key wasn't used")
 	}
 	h.mustDo("POST", "/api/providers/setup", map[string]any{"preset": "openrouter", "models": []string{"nope"}}, 400)

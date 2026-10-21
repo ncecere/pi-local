@@ -182,7 +182,9 @@ func (c *Catalog) Setup(ctx context.Context, in SetupInput) (*SetupResult, error
 	if preset.NeedsKey && noKey && (provider == nil || !provider.HasKey) {
 		return nil, bad("invalid_key", "Paste the API key from %s.", preset.Name)
 	}
+	created := false
 	if provider == nil {
+		created = true
 		id, name, kind := preset.ID, preset.Name, preset.Kind
 		created, err := c.CreateProvider(ctx, ProviderInput{ID: &id, Name: &name, Kind: &kind, BaseURL: &base, APIKey: in.APIKey})
 		if err != nil {
@@ -196,6 +198,10 @@ func (c *Catalog) Setup(ctx context.Context, in SetupInput) (*SetupResult, error
 	}
 	available, err := c.Discover(ctx, provider.ID)
 	if err != nil {
+		// A new provider whose models can't be listed (a wrong key, nothing answering) isn't kept.
+		if created {
+			c.DeleteProvider(context.WithoutCancel(ctx), provider.ID)
+		}
 		return nil, err
 	}
 	var chosen []string
