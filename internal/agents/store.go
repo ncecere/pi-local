@@ -188,13 +188,21 @@ func Open(ctx context.Context, db *sql.DB, root string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	// Rows to rewrite as folders relative to the data folder (written after the rows are closed: app.db has one
+	// connection, and a query inside an open row loop waits for ever).
+	relocate := map[string]string{}
 	for rows.Next() {
 		var a Agent
 		var created, updated int64
 		var lastUsed sql.NullInt64
-		if err := rows.Scan(&a.ID, &a.Dir, &a.Revision, &created, &updated, &lastUsed, &a.PiDurableVersion); err != nil {
+		var stored string
+		if err := rows.Scan(&a.ID, &stored, &a.Revision, &created, &updated, &lastUsed, &a.PiDurableVersion); err != nil {
+			rows.Close()
 			return nil, err
+		}
+		a.Dir = s.resolveDir(stored)
+		if rel := s.storedDir(a.Dir); rel != stored {
+			relocate[a.ID] = rel
 		}
 		a.CreatedAt, a.UpdatedAt = time.UnixMilli(created), time.UnixMilli(updated)
 		if lastUsed.Valid {
@@ -209,7 +217,41 @@ func Open(ctx context.Context, db *sql.DB, root string) (*Store, error) {
 		a.Config = cfg
 		s.agents[a.ID] = &a
 	}
-	return s, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	for id, rel := range relocate {
+		if _, err := db.ExecContext(ctx, `UPDATE agents SET dir = ? WHERE id = ?`, rel, id); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+// storedDir is how app.db records an agent's folder: relative to the data folder when inside it (a moved or copied
+// data folder keeps its agents), absolute otherwise.
+func (s *Store) storedDir(dir string) string {
+	if rel, err := filepath.Rel(s.root, dir); err == nil && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
+		return rel
+	}
+	return dir
+}
+
+// resolveDir is an agent's folder from app.db: relative ones are in this data folder; an absolute one (recorded by an
+// older version) is the folder of the same name in this data folder when there is one, so a copy never uses the
+// original's agents.
+func (s *Store) resolveDir(stored string) string {
+	if !filepath.IsAbs(stored) {
+		return filepath.Join(s.root, stored)
+	}
+	if local := filepath.Join(s.root, filepath.Base(stored)); local != stored {
+		if info, err := os.Stat(local); err == nil && info.IsDir() {
+			return local
+		}
+	}
+	return stored
 }
 
 // OnChange registers a listener, called after every change (outside the store's lock).
@@ -308,7 +350,7 @@ func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
 	}
 	now := time.Now()
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO agents (id, dir, revision, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
-		id, dir, now.UnixMilli(), now.UnixMilli()); err != nil {
+		id, s.storedDir(dir), now.UnixMilli(), now.UnixMilli()); err != nil {
 		os.RemoveAll(dir)
 		return nil, err
 	}
@@ -597,7 +639,7 @@ func (s *Store) Import(ctx context.Context, cfg Config, storage map[string][]byt
 	}
 	now := time.Now()
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO agents (id, dir, revision, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
-		id, dir, now.UnixMilli(), now.UnixMilli()); err != nil {
+		id, s.storedDir(dir), now.UnixMilli(), now.UnixMilli()); err != nil {
 		os.RemoveAll(dir)
 		return nil, err
 	}

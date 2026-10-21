@@ -438,3 +438,58 @@ func TestPrefs(t *testing.T) {
 	}
 	_ = fmt.Sprint()
 }
+
+// copyTree copies a folder (a data folder, while no app has it open).
+func copyTree(t *testing.T, from, to string) {
+	t.Helper()
+	err := filepath.WalkDir(from, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(from, path)
+		target := filepath.Join(to, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestACopiedDataFolderUsesItsOwnAgents(t *testing.T) {
+	original := t.TempDir()
+	h := start(t, original, Config{})
+	id := h.createAgent("Copied")
+	h.sendAndWait(id, "t1", "hello", "r1")
+	// An older version recorded the folder absolutely.
+	h.app.DB.Exec(`UPDATE agents SET dir = ? WHERE id = ?`, filepath.Join(original, "agents", id), id)
+	h.close()
+
+	copied := filepath.Join(t.TempDir(), "moved")
+	copyTree(t, original, copied)
+	os.RemoveAll(filepath.Join(copied, ".lock"))
+	c := start(t, copied, Config{})
+	defer c.close()
+	ag, err := c.app.Agents.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(copied, "agents", id); ag.Dir != want {
+		t.Fatalf("the copy uses %s, not its own %s", ag.Dir, want)
+	}
+	var stored string
+	c.app.DB.QueryRow(`SELECT dir FROM agents WHERE id = ?`, id).Scan(&stored)
+	if stored != id {
+		t.Fatalf("stored as %q, want relative %q", stored, id)
+	}
+	// Its conversation is there, read from the copy's own storage.
+	if v := c.view(id, "t1"); len(v.Messages) < 2 {
+		t.Fatalf("the copy's conversation: %+v", v)
+	}
+}
