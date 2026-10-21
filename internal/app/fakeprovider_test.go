@@ -23,6 +23,27 @@ type fakeProvider struct {
 	models   []map[string]any
 	status   int // when set, every request gets this status
 	calls    int
+	// extract, when set, answers the memory-suggestion request (its system prompt asks for "at most 3 durable facts")
+	// with this text, ahead of every other script.
+	extract string
+}
+
+// setExtract scripts the answer to the suggestions request.
+func (f *fakeProvider) setExtract(reply string) {
+	f.mu.Lock()
+	f.extract = reply
+	f.mu.Unlock()
+}
+
+// extractions are the suggestions requests seen so far (their whole bodies).
+func (f *fakeProvider) extractions() []string {
+	var out []string
+	for _, r := range f.chats() {
+		if strings.Contains(string(r.Body), "at most 3 durable facts") {
+			out = append(out, string(r.Body))
+		}
+	}
+	return out
 }
 
 type fakeRequest struct {
@@ -101,7 +122,7 @@ func (f *fakeProvider) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.requests = append(f.requests, fakeRequest{Path: r.URL.Path, Auth: auth, Header: r.Header.Clone(), Model: body.Model, Stream: body.Stream, Message: lastUserText(body.Messages), Body: raw})
-	status, listed := f.status, f.models
+	status, listed, extract := f.status, f.models, f.extract
 	f.mu.Unlock()
 	if status != 0 {
 		http.Error(w, `{"error":{"message":"nope"}}`, status)
@@ -112,6 +133,10 @@ func (f *fakeProvider) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"data": listed})
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/chat/completions"):
+		if extract != "" && strings.Contains(string(raw), "at most 3 durable facts") {
+			f.openAIText(w, body.Model, extract)
+			return
+		}
 		// A little script: after a tool result, answer with it; a user message with ASK:<agent>:<question> calls
 		// ask_agent; anything else gets the canned reply.
 		if result, ok := lastToolResult(body.Messages); ok {

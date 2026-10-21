@@ -126,6 +126,24 @@ export interface YouInfo {
   categories: string[];
   /** The categories an agent sees only when shared with it (all but preferences). */
   shareable: string[];
+  /** Suggestions from conversations (absent from an older server: off). */
+  suggestions?: MemorySuggestionSettings;
+}
+
+/** `PUT /api/you/settings` and `GET /api/you`'s `suggestions`. */
+export interface MemorySuggestionSettings {
+  /** The one system-wide switch (off until the person turns it on). */
+  enabled: boolean;
+  /** Fast judgments' `memory` use is on: each suggestion is checked before it appears. */
+  judged: boolean;
+}
+
+/** What a fact said before it was changed. */
+export interface FactRevision {
+  text: string;
+  category: string;
+  /** When it changed, Unix ms. */
+  at: number;
 }
 
 export type FactTrust = 'said' | 'inferred' | 'external';
@@ -147,6 +165,8 @@ export interface Fact {
   /** Unix ms. */
   createdAt: number;
   updatedAt: number;
+  /** Earlier versions of its text or category, newest first (absent from an older server). */
+  history?: FactRevision[];
 }
 
 /** Something an agent learned about its own job. */

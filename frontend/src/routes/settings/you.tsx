@@ -6,7 +6,7 @@ import { AboutMeCard } from '~/components/memory/about-me-card';
 import { AddFactForm, FactList, SuggestionList } from '~/components/memory/facts';
 import { ALWAYS_SHARED_NOTE, MemoryAccessTable } from '~/components/memory/memory-access';
 import { ErrorNotice, FIELD, RequestError } from '~/components/models/fields';
-import { SettingsSection } from '~/components/settings/settings-layout';
+import { SettingsRow, SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
 import {
   Dialog,
@@ -17,8 +17,15 @@ import {
   DialogTitle,
 } from '~/components/ui/dialog';
 import { Spinner } from '~/components/ui/spinner';
+import { Switch } from '~/components/ui/switch';
 import { useAgents } from '~/hooks/use-agents';
-import { useEraseYou, useExportYou, useFacts, useYou } from '~/hooks/use-memory';
+import {
+  useEraseYou,
+  useExportYou,
+  useFacts,
+  useSaveSuggestions,
+  useYou,
+} from '~/hooks/use-memory';
 import { usePageTitle } from '~/lib/document-title';
 import { plural } from '~/lib/utils';
 
@@ -58,6 +65,7 @@ export function SettingsYouPage() {
     );
 
   const { categories, shareable } = you.data;
+  const suggestions = you.data.suggestions ?? { enabled: false, judged: false };
   const known = facts.data?.filter((fact) => fact.status === 'active') ?? [];
   const suggested = facts.data?.filter((fact) => fact.status === 'suggested') ?? [];
 
@@ -96,6 +104,10 @@ export function SettingsYouPage() {
         <AddFactForm categories={categories} />
       </SettingsSection>
 
+      <SettingsSection title="Suggestions from conversations">
+        <SuggestionsSwitch enabled={suggestions.enabled} judged={suggestions.judged} />
+      </SettingsSection>
+
       <SettingsSection title="Which agents see what">
         <p className="-mt-2 text-sm text-[var(--text-muted)]">
           {ALWAYS_SHARED_NOTE} Tick the other categories each one may see. An agent with memory off
@@ -115,6 +127,48 @@ export function SettingsYouPage() {
         <DataActions />
       </SettingsSection>
     </>
+  );
+}
+
+/** The one system-wide switch for agents suggesting what to remember from a conversation. */
+function SuggestionsSwitch({ enabled, judged }: { enabled: boolean; judged: boolean }) {
+  const save = useSaveSuggestions();
+  return (
+    <div className="flex flex-col gap-3">
+      <SettingsRow
+        id="memory-suggestions"
+        label="Suggest things to remember"
+        description={
+          <>
+            When a conversation has been quiet for 10 minutes after a reply, the agent's model reads
+            what is new in it and suggests up to 3 things worth remembering about you. Each waits
+            above until you accept or dismiss it. Conversations a schedule started, or another agent
+            asked in, are never read. This sends the conversation's text to the model provider that
+            agent already uses.
+            {judged
+              ? ' Fast judgments check each suggestion first, so one-off details are dropped.'
+              : ''}
+          </>
+        }
+      >
+        <Switch
+          checked={enabled}
+          disabled={save.isPending}
+          aria-labelledby="memory-suggestions-label"
+          aria-describedby="memory-suggestions-description"
+          onCheckedChange={(on) =>
+            save.mutate(on, {
+              onError: (error) =>
+                toast.error(errorMessage(error, 'The setting could not be saved.')),
+            })
+          }
+        />
+      </SettingsRow>
+      <p className="text-xs text-[var(--text-muted)]">
+        When a long conversation is compacted, what is about to be summarized is read the same way,
+        so a fact isn't lost to the summary.
+      </p>
+    </div>
   );
 }
 

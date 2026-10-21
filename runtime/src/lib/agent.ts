@@ -28,6 +28,7 @@ import { AgentOwnedElsewhereError, openSqliteAgentStorage } from "./storage/sqli
 import { gatewayCall, gatewayPost, ThreadStatusReporter } from "./thread-status.ts";
 import { ThreadStore } from "./threads.ts";
 import { memoryExtension } from "./memory.ts";
+import { type Complete, extractFacts, turnsOf } from "./memory-extract.ts";
 import type { ImageContent, ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
 import { DEFAULT_IMAGE_LIMITS } from "@earendil-works/pi-durable/tools";
 import { imageProcessor } from "./images.ts";
@@ -171,6 +172,8 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 					threadOf: async (conversationId) => threadStore?.threadOf(conversationId),
 				})
 			: undefined;
+	// A one-off request to the agent's own model (suggestions from conversations); set once its models are open.
+	let oneOff: Complete | undefined;
 	// Memory (MEMORY=on): the person's profile and the agent's own notes every turn, and the memory tools.
 	const memory =
 		config.modelEnv.MEMORY === "on" && config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
@@ -178,6 +181,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 					gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL,
 					key: config.modelEnv.PLATFORM_KEY,
 					threadOf: async (conversationId) => threadStore?.threadOf(conversationId),
+					complete: (system, user, signal) => (oneOff ? oneOff(system, user, signal) : Promise.resolve(undefined)),
 				})
 			: undefined;
 	// Web search and reading (WEB_TOOLS), through the gateway.
@@ -237,6 +241,21 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 					usageKey: config.modelEnv.MODEL_USAGE_KEY,
 				})
 			: undefined;
+	// The agent's model, asked once for something small: its text answer, or undefined (no model, an error, no text).
+	oneOff = async (system, user, signal) => {
+		const target = models.getModel(model.provider, model.modelId);
+		if (target === undefined) return undefined;
+		const now = Date.now();
+		const answer = await models.completeSimple(
+			target,
+			// No tools or tool executor: source text cannot cause actions, even if it asks for them.
+			{ systemPrompt: system, messages: [{ role: "user", content: [{ type: "text", text: user }], timestamp: now }] },
+			{ maxTokens: 1500, ...(signal ? { signal } : {}) },
+		);
+		if (answer.stopReason !== "stop") return undefined;
+		const out = answer.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n").trim();
+		return out || undefined;
+	};
 	log(`model ${model.provider}/${model.modelId} via ${created.source}${definition.name ? `; agent ${definition.name}` : ""}${scheduling ? "; schedules on" : ""}`);
 
 	const storage = options.storage ?? (await openSqliteAgentStorage({ path: config.storagePath })).storage;
@@ -411,6 +430,15 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 			return parts.length > 1 ? parts : text;
 		},
 		approvals,
+		extractMemory: memory ? async (messages, known, signal, threadId) => {
+			const res = await fetch(`${config.modelEnv.PLATFORM_GATEWAY_URL}/memory/suggestions?thread=${encodeURIComponent(threadId)}`, {
+				headers: { authorization: `Bearer ${config.modelEnv.PLATFORM_KEY}` },
+				signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+			}).catch(() => undefined);
+			const answer = await res?.json().catch(() => undefined) as { data?: { enabled?: boolean } } | undefined;
+			if (!res?.ok || answer?.data?.enabled !== true) return undefined;
+			return extractFacts(oneOff!, turnsOf(messages), known, signal);
+		} : undefined,
 		afterMessage: status ? (threadId, submissionId) => status.watch(threadId, submissionId) : undefined,
 		documents: exposed,
 		waitsForPerson: (kind) => personWaits.has(kind),

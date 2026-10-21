@@ -7,6 +7,7 @@ import {
   type Basics,
   type Fact,
   type MemoryNote,
+  type MemorySuggestionSettings,
   type YouInfo,
 } from '~/api/client';
 import { AGENTS_KEY, applyAgentEvent } from '~/hooks/use-agents';
@@ -39,6 +40,28 @@ export function useSaveBasics() {
       queryClient.setQueryData<YouInfo>(YOU_KEY, (you) =>
         you ? { ...you, basics, saved: true } : you,
       ),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: YOU_KEY, exact: true }),
+  });
+}
+
+/**
+ * Turns suggestions from conversations on or off (the one system-wide switch). The switch
+ * moves at once; a refusal puts it back.
+ */
+export function useSaveSuggestions() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.put<MemorySuggestionSettings>(youPath('/settings'), { suggestions: enabled }),
+    onMutate: async (enabled) => {
+      await queryClient.cancelQueries({ queryKey: YOU_KEY, exact: true });
+      const before = queryClient.getQueryData<YouInfo>(YOU_KEY);
+      queryClient.setQueryData<YouInfo>(YOU_KEY, (you) =>
+        you ? { ...you, suggestions: { judged: you.suggestions?.judged ?? false, enabled } } : you,
+      );
+      return { before };
+    },
+    onError: (_error, _enabled, context) => queryClient.setQueryData(YOU_KEY, context?.before),
     onSettled: () => queryClient.invalidateQueries({ queryKey: YOU_KEY, exact: true }),
   });
 }

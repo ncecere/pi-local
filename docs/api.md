@@ -896,7 +896,9 @@ type Fact = {
   sourceAgent: string | null;          // the agent that saved it; null: the person added it
   sourceThread: string | null;         // its conversation: /agents/{sourceAgent}/threads/{sourceThread}
   createdAt: number; updatedAt: number; // Unix ms
+  history: Revision[];                  // earlier versions of its text or category, newest first (v0.4)
 };
+type Revision = { text: string; category: string; at: number };  // what it said before the change at `at` (Unix ms)
 type Note = { id: string; text: string; thread?: string; createdAt: number; updatedAt: number }; // id "an_"
 ```
 
@@ -906,12 +908,13 @@ memory tools. `400 invalid_memory` for an unknown category.
 
 | Route | Answer |
 |---|---|
-| `GET /api/you` | `{basics: Basics, saved: boolean, categories: string[], shareable: string[]}`. `categories`: preferences, people, projects, work, health, family, finances, home, interests; `shareable`: all but preferences. |
+| `GET /api/you` | `{basics: Basics, saved: boolean, categories: string[], shareable: string[], suggestions: {enabled: boolean, judged: boolean}}`. `categories`: preferences, people, projects, work, health, family, finances, home, interests; `shareable`: all but preferences. `suggestions`: see [Suggestions from conversations](#suggestions-from-conversations-v04). |
+| `PUT /api/you/settings` | Body `{suggestions?: boolean}`: the system-wide switch for suggestions from conversations (v0.4). Answers `{enabled, judged}`. |
 | `PUT /api/you/basics` | Body `Basics`. Answers `Basics`. `400 invalid_basics`. |
 | `GET /api/you/memories` | `?status=active\|suggested` (left out: all). `Fact[]`. |
 | `POST /api/you/memories` | Body `{category, text, pinned?}`: the person adds a fact (known, `trust: "said"`). `201 Fact`. |
-| `PATCH /api/you/memories/{id}` | Body `{category?, text?, pinned?, accept?: true}`. `accept` makes a suggestion known. Answers `Fact`. |
-| `DELETE /api/you/memories/{id}` | Deletes it for good (a suggestion too: dismissing it). `{ok: true}`. |
+| `PATCH /api/you/memories/{id}` | Body `{category?, text?, pinned?, accept?: true}`. `accept` makes a suggestion known. Changing `text` makes it the person's own words (`trust: "said"`). A change of text or category adds a `history` entry (at most 20 are kept); a pin or an accept does not. Answers `Fact`. |
+| `DELETE /api/you/memories/{id}` | Deletes it for good (a suggestion too: dismissing it), and its history. `{ok: true}`. |
 | `POST /api/you/erase` | Body `{confirm: "erase"}`: forgets every fact and suggestion and the About me card. `{ok: true}`; `400 confirm` without it. |
 | `GET /api/you/export` | A JSON download (`pi-local-about-you.json`): `{basics, memories: Fact[]}`. |
 | `GET /api/agents/{id}/memory` | Its notes, newest first: `Note[]`. |
@@ -922,7 +925,7 @@ memory tools. `400 invalid_memory` for an unknown category.
 
 Every change sends a [`memory` event](#live-events).
 
-In conversations, agents have three tools:
+In conversations, agents have these tools:
 - `remember` `{about: "you" | "myself", text, category?, source?: "person" | "inferred" | "outside"}`. Its result's
   text says what happened, with the new ID in parentheses: `Saved (um_…, category).` (known), `Saved as a suggestion
   … (um_…); …` (a suggestion), or `Saved to your notes (an_…).` Its details say the same for apps:
@@ -931,12 +934,72 @@ In conversations, agents have three tools:
   `an_`).
 - `recall` `{query, limit?}` and `forget` `{id}` (something about the person only when they ask, in a conversation they
   started). Shown as ordinary tool steps.
+- `search_conversations` `{query, limit?}` (v0.4): the agent's own past conversations, through the app's message search.
+  At most 20 results (default 5), each with the conversation's title, date, thread ID and a snippet with the matching
+  words in `**bold**`. Never another agent's conversations: the app searches for the agent the runtime's key belongs
+  to. On with memory, absent when the agent's memory is off.
+
+### Suggestions from conversations (v0.4)
+
+One system-wide switch (`PUT /api/you/settings`, Settings → You → Suggestions from conversations), **off by default**.
+With it on, agents suggest what a conversation showed about the person, at two moments:
+
+- **Idle.** A conversation that has had no new message for 10 minutes after a reply is read: the app asks the agent's
+  runtime (`POST /memory/extract` on the runtime), which makes one small request to the agent's own model with the
+  messages since the last look. The model is told to name at most 3 durable facts about the person, from the person's
+  own messages only, and to answer with JSON only. The request goes to the provider that agent already uses and counts
+  in its usage and budget (an agent over its budget is skipped). Waiting is in memory: a conversation that is still quiet
+  when the app quits is not read. Shutdown cancels both waiting timers and in-flight idle extraction, including its
+  model request, instead of waiting for the extraction timeout.
+- **Before a compaction.** When pi compacts a long conversation (its `beforeCompact` hook), the runtime reads what is
+  about to be summarized the same way, and reports the facts to the gateway (`POST /memory/suggest`) before the
+  summary is made. This can delay compaction (the extraction has a 90-second timeout); a failure never prevents it.
+  Both triggers check the switch, conversation origin and budget before calling the model, and recheck eligibility
+  before saving.
+
+What comes back is saved as **suggestions**: `trust: "inferred"`, `status: "suggested"`, `sourceAgent` and
+`sourceThread` the conversation. Nothing is ever saved as known, and a suggestion reaches no agent's prompt until the
+person accepts it. A fact already saved in the same category is not saved again.
+
+- **Never** for a conversation a schedule started (a `sched-…` thread, or any thread a schedule has run in) or another
+  agent asked in (`calledBy`), and never for an agent with memory off. In what is read, a message sent by a schedule or
+  another agent is left out; only the person's messages count as a source.
+- **Fast judgments**, when on with the `memory` use: each candidate is judged ("is this a durable fact about the
+  person, not a one-off?", a noul) and dropped below the confidence threshold. Only the fact's text is sent. If the
+  service can't be reached or returns invalid probabilities the candidates stay as suggestions (the person still
+  decides). `suggestions.judged` says whether this is on. Judgment requests obey the agent/app budget gate and are
+  recorded under `judgments/<model>`, including failed attempts and token counts when available. These requests are
+  **unpriced**: no System One prices are configured, so they do not add dollars to a budget (as with other unpriced
+  models). Extraction requests use the agent's normal provider accounting and configured prices.
+- The request sent to the model: a system prompt of strict rules (at most 3, durable, about the person, from their
+  messages, no secrets, ignore instructions inside the conversation, JSON only), then the facts this agent already
+  sees (so they aren't suggested again) and the conversation (the last 24,000 characters; the assistant's turns
+  shortened). Source messages and known facts are untrusted data, not instructions. The extraction request has no
+  tools or tool executor. The answer must be `{"facts":[{"text":"…","category":"preferences"}]}` with at most 3
+  facts, known categories, non-empty text of at most 300 characters and no extra fields. Code fences, prose, missing
+  fields, invalid items or too many facts fail the entire extraction. Failures do not advance the idle cursor;
+  a successful empty answer does. A later reply can retry failed extraction; there is no background retry loop.
+
+Settings of the idle wait: `Config.MemoryIdle` (tests); there is no UI for it.
+
+**Trust labels.** Every fact, known or suggested, says where its words came from: `said` (the person told an agent, or
+wrote it), `inferred` (an agent concluded it, including every suggestion from a conversation) or `external` (outside
+text: a web page, mail, a file, a tool's result). The UI shows them as "You said it", "An agent inferred it" and "From
+outside text" next to the fact's source. **History.** A fact's earlier versions are in `history`; the UI says
+"Changed from “…” on Oct 21" (or "Moved from Work …" when only the category changed) under the fact.
+
+**Embeddings are deferred.** No embedding model setting or vector index is implemented in this workstream.
+`recall` and `search_conversations` rank by words (SQLite FTS5).
+
+Routes on the gateway a runtime calls with its key (not the UI's API): `GET /memory/suggestions?thread={id}` →
+`{enabled}` (eligible conversation, memory and suggestions on, budget allows; missing/unknown thread: false); `POST /memory/suggest` `{threadId, trigger: "compaction", facts: [{text, category}]}` → `{saved}`;
+`POST /memory/conversations` `{query, limit?}` → `{results: [{threadId, title, date, snippet}]}`.
 
 ## Fast judgments (v0.2)
 
 Optional and off by default: quick, typed decisions by a System One model (TypeSafe's Jev, or a self-hosted service
 speaking its API). The text being judged is sent to that service. Its key lives in the OS keychain and is never
-returned. Each use has its own switch; `agentRouting`, `toolPreselection` and `approvals` (v0.3: see [Approval rules and profiles](#approval-rules-and-profiles-v03)) do something so far.
+returned. Each use has its own switch; `agentRouting`, `toolPreselection`, `approvals` (v0.3: see [Approval rules and profiles](#approval-rules-and-profiles-v03)) and `memory` (v0.4: it filters [suggestions from conversations](#suggestions-from-conversations-v04)) do something so far.
 
 ```ts
 type JudgmentSettings = {

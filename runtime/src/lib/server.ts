@@ -7,6 +7,7 @@ import { type Approvals, type DecisionInput, parseApprovalPolicy, waitingThreads
 import type { ThreadStore } from "./threads.ts";
 import { DELTA_VERSION, DeltaStream } from "./delta.ts";
 import { EXPOSED_KIND } from "./define.ts";
+import type { FactCandidate } from "./memory-extract.ts";
 import { CONTRACT_VERSION, PI_DURABLE_VERSION } from "./version.ts";
 import {
 	AUTHOR_KINDS,
@@ -67,6 +68,11 @@ export type RuntimeOptions = {
 	waitsForPerson?: (kind: string) => boolean;
 	/** Tool approvals (docs/approvals.md): shown in the view, decided through POST /approvals/{id}. */
 	approvals?: Approvals;
+	/**
+	 * Facts about the person in new messages of a thread (POST /memory/extract, the platform's end-of-conversation
+	 * suggestions). None: the route answers 404.
+	 */
+	extractMemory?: (messages: readonly ChatMessage[], known: readonly string[], signal: AbortSignal, threadId: string) => Promise<FactCandidate[] | undefined>;
 };
 
 /**
@@ -194,6 +200,7 @@ export function createRuntimeServer(options: RuntimeOptions): {
 		}
 		if (method === "GET" && url.pathname === "/threads") return json(response, 200, await threads.list());
 		if (parts[0] === "approvals") return routeApproval(request, response, parts, url);
+		if (method === "POST" && url.pathname === "/memory/extract") return routeExtract(request, response);
 
 		if (parts[0] !== "threads" || parts[1] === undefined) return fail(response, 404, "not_found", "Not found");
 		const threadId = parts[1];
@@ -325,6 +332,36 @@ export function createRuntimeServer(options: RuntimeOptions): {
 	 * Tool approvals: `GET /approvals[?thread=]` lists the requests (pending first), `POST /approvals/{id}` applies a
 	 * decision `{decision: approve|deny|timeout|cancel, reason?, decidedBy?}` (the platform's, or a test's).
 	 */
+	// POST /memory/extract {threadId, since?, known?}: the facts about the person in the thread's messages after the first
+	// `since`, and how many messages it has now. One small request to the agent's model, and only the person's own
+	// messages count as a source (never a schedule's or another agent's).
+	const routeExtract = async (request: IncomingMessage, response: ServerResponse) => {
+		if (options.extractMemory === undefined) return fail(response, 404, "not_found", "Memory suggestions are not offered");
+		const body = (await readJson(request)) as { threadId?: unknown; since?: unknown; known?: unknown };
+		if (typeof body.threadId !== "string" || !THREAD_ID.test(body.threadId)) return fail(response, 400, "invalid_thread_id", "Name the thread");
+		if (body.since !== undefined && (typeof body.since !== "number" || !Number.isSafeInteger(body.since) || body.since < 0)) return fail(response, 400, "invalid_since", "Use a non-negative message count");
+		if (body.known !== undefined && (!Array.isArray(body.known) || body.known.length > 40 || body.known.some((v) => typeof v !== "string" || v.length > 1000))) return fail(response, 400, "invalid_known", "Use at most 40 facts");
+		const since = (body.since as number | undefined) ?? 0;
+		const known = (body.known as string[] | undefined) ?? [];
+		const view = await viewOf(body.threadId);
+		if (view === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
+		const fresh = since <= view.messages.length ? view.messages.slice(since) : view.messages;
+		// App shutdown cancels the HTTP request: propagate that to the provider, rather than leaving an auxiliary
+		// request running for two minutes and holding the runtime's own shutdown open.
+		const disconnected = new AbortController();
+		const onClose = () => disconnected.abort(new Error("Memory extraction request closed"));
+		response.once("close", onClose);
+		if (response.destroyed) onClose();
+		try {
+			const signal = AbortSignal.any([AbortSignal.timeout(120_000), disconnected.signal]);
+			const facts = await options.extractMemory(fresh, known, signal, body.threadId);
+			if (facts === undefined) return fail(response, 502, "extraction_failed", "No valid memory extraction was returned");
+			return json(response, 200, { facts, messages: view.messages.length });
+		} finally {
+			response.off("close", onClose);
+		}
+	};
+
 	const routeApproval = async (request: IncomingMessage, response: ServerResponse, parts: string[], url: URL) => {
 		const method = request.method ?? "GET";
 		if (approvals === undefined) return fail(response, 404, "not_found", "Not found");

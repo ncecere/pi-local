@@ -118,6 +118,9 @@ func TestToolCallsFromARuntimeAreValidatedRedactedAndKeptOnce(t *testing.T) {
 
 func TestFiltersCursorsAndRetention(t *testing.T) {
 	s := newStore(t)
+	// This test prunes explicitly below. Stop automatic startup pruning before inserting the ancient entry,
+	// otherwise it can remove that entry between pagination assertions (10 entries instead of 11).
+	s.cancel()
 	now := time.Now()
 	for i := 0; i < 10; i++ {
 		kind, agent := KindMessage, "ag_1"
