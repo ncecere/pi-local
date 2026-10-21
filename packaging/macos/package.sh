@@ -44,6 +44,14 @@ make runtime frontend >/dev/null
 case "$NODE_ARCH" in arm64) GO_NOTICE_ARCH=arm64 ;; x64) GO_NOTICE_ARCH=amd64 ;; esac
 export GOOS=darwin GOARCH="$GO_NOTICE_ARCH" CGO_ENABLED=1
 export MACOSX_DEPLOYMENT_TARGET=11.0 CGO_LDFLAGS="-mmacosx-version-min=11.0"
+# Online hydration must include explicit requirements not linked on Darwin: offline
+# notice assembly runs go mod verify over the full graph, not just built modules.
+go_modules_before="$(shasum -a 256 go.mod go.sum)"
+go mod download
+if [ "$go_modules_before" != "$(shasum -a 256 go.mod go.sum)" ]; then
+	echo "✗ go mod download changed go.mod or go.sum; review module locks before packaging"
+	exit 1
+fi
 go build -trimpath -ldflags "-s -w -X github.com/ncecere/pi-local/internal/app.Version=$VERSION" -o "$OUT/pi-local" ./cmd/pi-local
 
 # 3. The bundle.
