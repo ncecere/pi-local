@@ -32,6 +32,11 @@ export type RulePolicy = {
 	rules: readonly ApprovalRule[];
 	/** Built-in rules (always ask), shown on the Tools tab, can't be removed. */
 	builtin: readonly ApprovalRule[];
+	/**
+	 * The agent's shell runs in the sandbox (and the runtime really does that: see `Approvals.shellSandboxed`): the
+	 * balanced profile lets `bash` run without asking, the built-in rules still ask. Careful still asks.
+	 */
+	sandboxed?: boolean;
 };
 
 /** Why a call asks, runs or is refused. */
@@ -161,12 +166,12 @@ export function changesThings(name: string, info?: ToolInfo): boolean {
 }
 
 /** Whether a profile (not `custom`) asks before this tool. */
-export function profileAsks(profile: Profile, name: string, info?: ToolInfo): boolean {
+export function profileAsks(profile: Profile, name: string, info?: ToolInfo, sandboxed = false): boolean {
 	switch (profile) {
 		case "careful":
 			return changesThings(name, info);
 		case "balanced":
-			if (name === "bash") return true;
+			if (name === "bash") return !sandboxed;
 			if (info?.mcp !== true) return false;
 			if (info.annotations?.destructiveHint === true) return true;
 			return info.annotations?.readOnlyHint !== true && mutatingName(name, info);
@@ -192,7 +197,7 @@ export function evaluate(policy: RulePolicy, name: string, args: unknown, info?:
 	if (policy.profile === "custom") {
 		return policy.tools.some((pattern) => toolMatches(pattern, name)) ? { action: "ask", source: "tools" } : { action: "allow", explicit: false };
 	}
-	return profileAsks(policy.profile, name, info) ? { action: "ask", source: "profile" } : { action: "allow", explicit: false };
+	return profileAsks(policy.profile, name, info, policy.sandboxed === true) ? { action: "ask", source: "profile" } : { action: "allow", explicit: false };
 }
 
 /** A rule as a person reads it: `bash (command: git status*)`. */
@@ -224,9 +229,9 @@ function parseRules(value: unknown): ApprovalRule[] {
 	return out;
 }
 
-/** The rules part of `TOOL_APPROVALS` (`{profile?, tools?, rules?, builtin?}`); anything missing or malformed is none. */
-export function parsePolicy(value: { profile?: unknown; tools?: unknown; rules?: unknown; builtin?: unknown }): RulePolicy {
+/** The rules part of `TOOL_APPROVALS` (`{profile?, tools?, rules?, builtin?, sandboxed?}`); anything missing or malformed is none. */
+export function parsePolicy(value: { profile?: unknown; tools?: unknown; rules?: unknown; builtin?: unknown; sandboxed?: unknown }): RulePolicy {
 	const profile = PROFILES.find((p) => p === value.profile) ?? "custom";
 	const tools = Array.isArray(value.tools) ? value.tools.filter((t): t is string => typeof t === "string" && t.length > 0 && t.length <= 200).slice(0, 100) : [];
-	return { profile, tools, rules: parseRules(value.rules), builtin: parseRules(value.builtin) };
+	return { profile, tools, rules: parseRules(value.rules), builtin: parseRules(value.builtin), ...(value.sandboxed === true ? { sandboxed: true } : {}) };
 }

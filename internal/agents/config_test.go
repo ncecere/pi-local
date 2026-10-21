@@ -116,3 +116,92 @@ func TestApprovalRulesAreValidatedAndGetStableIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestTheShellSandboxIsASettingOfTheWorkspace(t *testing.T) {
+	// An agent made before the sandbox has no setting: off, network on. Nothing is added behind its back.
+	old, err := ParseConfig([]byte("name: Old\nworkspace:\n  tools: [read, bash]\n"))
+	if err != nil || old.Validate() != nil || old.Workspace.SandboxOn() || !old.Workspace.NetworkOn() || old.Workspace.Sandbox != "" {
+		t.Fatalf("an agent without the setting: %+v %v", old.Workspace, err)
+	}
+	// Written by hand as YAML writes it: on and off, as words or booleans.
+	for yamlText, want := range map[string]struct{ sandbox, network string }{
+		"sandbox: on\n  network: off": {"on", "off"},
+		"sandbox: true":               {"on", ""},
+		"sandbox: \"Off\"":            {"off", ""},
+		"sandbox: no\n  network: yes": {"off", "on"},
+	} {
+		c, err := ParseConfig([]byte("name: A\nworkspace:\n  tools: [bash]\n  " + yamlText + "\n"))
+		if err != nil || c.Validate() != nil || c.Workspace.Sandbox != want.sandbox || c.Workspace.Network != want.network {
+			t.Errorf("%q: %+v %v", yamlText, c.Workspace, err)
+		}
+	}
+	for _, bad := range []string{"sandbox: maybe", "network: sometimes"} {
+		c, err := ParseConfig([]byte("name: A\nworkspace:\n  " + bad + "\n"))
+		if err == nil {
+			err = c.Validate()
+		}
+		var inv *InvalidError
+		if !errors.As(err, &inv) || !strings.HasPrefix(inv.Code, "invalid_workspace_") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	// Written back as the words the file is documented with.
+	var out bytes.Buffer
+	c, _ := ParseConfig([]byte("name: A\nworkspace:\n  tools: [bash]\n  sandbox: on\n  network: off\n"))
+	yaml.NewEncoder(&out).Encode(c)
+	if !strings.Contains(out.String(), "sandbox:") || !strings.Contains(out.String(), "network:") {
+		t.Fatalf("yaml:\n%s", out.String())
+	}
+	again, err := ParseConfig(out.Bytes())
+	if err != nil || !again.Workspace.SandboxOn() || again.Workspace.NetworkOn() {
+		t.Fatalf("round trip: %+v %v", again.Workspace, err)
+	}
+}
+
+func TestNewAgentsWithAShellGetTheSandboxWhereThereIsOne(t *testing.T) {
+	was := SandboxSupported
+	defer func() { SandboxSupported = was }()
+
+	SandboxSupported = true
+	withBash := Config{Workspace: Workspace{Tools: []string{"read", "bash"}}}
+	KindDefaults("assistant", &withBash)
+	coding := Config{}
+	KindDefaults("coding", &coding)
+	noShell := Config{Workspace: Workspace{Tools: []string{"read"}}}
+	KindDefaults("assistant", &noShell)
+	chosen := Config{Workspace: Workspace{Tools: []string{"bash"}, Sandbox: "off"}}
+	KindDefaults("coding", &chosen)
+	if !withBash.Workspace.SandboxOn() || !coding.Workspace.SandboxOn() || noShell.Workspace.Sandbox != "" || chosen.Workspace.Sandbox != "off" {
+		t.Fatalf("defaults: %+v %+v %+v %+v", withBash.Workspace, coding.Workspace, noShell.Workspace, chosen.Workspace)
+	}
+	if coding.Workspace.Network != "" || !coding.Workspace.NetworkOn() {
+		t.Fatalf("the network is on by default: %+v", coding.Workspace)
+	}
+
+	// Where there is no sandbox yet, the shell is left as it was: never a default that makes it refuse.
+	SandboxSupported = false
+	elsewhere := Config{}
+	KindDefaults("coding", &elsewhere)
+	if elsewhere.Workspace.Sandbox != "" {
+		t.Fatalf("without a sandbox on this OS: %+v", elsewhere.Workspace)
+	}
+}
+
+func TestTheApprovalPolicyKnowsWhenTheShellIsSandboxed(t *testing.T) {
+	c := Config{Workspace: Workspace{Tools: []string{"bash"}, Sandbox: "on"}, Approvals: Approvals{Profile: ProfileBalanced}}
+	if c.ApprovalPolicy()["sandboxed"] != true {
+		t.Fatalf("sandboxed: %+v", c.ApprovalPolicy())
+	}
+	c.Workspace.Sandbox = "off"
+	if _, has := c.ApprovalPolicy()["sandboxed"]; has {
+		t.Fatal("an unsandboxed shell was reported as sandboxed")
+	}
+	// A sandbox without a shell protects nothing: the flag is for bash.
+	c.Workspace = Workspace{Tools: []string{"read"}, Sandbox: "on"}
+	if _, has := c.ApprovalPolicy()["sandboxed"]; has {
+		t.Fatal("sandboxed without bash")
+	}
+	if _, has := c.Approvals.Policy()["sandboxed"]; has {
+		t.Fatal("the approvals alone know nothing of the sandbox")
+	}
+}

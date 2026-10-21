@@ -458,7 +458,7 @@ func (a *App) pushApprovalPolicy(id string) {
 	if err != nil {
 		return
 	}
-	raw, _ := json.Marshal(ag.Config.Approvals.Policy())
+	raw, _ := json.Marshal(ag.Config.ApprovalPolicy())
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	resp, err := a.Sup.Call(ctx, id, http.MethodPost, "/approvals/policy", raw, http.Header{"Content-Type": {"application/json"}})
@@ -495,9 +495,20 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	if len(ag.Config.Workspace.Tools) > 0 {
 		env["WORKSPACE_TOOLS"] = strings.Join(ag.Config.Workspace.Tools, ",")
 	}
+	// The shell's sandbox (macOS: sandbox-exec): on or off, the network inside it, and the app's data folder, which the
+	// sandboxed shell may not read outside this agent's own folder.
+	if ag.Config.Workspace.SandboxOn() {
+		env["WORKSPACE_SANDBOX"] = "on"
+		env["WORKSPACE_SANDBOX_NETWORK"] = "on"
+		if !ag.Config.Workspace.NetworkOn() {
+			env["WORKSPACE_SANDBOX_NETWORK"] = "off"
+		}
+		env["WORKSPACE_SANDBOX_DATA_DIR"] = a.cfg.DataDir
+		env["WORKSPACE_SANDBOX_AGENT_DIR"] = ag.Dir
+	}
 	// The approval policy: profile, rules, the built-in rules (always sent). Changes to it reach a running runtime
 	// without a restart (pushApprovalPolicy), so it is not part of what makes a configuration stale.
-	raw, _ := json.Marshal(ag.Config.Approvals.Policy())
+	raw, _ := json.Marshal(ag.Config.ApprovalPolicy())
 	env["TOOL_APPROVALS"] = string(raw)
 	// MCP servers: resolved here (secrets and paths filled in); the runtime connects to them itself.
 	if len(ag.Config.MCP) > 0 {

@@ -1,6 +1,6 @@
 id: coding
 name: Coding
-description: "Works in a project folder like the pi coding agent: reads, edits and writes files and runs commands (asking first)."
+description: "Works in a project folder like the pi coding agent: reads, edits and writes files and runs commands in a sandbox."
 category: work
 icon: code
 kind: coding

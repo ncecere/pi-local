@@ -166,6 +166,13 @@ export class Approvals implements ApprovalRequester {
 	 */
 	judge: ((call: ToolHookCall, signal?: AbortSignal) => Promise<boolean>) | undefined;
 
+	/**
+	 * Whether this runtime really runs the shell in the sandbox (its own settings, WORKSPACE_SANDBOX). The policy's
+	 * `sandboxed` (what the app says) only counts when this is true too: the balanced profile stops asking for `bash`
+	 * only for a shell that is confined, whatever a policy was told.
+	 */
+	shellSandboxed = false;
+
 	constructor(public policy: ApprovalPolicy) {}
 
 	/** Replaces the policy (the platform changed the agent's rules or profile). Calls already waiting keep waiting. */
@@ -199,7 +206,7 @@ export class Approvals implements ApprovalRequester {
 	 */
 	async verdict(call: ToolHookCall, signal?: AbortSignal): Promise<{ block: string } | { ask: ApprovalOptions } | undefined> {
 		const info = this.toolInfo(call.name);
-		const v = evaluate(this.policy, call.name, call.arguments ?? {}, info);
+		const v = evaluate({ ...this.policy, sandboxed: this.policy.sandboxed === true && this.shellSandboxed }, call.name, call.arguments ?? {}, info);
 		if (v.action === "deny") return { block: DENIED_MESSAGE };
 		if (v.action === "ask") {
 			const summary = v.source === "builtin" ? `Asked because it matches a built-in rule (${describeRule(v.rule!)}).` : v.source === "rule" ? "Asked because of one of your approval rules." : undefined;

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -36,6 +37,11 @@ func KindDefaults(kind string, c *Config) {
 		// pi's own tools.
 		c.Workspace.Tools = []string{"read", "write", "edit", "bash"}
 	}
+	// New agents with a shell run it in the sandbox where this computer has one. Agents made before the sandbox have no
+	// setting and keep running their shell as they did (off): never changed behind someone's back.
+	if c.Workspace.Sandbox == "" && slices.Contains(c.Workspace.Tools, "bash") && SandboxSupported {
+		c.Workspace.Sandbox = SwitchOn
+	}
 	// New agents get the balanced profile (commands, and MCP tools that change things, ask first) unless the request or
 	// its template chose how approvals work. Agents made before profiles have no profile: they keep their `tools` as
 	// the custom profile (Approvals.EffectiveProfile).
@@ -43,6 +49,10 @@ func KindDefaults(kind string, c *Config) {
 		c.Approvals.Profile = ProfileBalanced
 	}
 }
+
+// SandboxSupported says whether the shell sandbox exists on this OS (runtime/src/lib/sandbox: macOS first). New agents
+// get the sandbox on only where it does.
+var SandboxSupported = goruntime.GOOS == "darwin"
 
 // KindInfo describes a kind for the catalog.
 type KindInfo struct {
@@ -163,6 +173,37 @@ type Workspace struct {
 	Tools []string `yaml:"tools,omitempty" json:"tools"`
 	// Folder is a project folder on this computer the tools work in (absolute). Empty: the agent's own workspace/.
 	Folder string `yaml:"folder,omitempty" json:"folder"`
+	// Sandbox: "on" runs the agent's `bash` in an OS sandbox (reads anywhere but credentials and other agents' data;
+	// writes only the workspace and temporary folders); "off" or empty (an agent made before the sandbox) runs it
+	// with everything the person can reach. Only `bash` is affected: the file tools stay inside the workspace always.
+	Sandbox string `yaml:"sandbox,omitempty" json:"sandbox"`
+	// Network: "off" blocks the sandboxed shell's network; "on" or empty allows it. No effect without the sandbox.
+	Network string `yaml:"network,omitempty" json:"network"`
+}
+
+// Switch values for Workspace.Sandbox and Workspace.Network.
+const (
+	SwitchOn  = "on"
+	SwitchOff = "off"
+)
+
+// SandboxOn: the shell runs sandboxed.
+func (w Workspace) SandboxOn() bool { return w.Sandbox == SwitchOn }
+
+// NetworkOn: the sandboxed shell may use the network (the default).
+func (w Workspace) NetworkOn() bool { return w.Network != SwitchOff }
+
+// normalizeSwitch reads what people write for an on/off setting (YAML's `on` and `off` may come as booleans).
+func normalizeSwitch(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true", "yes":
+		return SwitchOn
+	case "off", "false", "no":
+		return SwitchOff
+	case "":
+		return ""
+	}
+	return "?" + v
 }
 
 // Permission profiles: how much an agent asks before it acts.
@@ -222,9 +263,22 @@ func (a Approvals) EffectiveProfile() string {
 // Policy is what the runtime gets as TOOL_APPROVALS (and POST /approvals/policy when the rules change): the profile,
 // the `tools` list (custom only), the rules and the built-in rules, and how long a request waits.
 func (a Approvals) Policy() map[string]any {
+	return a.policy(false)
+}
+
+// ApprovalPolicy is the policy for this agent: its approvals, and whether its shell is sandboxed (the balanced profile
+// stops asking for plain commands then; the built-in rules still ask).
+func (c Config) ApprovalPolicy() map[string]any {
+	return c.Approvals.policy(c.Workspace.SandboxOn() && slices.Contains(c.Workspace.Tools, "bash"))
+}
+
+func (a Approvals) policy(sandboxed bool) map[string]any {
 	p := map[string]any{"profile": a.EffectiveProfile(), "rules": nonNilRules(a.Rules), "builtin": BuiltinRules, "timeoutSeconds": a.Timeout()}
 	if a.EffectiveProfile() == ProfileCustom {
 		p["tools"] = a.Tools
+	}
+	if sandboxed {
+		p["sandboxed"] = true
 	}
 	return p
 }
@@ -383,6 +437,8 @@ func (c *Config) Normalize() {
 	c.Name = strings.TrimSpace(c.Name)
 	c.Description = strings.TrimSpace(c.Description)
 	c.Instructions = strings.TrimSpace(c.Instructions)
+	c.Workspace.Sandbox = normalizeSwitch(c.Workspace.Sandbox)
+	c.Workspace.Network = normalizeSwitch(c.Workspace.Network)
 	if c.Kind == "" {
 		c.Kind = "assistant"
 	}
@@ -429,6 +485,12 @@ func (c *Config) Validate() error {
 		}
 	}
 	c.Workspace.Tools = tools
+	if s := c.Workspace.Sandbox; s != "" && s != SwitchOn && s != SwitchOff {
+		return invalid("invalid_workspace_sandbox", "The shell sandbox is on or off.")
+	}
+	if n := c.Workspace.Network; n != "" && n != SwitchOn && n != SwitchOff {
+		return invalid("invalid_workspace_network", "The shell's network is on or off.")
+	}
 	var share []string
 	for _, cat := range c.Memory.Share {
 		if !slices.Contains(ShareableMemory, cat) {

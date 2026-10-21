@@ -389,9 +389,12 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"callable":         a.callable(ag.ID),
 		"dir":              ag.Dir,
 		"piDurableVersion": nullIfEmpty(ag.PiDurableVersion),
-		"workspace":        map[string]any{"tools": nonNil(ag.Config.Workspace.Tools), "folder": ag.Config.Workspace.Folder, "dir": ag.WorkspaceDir()},
-		"web":              ag.Config.Web,
-		"memory":           map[string]any{"off": ag.Config.Memory.Off, "share": nonNil(ag.Config.Memory.Share)},
+		"workspace": map[string]any{
+			"tools": nonNil(ag.Config.Workspace.Tools), "folder": ag.Config.Workspace.Folder, "dir": ag.WorkspaceDir(),
+			"sandbox": ag.Config.Workspace.SandboxOn(), "network": ag.Config.Workspace.NetworkOn(), "sandboxAvailable": agents.SandboxSupported,
+		},
+		"web":    ag.Config.Web,
+		"memory": map[string]any{"off": ag.Config.Memory.Off, "share": nonNil(ag.Config.Memory.Share)},
 		"approvals": map[string]any{
 			"profile": ag.Config.Approvals.EffectiveProfile(), "tools": nonNil(ag.Config.Approvals.Tools), "rules": rulesJSON(ag.Config.Approvals.Rules),
 			"builtinRules": agents.BuiltinRules, "timeoutSeconds": ag.Config.Approvals.Timeout(),
@@ -502,7 +505,7 @@ type agentInput struct {
 	Instructions *string                `json:"instructions"`
 	KindSettings *map[string]any        `json:"kindSettings"`
 	CanCall      *[]string              `json:"canCall"`
-	Workspace    *agents.Workspace      `json:"workspace"`
+	Workspace    *workspaceInput        `json:"workspace"`
 	Approvals    *approvalsInput        `json:"approvals"`
 	MCP          *[]agents.MCPChoice    `json:"mcp"`
 	Schedules    *agents.AgentSchedules `json:"schedules"`
@@ -510,6 +513,34 @@ type agentInput struct {
 	Memory       *agents.MemorySettings `json:"memory"`
 	// Budget: {monthlyUsd, onExceed} sets the agent's monthly budget, null removes it, absent leaves it.
 	Budget json.RawMessage `json:"budget"`
+}
+
+// workspaceInput is what a create or update sends as `workspace`: `tools` and `folder` replace what is there (left out,
+// they clear); `sandbox` and `network` (booleans) left out keep what the agent (or its template) has, so a client that
+// knows nothing of the sandbox saving the tools doesn't turn it off.
+type workspaceInput struct {
+	Tools   []string `json:"tools"`
+	Folder  string   `json:"folder"`
+	Sandbox *bool    `json:"sandbox"`
+	Network *bool    `json:"network"`
+}
+
+func (in *workspaceInput) apply(c *agents.Workspace) {
+	c.Tools = in.Tools
+	c.Folder = in.Folder
+	if in.Sandbox != nil {
+		c.Sandbox = onOff(*in.Sandbox)
+	}
+	if in.Network != nil {
+		c.Network = onOff(*in.Network)
+	}
+}
+
+func onOff(on bool) string {
+	if on {
+		return agents.SwitchOn
+	}
+	return agents.SwitchOff
 }
 
 // approvalsInput is what a create or update sends as `approvals`. `tools` and `timeoutSeconds` replace what is there
@@ -559,7 +590,7 @@ func (in agentInput) apply(c *agents.Config) error {
 		c.CanCall = *in.CanCall
 	}
 	if in.Workspace != nil {
-		c.Workspace = *in.Workspace
+		in.Workspace.apply(&c.Workspace)
 	}
 	if in.Web != nil {
 		c.Web = *in.Web
