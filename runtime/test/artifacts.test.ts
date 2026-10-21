@@ -1,11 +1,17 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { startTestAgent, toolCall } from "@pdp/runtime/testing";
-import { assistantAgent, defineDoc } from "@pdp/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { fakeModel, memoryStorage, startTestAgent, toolCall } from "@pdp/runtime/testing";
+import { assistantAgent, defineDoc, startAgent } from "@pdp/runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeServer } from "../src/lib/server.ts";
+import { tempStoragePath } from "./support.ts";
 import {
 	ARTIFACT_CONTENT_BYTES,
 	ARTIFACT_DOCUMENT_BYTES,
+	type Artifact,
 	type Artifacts,
+	type ArtifactVersion,
 	ArtifactsDoc,
 	type ArtifactWrite,
 	updateArtifact,
@@ -16,6 +22,103 @@ const write: ArtifactWrite = { title: "Report", type: "markdown", content: "# Fi
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
 	for (const fn of cleanup.splice(0).reverse()) await fn();
+});
+
+async function listen(server: Server): Promise<string> {
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	cleanup.push(() => new Promise<void>((resolve, reject) => {
+		server.closeAllConnections();
+		server.close((error) => error ? reject(error) : resolve());
+	}));
+	return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+describe.each(["memory", "sqlite"] as const)("artifact HTTP edits on %s storage", (storage) => {
+	it("returns parsed revisions with fully retained history after repeated commits", async () => {
+		const model = fakeModel();
+		const token = "artifact-regression-token";
+		const agent = await startAgent({
+			agentId: "artifact-regression",
+			name: "Artifact regression",
+			instructions: "Test artifacts.",
+			storagePath: storage === "sqlite" ? await tempStoragePath(cleanup) : ":memory:",
+			token,
+			modelEnv: { PERSON_TOOLS: "on" },
+		}, assistantAgent, { models: model, ...(storage === "memory" ? { storage: memoryStorage().open() } : {}) });
+		cleanup.push(() => agent.close());
+		const baseUrl = await listen(createServer(agent.handler));
+		const conversation = await agent.threads.ensure("t", "Test");
+		model.reply(toolCall("artifact", write), "Saved.");
+		const submission = await conversation.submit({ type: "input", content: "Create artifact" }, BACKGROUND_CONTEXT);
+		expect((await submission.wait(BACKGROUND_CONTEXT)).status).toBe("done");
+		const initial = (await agent.harness.snapshot(ArtifactsDoc, conversation.id, BACKGROUND_CONTEXT))!.artifacts[0]!;
+		const path = `/threads/t/artifacts/${initial.id}`;
+		const call = (suffix = "", body?: unknown) => fetch(baseUrl + path + suffix, {
+			method: body === undefined ? "GET" : "PUT",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			body: body === undefined ? undefined : JSON.stringify(body),
+		});
+		const { id: _id, versions: _versions, ...firstVersion } = initial;
+		const history: ArtifactVersion[] = [firstVersion];
+		for (let revision = 2; revision <= 6; revision++) {
+			const edit = {
+				title: `Report ${revision}`,
+				type: revision % 2 ? "code" : "markdown",
+				...(revision % 2 ? { language: "ts" } : {}),
+				content: `Revision ${revision}: \"quoted\"\nline`,
+				expectedRevision: revision - 1,
+			};
+			const response = await call("", edit);
+			expect(response.status).toBe(200);
+			const { data } = await response.json() as { data: Artifact };
+			expect(data).toEqual({
+				id: initial.id,
+				title: edit.title,
+				type: edit.type,
+				...(revision % 2 ? { language: "ts" } : {}),
+				content: edit.content,
+				revision,
+				updatedAt: expect.any(Number),
+				versions: history.slice(-3),
+			});
+			expect((await (await call()).json()).data).toEqual(data);
+			expect((await (await call("/history")).json()).data).toEqual(history.slice(-3));
+			expect((await agent.harness.snapshot(ArtifactsDoc, conversation.id, BACKGROUND_CONTEXT))!.artifacts[0]).toEqual(data);
+			const { id: _id, versions: _versions, ...version } = data;
+			history.push(version);
+		}
+		const conflict = await call("", { ...write, expectedRevision: 1 });
+		expect(conflict.status).toBe(409);
+		expect((await conflict.json()).error.code).toBe("revision_conflict");
+		const oversized = await call("", { ...write, content: "x".repeat(ARTIFACT_CONTENT_BYTES + 1), expectedRevision: 6 });
+		expect(oversized.status).toBe(422);
+		expect((await oversized.json()).error.code).toBe("artifact_too_large");
+		expect((await (await call()).json()).data.revision).toBe(6);
+	}, 30_000);
+});
+
+it("returns a JSON error, not an empty 200, when response serialization fails", async () => {
+	const agent = await startTestAgent();
+	cleanup.push(() => agent.close());
+	await agent.agent.threads.ensure("t", "Test");
+	const artifact = updateArtifact({ artifacts: [] }, write, "a", 1).artifact;
+	const broken = Object.assign(artifact, { toJSON() { throw new Error("serialization failed"); } });
+	const { server } = createRuntimeServer({
+		harness: agent.harness,
+		threads: agent.agent.threads,
+		token: agent.token,
+		info: { agentId: "test", name: "Test", model: "test" },
+		artifacts: { read: async () => broken, edit: async () => broken },
+	});
+	const baseUrl = await listen(server);
+	const log = vi.spyOn(console, "error").mockImplementation(() => {});
+	try {
+		const response = await fetch(`${baseUrl}/threads/t/artifacts/a`, { headers: { authorization: `Bearer ${agent.token}` } });
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({ error: { code: "internal", message: "Internal error" } });
+	} finally {
+		log.mockRestore();
+	}
 });
 
 describe("artifact validation and pure updates", () => {

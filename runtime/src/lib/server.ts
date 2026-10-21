@@ -637,13 +637,14 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 		response.writeHead(204).end();
 		return;
 	}
-	response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ data: body }));
+	// Serialization can throw; let the handler send a JSON error before committing success headers.
+	const text = JSON.stringify({ data: body });
+	response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(text);
 }
 
 function fail(response: ServerResponse, status: number, code: string, message: string): void {
-	response
-		.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" })
-		.end(JSON.stringify({ error: { code, message } }));
+	const text = JSON.stringify({ error: { code, message } });
+	response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(text);
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

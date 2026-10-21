@@ -42,6 +42,40 @@ afterEach(() => {
   restoreTransport();
 });
 
+describe('CSV records', () => {
+  it.each([
+    ['', []],
+    ['""', [['']]],
+    ['name\n""', [['name'], ['']]],
+    ['"",""', [['', '']]],
+    ['""\n""', [[''], ['']]],
+    [
+      'name,value\r\n"",""',
+      [
+        ['name', 'value'],
+        ['', ''],
+      ],
+    ],
+    ['"say ""hi""",""', [['say "hi"', '']]],
+    [
+      '"multi\r\nline",""\r\n"","x"',
+      [
+        ['multi\r\nline', ''],
+        ['', 'x'],
+      ],
+    ],
+  ] as [string, string[][]][])(
+    'preserves records in %j with or without a terminal newline',
+    (content, expected) => {
+      expect(csvRows(content)).toEqual(expected);
+      if (content) {
+        expect(csvRows(`${content}\n`)).toEqual(expected);
+        expect(csvRows(`${content}\r\n`)).toEqual(expected);
+      }
+    },
+  );
+});
+
 describe('artifact canvas', () => {
   it('shares one side panel with the conversation documents', async () => {
     fakeBackend({

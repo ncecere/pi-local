@@ -97,18 +97,17 @@ export function updateArtifact(
 	if (!ARTIFACT_ID.test(newId)) throw new ArtifactError(400, "invalid_artifact_id", "Invalid generated artifact ID.");
 	if (!previous && current.artifacts.some((a) => a.id === newId))
 		throw new ArtifactError(409, "artifact_exists", "Artifact ID already exists.");
+	// Copy every retained version's scalars while the transaction is live: spreading only the
+	// array would let historical overlay proxies escape in the artifact returned after commit.
 	const versions = previous
-		? [
-				...previous.versions,
-				{
-					title: previous.title,
-					type: previous.type,
-					...(previous.language ? { language: previous.language } : {}),
-					content: previous.content,
-					revision: previous.revision,
-					updatedAt: previous.updatedAt,
-				},
-			].slice(-3)
+		? [...previous.versions, previous].slice(-3).map((version) => ({
+				title: version.title,
+				type: version.type,
+				...(version.language ? { language: version.language } : {}),
+				content: version.content,
+				revision: version.revision,
+				updatedAt: version.updatedAt,
+			}))
 		: [];
 	const artifact: Artifact = {
 		id: previous?.id ?? newId,

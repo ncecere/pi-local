@@ -35,9 +35,12 @@ export function csvRows(content: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [],
     cell = '',
-    quoted = false;
+    quoted = false,
+    recordStarted = false;
   for (let i = 0; i < content.length; i++) {
     const ch = content[i];
+    // Quotes can start a record without adding decoded characters (the CSV record "").
+    recordStarted = true;
     if (ch === '"') {
       if (quoted && content[i + 1] === '"') {
         cell += '"';
@@ -51,10 +54,11 @@ export function csvRows(content: string): string[][] {
       rows.push(row);
       row = [];
       cell = '';
+      recordStarted = false;
       if (ch === '\r' && content[i + 1] === '\n') i++;
     } else cell += ch;
   }
-  if (cell || row.length) {
+  if (recordStarted) {
     row.push(cell);
     rows.push(row);
   }
