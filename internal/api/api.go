@@ -392,12 +392,22 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"workspace":        map[string]any{"tools": nonNil(ag.Config.Workspace.Tools), "folder": ag.Config.Workspace.Folder, "dir": ag.WorkspaceDir()},
 		"web":              ag.Config.Web,
 		"memory":           map[string]any{"off": ag.Config.Memory.Off, "share": nonNil(ag.Config.Memory.Share)},
-		"approvals":        map[string]any{"tools": nonNil(ag.Config.Approvals.Tools), "timeoutSeconds": ag.Config.Approvals.Timeout()},
+		"approvals": map[string]any{
+			"profile": ag.Config.Approvals.EffectiveProfile(), "tools": nonNil(ag.Config.Approvals.Tools), "rules": rulesJSON(ag.Config.Approvals.Rules),
+			"builtinRules": agents.BuiltinRules, "timeoutSeconds": ag.Config.Approvals.Timeout(),
+		},
 		"pendingApprovals": a.pendingApprovals(ag.ID),
 		"mcp":              mcpChoices(ag.Config.MCP),
 		"schedules":        ag.Config.Schedules,
 		"budget":           ag.Config.Budget,
 	}
+}
+
+func rulesJSON(r []agents.ApprovalRule) []agents.ApprovalRule {
+	if r == nil {
+		return []agents.ApprovalRule{}
+	}
+	return r
 }
 
 func kindSettings(m map[string]any) map[string]any {
@@ -493,13 +503,37 @@ type agentInput struct {
 	KindSettings *map[string]any        `json:"kindSettings"`
 	CanCall      *[]string              `json:"canCall"`
 	Workspace    *agents.Workspace      `json:"workspace"`
-	Approvals    *agents.Approvals      `json:"approvals"`
+	Approvals    *approvalsInput        `json:"approvals"`
 	MCP          *[]agents.MCPChoice    `json:"mcp"`
 	Schedules    *agents.AgentSchedules `json:"schedules"`
 	Web          *agents.WebTools       `json:"web"`
 	Memory       *agents.MemorySettings `json:"memory"`
 	// Budget: {monthlyUsd, onExceed} sets the agent's monthly budget, null removes it, absent leaves it.
 	Budget json.RawMessage `json:"budget"`
+}
+
+// approvalsInput is what a create or update sends as `approvals`. `tools` and `timeoutSeconds` replace what is there
+// (left out, they clear); `profile` and `rules` left out keep what the agent has, so a client that knows nothing of
+// them (an older one saving the tools list) doesn't lose the rules.
+type approvalsInput struct {
+	Profile        *string                `json:"profile"`
+	Tools          []string               `json:"tools"`
+	Rules          *[]agents.ApprovalRule `json:"rules"`
+	TimeoutSeconds int                    `json:"timeoutSeconds"`
+}
+
+func (in *approvalsInput) apply(c *agents.Approvals) {
+	c.Tools = in.Tools
+	c.TimeoutSeconds = in.TimeoutSeconds
+	if c.TimeoutSeconds == agents.DefaultApprovalTimeout {
+		c.TimeoutSeconds = 0 // the default stays implicit in agent.yaml
+	}
+	if in.Profile != nil {
+		c.Profile = *in.Profile
+	}
+	if in.Rules != nil {
+		c.Rules = *in.Rules
+	}
 }
 
 func (in agentInput) apply(c *agents.Config) error {
@@ -540,10 +574,7 @@ func (in agentInput) apply(c *agents.Config) error {
 		c.Schedules = *in.Schedules
 	}
 	if in.Approvals != nil {
-		c.Approvals = *in.Approvals
-		if c.Approvals.TimeoutSeconds == agents.DefaultApprovalTimeout {
-			c.Approvals.TimeoutSeconds = 0 // the default stays implicit in agent.yaml
-		}
+		in.Approvals.apply(&c.Approvals)
 	}
 	if len(in.Budget) > 0 {
 		if string(in.Budget) == "null" {

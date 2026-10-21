@@ -167,7 +167,8 @@ func (t *Template) Apply(c *agents.Config) {
 		c.Workspace.Tools = append([]string(nil), t.Workspace.Tools...)
 	}
 	if t.Approvals != nil {
-		c.Approvals = agents.Approvals{Tools: append([]string(nil), t.Approvals.Tools...), TimeoutSeconds: t.Approvals.TimeoutSeconds}
+		// A template carries how an agent asks (its profile or tools), never one person's rules.
+		c.Approvals = agents.Approvals{Profile: t.Approvals.Profile, Tools: append([]string(nil), t.Approvals.Tools...), TimeoutSeconds: t.Approvals.TimeoutSeconds}
 	}
 	if t.Web != nil {
 		c.Web = *t.Web
@@ -188,8 +189,9 @@ func FromAgent(id string, c agents.Config) *Template {
 	if len(c.Workspace.Tools) > 0 {
 		t.Workspace = &agents.Workspace{Tools: append([]string(nil), c.Workspace.Tools...)}
 	}
-	if len(c.Approvals.Tools) > 0 {
+	if len(c.Approvals.Tools) > 0 || c.Approvals.Profile != "" {
 		a := c.Approvals
+		a.Rules = nil
 		t.Approvals = &a
 	}
 	// Always recorded: a template without web would give new agents the default (both on).

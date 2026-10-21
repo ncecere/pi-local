@@ -2,6 +2,9 @@ package agents
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -28,17 +32,15 @@ var retiredKinds = []string{"triage"}
 
 // KindDefaults is what a new agent of a kind starts with when the request doesn't say.
 func KindDefaults(kind string, c *Config) {
-	if kind != "coding" {
-		return
-	}
-	if c.Workspace.Tools == nil {
+	if kind == "coding" && c.Workspace.Tools == nil {
 		// pi's own tools.
 		c.Workspace.Tools = []string{"read", "write", "edit", "bash"}
 	}
-	// Commands ask first: they run as the person, in their real project folder, unconfined. A person can turn that
-	// off on the Tools tab (pi itself doesn't ask), or say otherwise when making the agent.
-	if c.Approvals.Tools == nil && slices.Contains(c.Workspace.Tools, "bash") {
-		c.Approvals.Tools = []string{"bash"}
+	// New agents get the balanced profile (commands, and MCP tools that change things, ask first) unless the request or
+	// its template chose how approvals work. Agents made before profiles have no profile: they keep their `tools` as
+	// the custom profile (Approvals.EffectiveProfile).
+	if c.Approvals.Profile == "" && c.Approvals.Tools == nil && len(c.Approvals.Rules) == 0 {
+		c.Approvals.Profile = ProfileBalanced
 	}
 }
 
@@ -163,10 +165,177 @@ type Workspace struct {
 	Folder string `yaml:"folder,omitempty" json:"folder"`
 }
 
-// Approvals says which tools ask first (names, or patterns with *) and how long a request waits.
+// Permission profiles: how much an agent asks before it acts.
+const (
+	ProfileCareful  = "careful"  // everything that can change something asks
+	ProfileBalanced = "balanced" // commands, and MCP tools that change things, ask
+	ProfileTrusting = "trusting" // nothing asks (but the built-in rules)
+	ProfileCustom   = "custom"   // the `tools` list asks, as before profiles
+)
+
+// Profiles are the profiles a config may name.
+var Profiles = []string{ProfileCareful, ProfileBalanced, ProfileTrusting, ProfileCustom}
+
+// Rule actions.
+const (
+	ActionAllow = "allow"
+	ActionAsk   = "ask"
+	ActionDeny  = "deny"
+)
+
+// ApprovalRule is one rule: a tool name or pattern (`*` any characters) and, optionally, globs its arguments must all
+// match; the first rule that matches a call decides (runtime approval-rules.ts).
+type ApprovalRule struct {
+	ID     string            `yaml:"id,omitempty" json:"id"`
+	Tool   string            `yaml:"tool" json:"tool"`
+	Args   map[string]string `yaml:"args,omitempty" json:"args,omitempty"`
+	Action string            `yaml:"action" json:"action"`
+}
+
+// BuiltinRules apply to every profile, ask whatever the rules above them say, and can't be removed.
+var BuiltinRules = []ApprovalRule{
+	{ID: "builtin-rm-rf", Tool: "bash", Args: map[string]string{"command": "rm -rf*"}, Action: ActionAsk},
+	{ID: "builtin-sudo", Tool: "bash", Args: map[string]string{"command": "sudo *"}, Action: ActionAsk},
+	{ID: "builtin-git-push-force", Tool: "bash", Args: map[string]string{"command": "git push --force*"}, Action: ActionAsk},
+	{ID: "builtin-pipe-sh", Tool: "bash", Args: map[string]string{"command": "* | sh"}, Action: ActionAsk},
+	{ID: "builtin-curl-sh", Tool: "bash", Args: map[string]string{"command": "curl * | *sh"}, Action: ActionAsk},
+}
+
+// Approvals says what asks first: a profile, rules (first match wins, before the profile), and for the custom profile
+// the tools (names, or patterns with *) that ask; and how long a request waits.
 type Approvals struct {
-	Tools          []string `yaml:"tools,omitempty" json:"tools"`
-	TimeoutSeconds int      `yaml:"timeoutSeconds,omitempty" json:"timeoutSeconds"`
+	// Profile: careful, balanced, trusting or custom. Empty (an agent made before profiles) is custom.
+	Profile        string         `yaml:"profile,omitempty" json:"profile"`
+	Tools          []string       `yaml:"tools,omitempty" json:"tools"`
+	Rules          []ApprovalRule `yaml:"rules,omitempty" json:"rules"`
+	TimeoutSeconds int            `yaml:"timeoutSeconds,omitempty" json:"timeoutSeconds"`
+}
+
+// EffectiveProfile is the profile in force: an agent with none keeps its `tools` as custom.
+func (a Approvals) EffectiveProfile() string {
+	if a.Profile == "" {
+		return ProfileCustom
+	}
+	return a.Profile
+}
+
+// Policy is what the runtime gets as TOOL_APPROVALS (and POST /approvals/policy when the rules change): the profile,
+// the `tools` list (custom only), the rules and the built-in rules, and how long a request waits.
+func (a Approvals) Policy() map[string]any {
+	p := map[string]any{"profile": a.EffectiveProfile(), "rules": nonNilRules(a.Rules), "builtin": BuiltinRules, "timeoutSeconds": a.Timeout()}
+	if a.EffectiveProfile() == ProfileCustom {
+		p["tools"] = a.Tools
+	}
+	return p
+}
+
+func nonNilRules(r []ApprovalRule) []ApprovalRule {
+	if r == nil {
+		return []ApprovalRule{}
+	}
+	return r
+}
+
+// Copy is a deep copy.
+func (r ApprovalRule) Copy() ApprovalRule {
+	if r.Args != nil {
+		args := make(map[string]string, len(r.Args))
+		for k, v := range r.Args {
+			args[k] = v
+		}
+		r.Args = args
+	}
+	return r
+}
+
+// SameAs reports whether two rules say the same thing (everything but the ID).
+func (r ApprovalRule) SameAs(o ApprovalRule) bool {
+	if r.Tool != o.Tool || r.Action != o.Action || len(r.Args) != len(o.Args) {
+		return false
+	}
+	for k, v := range r.Args {
+		if got, ok := o.Args[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
+}
+
+// NewRuleID makes the ID of a rule made now.
+func NewRuleID() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return "r_" + hex.EncodeToString(b)
+}
+
+// ruleID is the ID a rule without one gets (hand-edited agent.yaml): the same on every load, so it can be removed by it.
+func ruleID(i int, r ApprovalRule) string {
+	keys := make([]string, 0, len(r.Args))
+	for k := range r.Args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	fmt.Fprintf(h, "%d\x00%s\x00%s", i, r.Tool, r.Action)
+	for _, k := range keys {
+		fmt.Fprintf(h, "\x00%s=%s", k, r.Args[k])
+	}
+	return "r_" + hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+// Limits on rules.
+const (
+	MaxApprovalRules   = 200
+	MaxRuleArgs        = 10
+	MaxRuleArgGlobSize = 500
+)
+
+var (
+	ruleIDPattern  = regexp.MustCompile(`^r_[a-z0-9]{6,32}$`)
+	ruleArgPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+)
+
+// checkRules validates the rules and gives each an ID.
+func (a *Approvals) checkRules() error {
+	if len(a.Rules) > MaxApprovalRules {
+		return invalid("invalid_approval_rules", "At most %d approval rules.", MaxApprovalRules)
+	}
+	seen := map[string]bool{}
+	for i := range a.Rules {
+		r := &a.Rules[i]
+		r.Tool = strings.TrimSpace(r.Tool)
+		if !approvalPattern.MatchString(r.Tool) {
+			return invalid("invalid_approval_rules", "%q isn't a tool name or pattern (letters, digits, _ . - and *).", r.Tool)
+		}
+		if r.Action != ActionAllow && r.Action != ActionAsk && r.Action != ActionDeny {
+			return invalid("invalid_approval_rules", "A rule allows, asks or denies; %q is none of those.", r.Action)
+		}
+		if len(r.Args) > MaxRuleArgs {
+			return invalid("invalid_approval_rules", "A rule matches at most %d arguments.", MaxRuleArgs)
+		}
+		for k, v := range r.Args {
+			if !ruleArgPattern.MatchString(k) {
+				return invalid("invalid_approval_rules", "%q isn't an argument name (letters, digits, _ . and -).", k)
+			}
+			if v == "" || utf8.RuneCountInString(v) > MaxRuleArgGlobSize {
+				return invalid("invalid_approval_rules", "The pattern for %s is 1 to %d characters.", k, MaxRuleArgGlobSize)
+			}
+		}
+		if len(r.Args) == 0 {
+			r.Args = nil
+		}
+		if r.ID == "" {
+			r.ID = ruleID(i, *r)
+		}
+		if !ruleIDPattern.MatchString(r.ID) {
+			return invalid("invalid_approval_rules", "%q isn't a rule ID.", r.ID)
+		}
+		if seen[r.ID] {
+			r.ID = NewRuleID()
+		}
+		seen[r.ID] = true
+	}
+	return nil
 }
 
 // WorkspaceTools are the tools an agent's workspace may give it.
@@ -216,6 +385,12 @@ func (c *Config) Normalize() {
 	c.Instructions = strings.TrimSpace(c.Instructions)
 	if c.Kind == "" {
 		c.Kind = "assistant"
+	}
+	// Rules written by hand have no ID yet; they get the same one on every load.
+	for i := range c.Approvals.Rules {
+		if r := &c.Approvals.Rules[i]; r.ID == "" {
+			r.ID = ruleID(i, *r)
+		}
 	}
 	if c.Model.Provider == "" && c.Model.ID == "" {
 		c.Model = DemoModel
@@ -279,6 +454,12 @@ func (c *Config) Validate() error {
 		if !approvalPattern.MatchString(t) {
 			return invalid("invalid_approval_tools", "%q isn't a tool name or pattern (letters, digits, _ . - and *).", t)
 		}
+	}
+	if c.Approvals.Profile != "" && !slices.Contains(Profiles, c.Approvals.Profile) {
+		return invalid("invalid_approval_profile", "Unknown approval profile %q: use careful, balanced, trusting or custom.", c.Approvals.Profile)
+	}
+	if err := c.Approvals.checkRules(); err != nil {
+		return err
 	}
 	if t := c.Approvals.TimeoutSeconds; t != 0 && (t < 60 || t > 30*24*60*60) {
 		return invalid("invalid_approval_timeout", "A request waits from 1 minute to 30 days.")

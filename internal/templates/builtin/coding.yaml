@@ -5,5 +5,5 @@ category: work
 icon: code
 kind: coding
 workspace: {tools: [read, write, edit, bash]}
-approvals: {tools: [bash]}
+approvals: {profile: balanced}
 web: {search: true, fetch: true}

@@ -70,7 +70,8 @@ describe('Settings → Models: fast judgments', () => {
     );
     expect(switchFor('Agent routing')?.disabled).toBe(false);
     expect(switchFor('Tool preselection')?.disabled).toBe(false);
-    for (const label of ['Inbox', 'Approvals', 'Memory', 'Knowledge', 'Triggers'])
+    expect(switchFor('Approvals')?.disabled).toBe(false);
+    for (const label of ['Inbox', 'Memory', 'Knowledge', 'Triggers'])
       expect(switchFor(label)?.disabled).toBe(true);
     expect(text()).toContain('Coming later.');
     expect((fieldByLabel('Model') as HTMLInputElement).value).toBe('jev-1.14.0');

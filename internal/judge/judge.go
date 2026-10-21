@@ -2,8 +2,9 @@
 // model (TypeSafe's Jev, or a self-hosted deployment of the same API). Off by default; every use has its own switch
 // and a fallback, so the app works the same without it. What is judged is sent to the configured service.
 //
-// Uses: agent routing (which agent should take a message) and tool preselection (which of an agent's deferred tools
-// a message needs). Model routing is deliberately not a use.
+// Uses: agent routing (which agent should take a message), tool preselection (which of an agent's deferred tools
+// a message needs) and approvals (whether a tool call the rules let run could cause harm). Model routing is
+// deliberately not a use.
 package judge
 
 import (
@@ -390,4 +391,35 @@ func (s *Service) PickTools(ctx context.Context, message string, tools []Tool, l
 		out = append(out, p.name)
 	}
 	return out, nil
+}
+
+// --- approvals ---------------------------------------------------------------------------------------------------
+
+// maxJudgedArgs bounds what is sent about a call: the runtime sends a redacted view of at most 16 KiB.
+const maxJudgedArgs = 16 << 10
+
+// RiskyCall says whether a tool call the approval rules would let run could cause harm or be hard to undo (the
+// `approvals` use): a noul at or above the confidence threshold. It only ever tightens, so every failure (off,
+// unreachable, no answer) is "not risky": the rules stand. The arguments are the runtime's redacted view.
+func (s *Service) RiskyCall(ctx context.Context, tool string, args json.RawMessage) (bool, error) {
+	if !s.On("approvals") {
+		return false, nil
+	}
+	if len(args) == 0 || !json.Valid(args) || len(args) > maxJudgedArgs {
+		args = json.RawMessage(`"[arguments not shown]"`)
+	}
+	answers, _, err := s.Ask(ctx, map[string]any{"tool": tool, "arguments": args}, map[string]Question{
+		"risky": {
+			Type:         "noul",
+			Instructions: "An AI agent is about to call the tool `tool` with `arguments`. Could this call cause harm or be hard to undo (deleting or overwriting data, sending something to other people, spending money, changing settings or access)?",
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	a, ok := answers["risky"]
+	if !ok || a.Noul == nil {
+		return false, nil
+	}
+	return *a.Noul >= s.Settings().Threshold, nil
 }

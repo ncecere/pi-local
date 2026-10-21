@@ -1,12 +1,19 @@
-import { Check, Clock, ShieldAlert, X } from 'lucide-react';
+import { Check, CheckCheck, Clock, ShieldAlert, X } from 'lucide-react';
 import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ApiError, type ChatApproval, errorMessage } from '~/api/client';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
-import { useDecideApproval } from '~/hooks/use-approvals';
+import { useAddApprovalRule, useDecideApproval } from '~/hooks/use-approvals';
 import { useNow } from '~/hooks/use-now';
-import { approvalOutcome, argumentsView, expiresIn } from '~/lib/approvals';
+import {
+  approvalOutcome,
+  argumentsView,
+  canAlwaysAllow,
+  describeRule,
+  expiresIn,
+  suggestRule,
+} from '~/lib/approvals';
 import { formatExact } from '~/lib/dates';
 import { cn } from '~/lib/utils';
 
@@ -139,6 +146,7 @@ export function ApprovalCard({
   args?: unknown;
 }) {
   const decide = useDecideApproval();
+  const addRule = useAddApprovalRule();
   const [denying, setDenying] = useState(false);
   const [reason, setReason] = useState('');
   const [decided, setDecided] = useState<null | 'approve' | 'deny'>(null);
@@ -155,7 +163,11 @@ export function ApprovalCard({
     if (denying) reasonRef.current?.focus();
   }, [denying]);
 
-  const send = (decision: 'approve' | 'deny') => {
+  // "Approve and always allow this": the rule it would add (none for what a built-in or ask rule asked, or a
+  // compound command: no allow rule could cover it).
+  const always = canAlwaysAllow(approval) ? suggestRule(tool, shown) : null;
+
+  const send = (decision: 'approve' | 'deny', alwaysAllowed?: string) => {
     if (decide.isPending) return;
     const card = cardRef.current;
     // A promise, not mutate's callbacks: the view often drops the request (and
@@ -172,13 +184,24 @@ export function ApprovalCard({
           setDecided(decision);
           toast(
             decision === 'approve'
-              ? `Approved: ${tool} will run.`
+              ? `Approved: ${tool} will run.${alwaysAllowed ? ` Always allowed: ${alwaysAllowed}.` : ''}`
               : `${approvalOutcome({ status: 'denied', reason: answer?.reason ?? reason })}. ${tool} won't run.`,
           );
           focusAfterDecision(card);
         },
         () => undefined, // said on the card (decide.error)
       );
+  };
+
+  // The rule first: if it can't be added, nothing is approved, and the person can still choose Approve.
+  const approveAlways = async () => {
+    if (!always || decide.isPending || addRule.isPending) return;
+    try {
+      await addRule.mutateAsync({ agentId, ...always });
+    } catch {
+      return; // said on the card (addRule.error)
+    }
+    send('approve', describeRule(always));
   };
 
   const cancelDeny = () => {
@@ -223,6 +246,14 @@ export function ApprovalCard({
 
       <ApprovalArguments tool={tool} args={shown} />
 
+      {addRule.error && !decide.error && (
+        <p role="alert" className="text-xs text-[var(--danger-on-tint)]">
+          {errorMessage(
+            addRule.error,
+            "The rule wasn't added, and nothing was approved. Try again.",
+          )}
+        </p>
+      )}
       {decide.error && (
         <p role="alert" className="text-xs text-[var(--danger-on-tint)]">
           {decidedElsewhere
@@ -272,7 +303,7 @@ export function ApprovalCard({
             size="sm"
             variant="primary"
             data-approval-approve=""
-            disabled={decide.isPending || decided !== null}
+            disabled={decide.isPending || addRule.isPending || decided !== null}
             onClick={() => send('approve')}
           >
             {decide.isPending && decide.variables?.decision === 'approve' ? (
@@ -282,12 +313,25 @@ export function ApprovalCard({
             )}
             Approve
           </Button>
+          {always && (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              data-approval-always=""
+              disabled={decide.isPending || addRule.isPending || decided !== null}
+              onClick={() => void approveAlways()}
+            >
+              {addRule.isPending ? <Spinner className="size-3.5 text-current" /> : <CheckCheck />}
+              Approve and always allow this
+            </Button>
+          )}
           <Button
             ref={denyRef}
             type="button"
             size="sm"
             variant="secondary"
-            disabled={decide.isPending || decided !== null}
+            disabled={decide.isPending || addRule.isPending || decided !== null}
             onClick={() => setDenying(true)}
           >
             <X />
@@ -305,6 +349,12 @@ export function ApprovalCard({
             </span>
           )}
         </div>
+      )}
+      {always && !denying && (
+        <p className="-mt-1 text-xs text-[var(--text-muted)]">
+          Always allow adds a rule: <span className="font-mono">{describeRule(always)}</span>. You
+          can remove it on the agent's Tools tab.
+        </p>
       )}
     </section>
   );

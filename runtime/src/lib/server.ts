@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type RequestListener, type Server, 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type Conversation, type ConversationDocToken, type ConversationId, type DocumentWatch, type Harness, type JsonObject, LiveDoc, type UserInput } from "@earendil-works/pi-durable";
 import { abortBackground, type LiveWork, liveWork, olderThan, reportBackground } from "./background.ts";
-import { type Approvals, type DecisionInput, waitingThreads } from "./approvals.ts";
+import { type Approvals, type DecisionInput, parseApprovalPolicy, waitingThreads } from "./approvals.ts";
 import type { ThreadStore } from "./threads.ts";
 import { DELTA_VERSION, DeltaStream } from "./delta.ts";
 import { EXPOSED_KIND } from "./define.ts";
@@ -333,6 +333,11 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			return json(response, 200, approvals.list(thread));
 		}
 		const id = parts[1];
+		// The platform's word that the agent's rules or profile changed: `{profile, tools, rules, builtin, timeoutSeconds}`.
+		if (method === "POST" && parts.length === 2 && id === "policy") {
+			approvals.setPolicy(parseApprovalPolicy(JSON.stringify(await readJson(request))));
+			return json(response, 200, { ok: true });
+		}
 		if (method === "POST" && parts.length === 2 && id !== undefined) {
 			touch();
 			if (!/^ap_[A-Za-z0-9_-]{1,64}$/.test(id)) return fail(response, 404, "approval_not_found", "Approval not found");

@@ -261,11 +261,17 @@ func (s *Supervisor) Status(id string) (Status, string) {
 	return st.status, st.lastError
 }
 
+// liveEnv are variables a running runtime takes new values of without restarting (the app tells it): a change in
+// them doesn't make the configuration stale. The next start still gets the current value in its environment.
+var liveEnv = map[string]bool{"TOOL_APPROVALS": true}
+
 // fingerprint hashes an agent's resolved environment (in memory only: it covers secrets).
 func fingerprint(env map[string]string) string {
 	keys := make([]string, 0, len(env))
 	for k := range env {
-		keys = append(keys, k)
+		if !liveEnv[k] {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	h := sha256.New()

@@ -21,6 +21,9 @@ func (a *API) toolRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/approvals", a.listApprovals)
 	m.HandleFunc("GET /api/agents/{agent}/approvals", a.withAgent(a.agentApprovals))
 	m.HandleFunc("POST /api/agents/{agent}/approvals/{approval}", a.withAgent(a.decideApproval))
+	m.HandleFunc("GET /api/agents/{agent}/approval-rules", a.withAgent(a.listApprovalRules))
+	m.HandleFunc("POST /api/agents/{agent}/approval-rules", a.withAgent(a.addApprovalRule))
+	m.HandleFunc("DELETE /api/agents/{agent}/approval-rules/{rule}", a.withAgent(a.removeApprovalRule))
 	m.HandleFunc("POST /api/agents/{agent}/attachments", a.withAgent(a.uploadAttachment))
 }
 
@@ -65,6 +68,92 @@ func (a *API) decideApproval(w http.ResponseWriter, r *http.Request, ag *agents.
 	default:
 		ok(w, got)
 	}
+}
+
+// approvalRulesJSON is an agent's approval settings as the Tools tab reads them.
+func approvalRulesJSON(c agents.Approvals) map[string]any {
+	return map[string]any{"profile": c.EffectiveProfile(), "rules": rulesJSON(c.Rules), "builtinRules": agents.BuiltinRules}
+}
+
+func (a *API) listApprovalRules(w http.ResponseWriter, r *http.Request, ag *agents.Agent) {
+	ok(w, approvalRulesJSON(ag.Config.Approvals))
+}
+
+// addApprovalRule appends a rule (an allow by default): "Approve and always allow this" on the approval card. A rule
+// that already exists is not added twice (200 with the existing one).
+func (a *API) addApprovalRule(w http.ResponseWriter, r *http.Request, ag *agents.Agent) {
+	var in struct {
+		Tool   string            `json:"tool"`
+		Args   map[string]string `json:"args"`
+		Action string            `json:"action"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	if in.Action == "" {
+		in.Action = agents.ActionAllow
+	}
+	rule := agents.ApprovalRule{Tool: in.Tool, Args: in.Args, Action: in.Action}
+	if len(rule.Args) == 0 {
+		rule.Args = nil
+	}
+	for _, have := range ag.Config.Approvals.Rules {
+		if have.SameAs(rule) {
+			ok(w, map[string]any{"rule": have, "rules": rulesJSON(ag.Config.Approvals.Rules)})
+			return
+		}
+	}
+	var existing *agents.ApprovalRule
+	updated, err := a.Agents.Update(r.Context(), ag.ID, func(c *agents.Config) {
+		existing = nil
+		for i := range c.Approvals.Rules {
+			if c.Approvals.Rules[i].SameAs(rule) {
+				existing = &c.Approvals.Rules[i]
+				return
+			}
+		}
+		rule.ID = agents.NewRuleID()
+		c.Approvals.Rules = append(c.Approvals.Rules, rule)
+	})
+	if err != nil {
+		agentFailure(w, err)
+		return
+	}
+	if existing != nil {
+		ok(w, map[string]any{"rule": existing, "rules": rulesJSON(updated.Config.Approvals.Rules)})
+		return
+	}
+	created(w, map[string]any{"rule": rule, "rules": rulesJSON(updated.Config.Approvals.Rules)})
+}
+
+func (a *API) removeApprovalRule(w http.ResponseWriter, r *http.Request, ag *agents.Agent) {
+	id := r.PathValue("rule")
+	if !slices.ContainsFunc(ag.Config.Approvals.Rules, func(rule agents.ApprovalRule) bool { return rule.ID == id }) {
+		fail(w, http.StatusNotFound, "rule_not_found", "That rule is not here.")
+		return
+	}
+	found := false
+	updated, err := a.Agents.Update(r.Context(), ag.ID, func(c *agents.Config) {
+		found = false
+		kept := c.Approvals.Rules[:0:0]
+		for _, rule := range c.Approvals.Rules {
+			if rule.ID == id {
+				found = true
+				continue
+			}
+			kept = append(kept, rule)
+		}
+		c.Approvals.Rules = kept
+	})
+	if err != nil {
+		agentFailure(w, err)
+		return
+	}
+	if !found {
+		fail(w, http.StatusNotFound, "rule_not_found", "That rule is not here.")
+		return
+	}
+	ok(w, map[string]any{"rules": rulesJSON(updated.Config.Approvals.Rules)})
 }
 
 const maxAttachmentBytes = 100 << 20

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import { ApiError, type Approval, agentPath, api } from '~/api/client';
+import { ApiError, type Approval, type ApprovalRule, agentPath, api } from '~/api/client';
 import { AGENTS_KEY } from '~/hooks/use-agents';
 import { applyApprovalEvent, approvalsByThread } from '~/lib/approvals';
 
@@ -66,5 +66,42 @@ export function useDecideApproval() {
       if (error instanceof ApiError && error.code === 'approval_decided')
         void queryClient.invalidateQueries({ queryKey: APPROVALS_KEY });
     },
+  });
+}
+
+/**
+ * "Approve and always allow this" (the rule) and the Tools tab's list (remove):
+ * `POST` and `DELETE /api/agents/{a}/approval-rules`. A change reaches the
+ * running agent without a restart; the agent's rules (`agent.approvals.rules`)
+ * are read again.
+ */
+export function useAddApprovalRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      agentId,
+      ...rule
+    }: {
+      agentId: string;
+      tool: string;
+      args?: Record<string, string>;
+      action?: ApprovalRule['action'];
+    }) =>
+      api.post<{ rule: ApprovalRule; rules: ApprovalRule[] }>(
+        agentPath(agentId, '/approval-rules'),
+        rule,
+      ),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: AGENTS_KEY, exact: true }),
+  });
+}
+
+export function useRemoveApprovalRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, ruleId }: { agentId: string; ruleId: string }) =>
+      api.delete<{ rules: ApprovalRule[] }>(
+        agentPath(agentId, `/approval-rules/${encodeURIComponent(ruleId)}`),
+      ),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: AGENTS_KEY, exact: true }),
   });
 }

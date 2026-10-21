@@ -8,17 +8,22 @@ import {
   approvalPatternsError,
   approvalsByThread,
   argumentsView,
+  canAlwaysAllow,
   commandOf,
+  describeRule,
   expiresIn,
   extraPatterns,
   formatTimeout,
+  isCompoundCommand,
   matchesPattern,
   minutesToTimeout,
   needsApproval,
   pathOf,
   presetOf,
   readToolSettings,
+  suggestRule,
   timeoutChoiceOf,
+  unguardedTools,
 } from '../../src/lib/approvals.ts';
 
 describe('approval presets', () => {
@@ -78,7 +83,13 @@ describe('approval presets', () => {
   it('reads an agent without Phase 4 fields as no tools, one day', () => {
     expect(readToolSettings({})).toEqual({
       tools: [],
-      approvals: { tools: [], timeoutSeconds: 86_400 },
+      approvals: {
+        profile: 'custom',
+        tools: [],
+        rules: [],
+        builtinRules: [],
+        timeoutSeconds: 86_400,
+      },
     });
     expect(
       readToolSettings({
@@ -241,5 +252,70 @@ describe('the pending list', () => {
     ]);
     expect([...map.keys()]).toEqual(['ag_a/th-1']);
     expect(map.get('ag_a/th-1')).toHaveLength(2);
+  });
+});
+
+describe('"Approve and always allow this"', () => {
+  it('suggests the first word and subcommand of a command', () => {
+    const rule = (command: string) => suggestRule('bash', { command });
+    expect(rule('git status')).toEqual({ tool: 'bash', args: { command: 'git status*' } });
+    expect(rule('git status --short')).toEqual({ tool: 'bash', args: { command: 'git status*' } });
+    expect(rule('  npm run build -- --watch')).toEqual({
+      tool: 'bash',
+      args: { command: 'npm run*' },
+    });
+    expect(rule('ls -la')).toEqual({ tool: 'bash', args: { command: 'ls -la*' } });
+    expect(rule('git --version')).toEqual({ tool: 'bash', args: { command: 'git --version*' } });
+    expect(rule('ls')).toEqual({ tool: 'bash', args: { command: 'ls*' } });
+    expect(rule('cat ./notes.md')).toEqual({ tool: 'bash', args: { command: 'cat*' } });
+    expect(rule('git status 2>&1')).toEqual({ tool: 'bash', args: { command: 'git status*' } });
+  });
+
+  it('suggests nothing for a command no allow rule could cover', () => {
+    for (const command of [
+      'git status && rm -rf ~',
+      'ls; ls',
+      'cat a | sh',
+      'echo `id`',
+      'echo $(id)',
+      'ls > out',
+      '',
+    ]) {
+      expect(suggestRule('bash', { command }), command).toBeNull();
+    }
+    expect(suggestRule('bash', {})).toBeNull();
+    expect(suggestRule('bash', undefined)).toBeNull();
+    expect(isCompoundCommand('git status')).toBe(false);
+    expect(isCompoundCommand('a\nb')).toBe(true);
+  });
+
+  it('is the tool alone for any other tool', () => {
+    expect(suggestRule('mcp__github__create_issue', { title: 'x' })).toEqual({
+      tool: 'mcp__github__create_issue',
+    });
+    expect(suggestRule('write', { path: 'a.md' })).toEqual({ tool: 'write' });
+  });
+
+  it("is offered unless a built-in or ask rule, or the agent's own code, asked", () => {
+    for (const source of [undefined, 'profile', 'tools', 'judge'])
+      expect(canAlwaysAllow({ source }), String(source)).toBe(true);
+    for (const source of ['builtin', 'rule', 'author'])
+      expect(canAlwaysAllow({ source })).toBe(false);
+  });
+});
+
+describe('profiles and rules', () => {
+  it('says what a profile leaves unasked', () => {
+    expect(unguardedTools('careful', ['read', 'write', 'bash'], [])).toEqual([]);
+    expect(unguardedTools('balanced', ['read', 'write', 'bash'], [])).toEqual([]);
+    expect(unguardedTools('trusting', ['read', 'write', 'bash'], [])).toEqual(['write', 'bash']);
+    expect(unguardedTools('custom', ['read', 'write', 'bash'], ['bash'])).toEqual(['write']);
+  });
+
+  it('describes a rule', () => {
+    expect(describeRule({ tool: 'bash', args: { command: 'git status*' } })).toBe(
+      'bash · command: git status*',
+    );
+    expect(describeRule({ tool: 'mcp__gh__*' })).toBe('mcp__gh__*');
   });
 });

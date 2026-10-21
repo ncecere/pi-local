@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { AgentDoc, type Conversation, createRegistry, type Extension, Harness, type HarnessSettings, type ModelRef, type Storage, type ToolRegistration } from "@earendil-works/pi-durable";
 import { Approvals, parseApprovalPolicy } from "./approvals.ts";
+import { redactArguments } from "./redact.ts";
 import { assistantAgent } from "./assistant.ts";
 import { PLATFORM_PERSON_WAIT_KINDS } from "./background.ts";
 import {
@@ -239,9 +240,8 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 
 	const registry = createRegistry();
 	for (const extension of extensions) registry.install(extension);
-	// Asks before the template's marked tools; selected last, so it sees the arguments other hooks settled on and a
-	// call another hook blocks is never put to a person. Selected when the template marks tools, or while a request it
-	// made is pending (a new version that marks nothing restarts the agent; a request already asked stays asked).
+	// Asks (or refuses) as the agent's approval rules and profile say; selected last, so it sees the arguments other
+	// hooks settled on and a call another hook blocks is never put to a person.
 	let asking: Extension[] = [];
 	// MCP servers: the template's, and those apps gave threads (installed before resuming, so resumed runs find their tools).
 	const mcp = new AgentMcp(config.modelEnv, (ext) => registry.install(ext));
@@ -286,7 +286,26 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const env = config.modelEnv;
 	const gateway = env.PLATFORM_GATEWAY_URL && env.PLATFORM_KEY ? gatewayCall(env.PLATFORM_GATEWAY_URL, env.PLATFORM_KEY) : undefined;
 	await approvals.bind(harness, threads, gateway);
-	if (approvals.policy.tools.length > 0 || approvals.pending().length > 0) {
+	// MCP tools' annotations (read-only, destructive) tell the approval rules what a tool does.
+	approvals.toolInfo = (name) => mcp.toolInfo(name);
+	// Fast judgments: a call the rules would let run may be judged risky by the platform (and then asks). Only ever
+	// tightens; without a platform, or when it fails or doesn't answer, the rules stand.
+	if (env.PLATFORM_GATEWAY_URL && env.PLATFORM_KEY) {
+		approvals.judge = async (call, signal) => {
+			const res = await fetch(`${env.PLATFORM_GATEWAY_URL!.replace(/\/$/, "")}/judge/approval`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${env.PLATFORM_KEY}`, "content-type": "application/json" },
+				body: JSON.stringify({ tool: call.name, arguments: redactArguments(call.arguments ?? {}) }),
+				signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(6_000)]) : AbortSignal.timeout(6_000),
+			});
+			if (!res.ok) return false;
+			return ((await res.json()) as { data?: { risky?: boolean } }).data?.risky === true;
+		};
+	}
+	// Selected when the policy asks or refuses anything (the platform always sends the built-in rules, so it does), or
+	// while a request it made is pending. A policy pushed later (POST /approvals/policy) only takes effect in an agent
+	// that has it selected.
+	if (approvals.active() || approvals.pending().length > 0) {
 		asking = [approvals.extension()];
 		registry.install(asking[0]!);
 	}

@@ -91,6 +91,8 @@ export type ChatApproval = {
 	requestedAt: number;
 	expiresAt?: number;
 	summary?: string;
+	/** What asked: "builtin" or "rule" (an approval rule), "profile", "tools", "judge" (fast judgments), "author". */
+	source?: string;
 	requestedFor?: Author;
 	decidedAt?: number;
 	decidedBy?: { kind: "user" | "service_account" | "system"; id?: string; name: string };

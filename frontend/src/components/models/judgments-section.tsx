@@ -30,7 +30,11 @@ const USE_TEXT: Record<string, { label: string; hint: string; ready?: true }> = 
     ready: true,
   },
   inbox: { label: 'Inbox', hint: 'Coming later.' },
-  approvals: { label: 'Approvals', hint: 'Coming later.' },
+  approvals: {
+    label: 'Approvals',
+    hint: 'Ask first when a call that would run could cause harm or be hard to undo. Only ever asks for more.',
+    ready: true,
+  },
   memory: { label: 'Memory', hint: 'Coming later.' },
   knowledge: { label: 'Knowledge', hint: 'Coming later.' },
   triggers: { label: 'Triggers', hint: 'Coming later.' },

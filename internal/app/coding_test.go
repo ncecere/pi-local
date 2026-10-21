@@ -65,15 +65,15 @@ func TestACodingAgentWorksInItsProjectFolderWithItsInstructions(t *testing.T) {
 	if !slices.Equal(created.Workspace.Tools, []string{"read", "write", "edit", "bash"}) || created.Workspace.Folder != project {
 		t.Fatalf("a coding agent's defaults: %+v", created.Workspace)
 	}
-	if ag, _ := h.app.Agents.Get(created.ID); !slices.Equal(ag.Config.Approvals.Tools, []string{"bash"}) {
-		t.Fatalf("a coding agent should ask before commands: %+v", ag.Config.Approvals)
+	if ag, _ := h.app.Agents.Get(created.ID); ag.Config.Approvals.Profile != "balanced" {
+		t.Fatalf("a coding agent should ask before commands (the balanced profile): %+v", ag.Config.Approvals)
 	}
 	// As the New agent dialog makes one: its tools and project folder given, nothing said about approvals.
 	viaDialog := decodeInto[struct{ ID string }](t, h.mustDo("POST", "/api/agents", map[string]any{
 		"name": "Coder 2", "templateId": "coding", "modelId": "script/s1",
 		"workspace": map[string]any{"tools": []string{"read", "write", "edit", "bash"}, "folder": project},
 	}, 201))
-	if ag, _ := h.app.Agents.Get(viaDialog.ID); !slices.Equal(ag.Config.Approvals.Tools, []string{"bash"}) {
+	if ag, _ := h.app.Agents.Get(viaDialog.ID); ag.Config.Approvals.Profile != "balanced" {
 		t.Fatalf("a coding agent made with its tools should still ask before commands: %+v", ag.Config.Approvals)
 	}
 

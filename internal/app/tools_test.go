@@ -20,6 +20,7 @@ type approvalJSON struct {
 	Arguments json.RawMessage `json:"arguments"`
 	Status    string          `json:"status"`
 	Reason    *string         `json:"reason"`
+	Summary   *string         `json:"summary"`
 }
 
 // toolsAgent is an agent on the scripted model with workspace tools; bash asks first.
