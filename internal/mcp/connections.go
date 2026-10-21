@@ -72,7 +72,7 @@ func googlePreset(id, name, icon, description, endpoint string) Preset {
 	}}
 }
 func applePreset(id, name, icon, description string) Preset {
-	return Preset{ID: "apple_" + id, Name: name, Icon: icon, Group: "computer", Description: description, Transport: "stdio", Command: "bundled runtime: apple-mcp " + id, Auth: "macos-permission", DocsURL: "https://support.apple.com/guide/mac-help/allow-apps-to-control-other-apps-mchl108e1718/mac", Automatic: runtime.GOOS == "darwin", Setup: []string{"macOS only. No download or account sign-in. The first tool call may open the app and ask for Automation permission in System Settings → Privacy & Security.", "Connecting lists tools only; it does not read personal data or verify app permissions. Event and reminder creation always asks for confirmation. Disconnect removes Pi Local access, not macOS permissions."}}
+	return Preset{ID: "apple_" + id, Name: name, Icon: icon, Group: "computer", Description: description, Transport: "stdio", Command: "bundled runtime: apple-mcp " + id, Auth: "macos-permission", DocsURL: "https://support.apple.com/guide/mac-help/allow-apps-to-control-other-apps-mchl108e1718/mac", Automatic: runtime.GOOS == "darwin", Setup: []string{"macOS only. No download or account sign-in. The first tool call may open the app and ask for Automation permission in System Settings → Privacy & Security.", "Connecting lists tools only; it does not read personal data or verify app permissions. Event and reminder creation is available only in the native desktop and always asks for confirmation. Disconnect removes Pi Local access, not macOS permissions."}}
 }
 
 type Connection struct {
@@ -85,10 +85,20 @@ type Connection struct {
 }
 
 func (c *Catalog) presets() []Preset {
+	list := ConnectionPresets()
 	if c.Presets != nil {
-		return c.Presets()
+		list = c.Presets()
 	}
-	return ConnectionPresets()
+	list = append([]Preset(nil), list...)
+	if !c.TrustedHumanConfirmations {
+		for i := range list {
+			if list[i].ID == "apple_calendar" || list[i].ID == "apple_reminders" {
+				list[i].Description = "Bounded read access only. Creation is unavailable in this host; use the native desktop for trusted human confirmation."
+				list[i].Setup = append([]string{"Event and reminder creation is unavailable in headless or unauthenticated hosts. Use the native desktop to confirm creations."}, list[i].Setup...)
+			}
+		}
+	}
+	return list
 }
 func (c *Catalog) preset(id string) (Preset, error) {
 	for _, p := range c.presets() {

@@ -2,6 +2,7 @@
 // JXA receives validated data as a separate argv JSON value; all source below is static.
 import { execFile } from "node:child_process";
 import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 
 export type AppleService = "calendar" | "reminders" | "notes";
 type Args = Record<string, unknown>;
@@ -11,7 +12,10 @@ const text = { type: "string", minLength: 1, maxLength: 200 };
 function tool(name: string, description: string, properties: Args, required: string[], write = false): Tool {
  return { name, description, annotations: { readOnlyHint: !write, destructiveHint: write }, inputSchema: { type: "object", properties, required, additionalProperties: false } };
 }
-export function appleTools(service: AppleService): Tool[] {
+export function appleTools(service: AppleService, trustedHumanConfirmations = false): Tool[] {
+ return allAppleTools(service).filter((t) => t.annotations.readOnlyHint || trustedHumanConfirmations);
+}
+function allAppleTools(service: AppleService): Tool[] {
  switch (service) {
   case "calendar": return [
    tool("calendar", "Read events starting in an explicit ISO date range (at most 31 days and 100 results). Does not expand recurring instances. macOS may ask for Automation access.", { start: text, end: text, calendar: text, ...fields }, ["start", "end"]),
@@ -29,8 +33,24 @@ function stringArg(a: Args, key: string): string {
  if (typeof v !== "string" || !v.trim() || v.length > 200 || /[\u0000-\u001f]/.test(v)) throw new Error(`${key} must be 1–200 characters on one line.`);
  return v;
 }
+// Date.parse alone silently normalizes impossible dates (e.g. February 30).
+// Validate the literal Gregorian components first; retain that exact representation for
+// both the confirmation and JXA, including its explicit offset.
+function isoTimestamp(value: string, key: string): number {
+ const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)(?::(\d\d)(?:\.(\d{1,3}))?)?(?:Z|([+-])(\d\d):(\d\d))$/.exec(value);
+ const invalid = () => new Error(`${key} needs a valid Gregorian ISO date, time and explicit timezone.`);
+ if (!m) throw invalid();
+ const [, y, mo, d, h, mi, s, , , oh, om] = m;
+ const year = Number(y), month = Number(mo), day = Number(d);
+ const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+ const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+ if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1]! || Number(h) > 23 || Number(mi) > 59 || Number(s ?? 0) > 59 || Number(oh ?? 0) > 23 || Number(om ?? 0) > 59) throw invalid();
+ const timestamp = Date.parse(value);
+ if (!Number.isFinite(timestamp)) throw invalid();
+ return timestamp;
+}
 export function validateAppleArgs(service: AppleService, name: string, value: unknown): Args {
- const t = appleTools(service).find((t) => t.name === name);
+ const t = allAppleTools(service).find((t) => t.name === name);
  if (!t || !value || typeof value !== "object" || Array.isArray(value)) throw new Error("Unknown tool or invalid arguments.");
  const schema = t.inputSchema as { properties: Args; required: string[] };
  const a = value as Args;
@@ -39,8 +59,9 @@ export function validateAppleArgs(service: AppleService, name: string, value: un
  for (const key of Object.keys(schema.properties)) if (key !== "limit" && a[key] !== undefined) stringArg(a, key);
  if (a.limit !== undefined && (!Number.isInteger(a.limit) || Number(a.limit) < 1 || Number(a.limit) > 100)) throw new Error("limit must be 1–100.");
  if (a.start !== undefined) {
-  for (const key of ["start", "end"]) if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d{1,3})?)?(?:Z|[+-]\d\d:\d\d)$/.test(String(a[key])) || !Number.isFinite(Date.parse(String(a[key])))) throw new Error(`${key} needs an ISO date and explicit timezone.`);
-  const span = Date.parse(String(a.end)) - Date.parse(String(a.start));
+  const start = isoTimestamp(String(a.start), "start");
+  const end = isoTimestamp(String(a.end), "end");
+  const span = end - start;
   if (span <= 0 || span > 31 * 86_400_000) throw new Error("Use a positive date range of at most 31 days.");
  }
  return { ...a, ...(schema.properties.limit ? { limit: a.limit ?? 20 } : {}) };
@@ -98,9 +119,11 @@ export async function callApple(
  service: AppleService, name: string, value: unknown,
  execute: (name: string, args: Args) => Promise<string>,
  confirm: (message: string) => Promise<boolean>,
+ trustedHumanConfirmations = false,
 ): Promise<string> {
  const args = validateAppleArgs(service, name, value);
  if (name.startsWith("create_")) {
+  if (!trustedHumanConfirmations) throw new Error("Creation is unavailable in this host. Use the native desktop for trusted human confirmation. Nothing was created.");
   const approved = await confirm(`Create this in ${service === "calendar" ? "Apple Calendar" : "Apple Reminders"}?\n${JSON.stringify(args, null, 2)}`);
   if (!approved) throw new Error("Nothing was created: confirmation was not given.");
  }
@@ -108,10 +131,16 @@ export async function callApple(
 }
 
 // Minimal newline JSON-RPC stdio server. Tool listing never starts an Apple application.
-export async function runAppleMcp(service: string | undefined): Promise<void> {
+export async function runAppleMcp(service: string | undefined, options: {
+ trustedHumanConfirmations?: boolean;
+ input?: Readable;
+ output?: Writable;
+ execute?: typeof executeApple;
+} = {}): Promise<void> {
  if (service !== "calendar" && service !== "reminders" && service !== "notes") throw new Error("Choose calendar, reminders or notes.");
  if (process.platform !== "darwin") throw new Error("Apple connections need macOS.");
- const send = (message: unknown) => process.stdout.write(`${JSON.stringify(message)}\n`);
+ const trusted = options.trustedHumanConfirmations === true;
+ const send = (message: unknown) => (options.output ?? process.stdout).write(`${JSON.stringify(message)}\n`);
  let elicitation = false, next = 0, active = 0;
  const waiting = new Map<string, (answer: Record<string, unknown>) => void>();
  const confirm = async (message: string): Promise<boolean> => {
@@ -127,7 +156,7 @@ export async function runAppleMcp(service: string | undefined): Promise<void> {
    send({ jsonrpc: "2.0", id, method: "elicitation/create", params: { mode: "form", message, requestedSchema: { type: "object", properties: { approve: { type: "boolean", title: "Create it", default: false } }, required: ["approve"] } } });
   });
  };
- const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+ const lines = createInterface({ input: options.input ?? process.stdin, crlfDelay: Infinity });
  lines.on("close", () => { for (const reply of waiting.values()) reply({}); });
  lines.on("line", (line) => {
   if (Buffer.byteLength(line) > 256 * 1024) return;
@@ -143,11 +172,11 @@ export async function runAppleMcp(service: string | undefined): Promise<void> {
     reply({ protocolVersion: msg.params?.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: `pi-local-apple-${service}`, version: "1" } }); break;
    }
    case "ping": reply({}); break;
-   case "tools/list": reply({ tools: appleTools(service) }); break;
+   case "tools/list": reply({ tools: appleTools(service, trusted) }); break;
    case "tools/call": {
     if (active >= 8) { reply({isError:true,content:[{type:"text",text:"Too many Apple calls; wait for the current calls."}]}); break; }
     active++;
-    void callApple(service, String(msg.params?.name), msg.params?.arguments ?? {}, executeApple, confirm)
+    void callApple(service, String(msg.params?.name), msg.params?.arguments ?? {}, options.execute ?? executeApple, confirm, trusted)
      .then((text) => reply({ content: [{ type: "text", text }] }))
      .catch((error: Error) => reply({ isError: true, content: [{ type: "text", text: error.message }] }))
      .finally(() => { active--; });

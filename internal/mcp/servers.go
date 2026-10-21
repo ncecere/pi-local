@@ -110,6 +110,8 @@ var ErrNotFound = &Error{Status: http.StatusNotFound, Code: "not_found", Message
 
 // Catalog keeps the servers.
 type Catalog struct {
+	// TrustedHumanConfirmations is set only by the native host, never persisted server input.
+	TrustedHumanConfirmations bool
 	// Presets optionally supplies an isolated catalog (tests); nil uses the shipped presets.
 	Presets func() []Preset
 	db      *sql.DB
@@ -776,6 +778,9 @@ type RuntimeServer struct {
 	Cwd         string            `json:"cwd,omitempty"`
 	Env         map[string]string `json:"env,omitempty"`
 	Tools       []RuntimeTool     `json:"tools"`
+
+	// Host-only capability: not accepted in persisted server/agent input.
+	TrustedHumanConfirmations bool `json:"trustedHumanConfirmations"`
 }
 
 // RuntimeOAuth is how an agent's runtime refreshes a server's tokens.
@@ -833,8 +838,19 @@ func (c *Catalog) runtimeServer(s *Server, ch Choice, workspace, agentDir string
 	for _, t := range ch.Tools {
 		want[t] = true
 	}
-	rs := RuntimeServer{Slug: s.Slug, Name: s.Name, Description: s.Description, Transport: s.Transport, Tools: []RuntimeTool{}}
+	rs := RuntimeServer{Slug: s.Slug, Name: s.Name, Description: s.Description, Transport: s.Transport, Tools: []RuntimeTool{}, TrustedHumanConfirmations: c.TrustedHumanConfirmations}
+	// A catalog tested by the desktop may later be opened headlessly: do not advertise stale writes.
+	bundledApple := false
+	for _, p := range c.presets() {
+		if strings.HasPrefix(p.ID, "apple_") && c.matches(p, s) {
+			bundledApple = true
+			break
+		}
+	}
 	for _, t := range s.Tools {
+		if bundledApple && !c.TrustedHumanConfirmations && strings.HasPrefix(t.Name, "create_") {
+			continue
+		}
 		if !t.ModelVisible || (ch.Tools != nil && !want[t.Name]) {
 			continue
 		}

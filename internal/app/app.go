@@ -74,6 +74,10 @@ type Config struct {
 	MemoryIdle time.Duration
 	// Secrets is where provider keys go (default: the OS keychain).
 	Secrets secrets.Store
+	// TrustedHumanConfirmations is a host capability, not an agent preference. Only the
+	// native desktop's private UI transport may enable bundled Apple creation tools.
+	// Headless/unauthenticated hosts must leave this false.
+	TrustedHumanConfirmations bool
 }
 
 // App is a running Pi Local.
@@ -318,6 +322,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Scratch:     filepath.Join(cfg.DataDir, "mcp-scratch"),
 		OpenBrowser: func(u string) error { return a.Reveal(u) },
 	}
+	a.MCP.TrustedHumanConfirmations = cfg.TrustedHumanConfirmations
 	a.MCP.SetProber(a.mcpProber)
 
 	a.Sup = supervisor.New(supervisor.Options{

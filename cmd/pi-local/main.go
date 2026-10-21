@@ -241,7 +241,7 @@ func setup(ctx context.Context, dataDir string) (*app.App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("writing the agent runtime: %w", err)
 	}
-	core, err := app.New(ctx, app.Config{DataDir: dataDir, Runtime: rt})
+	core, err := app.New(ctx, app.Config{DataDir: dataDir, Runtime: rt, TrustedHumanConfirmations: true})
 	if err != nil {
 		return nil, err
 	}

@@ -9,7 +9,8 @@ if (process.argv[2] === "version") {
 	console.log(JSON.stringify({ contractVersion: CONTRACT_VERSION, piDurableVersion: PI_DURABLE_VERSION }));
 } else if (process.argv[2] === "apple-mcp") {
 	const { runAppleMcp } = await import("./lib/apple-mcp.ts");
-	await runAppleMcp(process.argv[3]);
+	// Set by the app-resolved MCP transport, never by model tool arguments or CLI flags.
+	await runAppleMcp(process.argv[3], { trustedHumanConfirmations: process.env.PI_LOCAL_TRUSTED_HUMAN_CONFIRMATIONS === "1" });
 } else if (process.argv[2] === "mcp-probe") {
 	const { runMcpProbe } = await import("./lib/probe.ts");
 	await runMcpProbe();

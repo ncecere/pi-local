@@ -37,6 +37,8 @@ export type McpServerConfig = {
 	args?: string[];
 	cwd?: string;
 	env?: Record<string, string>;
+	/** App-resolved host capability; never a tool argument or saved server preference. Defaults off. */
+	trustedHumanConfirmations?: boolean;
 	/** A catalog server's tools; absent for an app's (client) server, whose tools are listed on connect. */
 	tools?: McpToolConfig[];
 	thread?: string;
@@ -224,7 +226,8 @@ export function createTransport(server: McpServerConfig, options: TransportOptio
 				command: server.command,
 				args: server.args ?? [],
 				cwd: server.cwd,
-				env: server.env ?? {},
+				// Override saved env (and inherited values): a headless host cannot enable Apple writes.
+				env: { ...server.env, PI_LOCAL_TRUSTED_HUMAN_CONFIRMATIONS: server.trustedHumanConfirmations === true ? "1" : "0" },
 				stderr: "pipe",
 				onStderr: options.onStderr,
 				maxStderrBytes: 64 * 1024,

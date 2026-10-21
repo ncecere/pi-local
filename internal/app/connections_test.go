@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -106,8 +107,11 @@ func TestAppleConnectListsToolsWithoutReadingApps(t *testing.T) {
 	}
 	h := start(t, t.TempDir(), Config{})
 	result := decodeInto[mcp.ConnectResult](t, h.mustDo("POST", "/api/connections/apple_calendar/connect", nil, 200))
-	if result.Connection.State != "connected" || len(result.Connection.Server.Tools) != 2 {
+	if result.Connection.State != "connected" || len(result.Connection.Server.Tools) != 1 {
 		t.Fatalf("Apple tools: %+v", result)
+	}
+	if !strings.Contains(result.Connection.Description, "Creation is unavailable") {
+		t.Fatal("headless UI must explain that creation is unavailable")
 	}
 	// Startup and tools/list run no Apple script, so this test never reads real events or triggers permissions.
 	list := string(h.mustDo("GET", "/api/templates", nil, 200))
@@ -130,6 +134,43 @@ func TestAppleConnectListsToolsWithoutReadingApps(t *testing.T) {
 			t.Fatalf("tool listing: %+v", c)
 		}
 		h.mustDo("DELETE", "/api/connections/"+id, nil, 200)
+	}
+}
+
+func TestAppleHostCapabilityIsNotAnAgentOrServerPreference(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS stdio tool listing only")
+	}
+	for _, trusted := range []bool{false, true} {
+		name := "headless"
+		if trusted {
+			name = "native-desktop"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := start(t, t.TempDir(), Config{TrustedHumanConfirmations: trusted})
+			result := decodeInto[mcp.ConnectResult](t, h.mustDo("POST", "/api/connections/apple_calendar/connect", nil, 200))
+			wantTools := 1
+			if trusted {
+				wantTools = 2
+			}
+			if len(result.Connection.Server.Tools) != wantTools {
+				t.Fatalf("host tool list: %+v", result.Connection.Server.Tools)
+			}
+			// Saved environment cannot grant the host capability; transport overrides this value.
+			h.mustDo("PATCH", "/api/mcp/servers/apple_calendar", map[string]any{"env": map[string]string{"PI_LOCAL_TRUSTED_HUMAN_CONFIRMATIONS": "1"}}, 200)
+			agent := h.createAgent("Synthetic")
+			ag, _ := h.app.Agents.Get(agent)
+			resolved, _, err := h.app.MCP.ForAgent(context.Background(), []mcp.Choice{{Server: "apple_calendar"}}, ag.WorkspaceDir(), ag.Dir)
+			if err != nil || len(resolved) != 1 || resolved[0].TrustedHumanConfirmations != trusted || len(resolved[0].Tools) != wantTools {
+				t.Fatalf("resolved capability: %+v, %v", resolved, err)
+			}
+			// Reopening a desktop-tested catalog in a headless host must not expose stale creation tools.
+			h.app.MCP.TrustedHumanConfirmations = false
+			resolved, _, err = h.app.MCP.ForAgent(context.Background(), []mcp.Choice{{Server: "apple_calendar"}}, ag.WorkspaceDir(), ag.Dir)
+			if err != nil || len(resolved) != 1 || resolved[0].TrustedHumanConfirmations || len(resolved[0].Tools) != 1 {
+				t.Fatalf("headless stale catalog: %+v, %v", resolved, err)
+			}
+		})
 	}
 }
 

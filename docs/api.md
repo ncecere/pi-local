@@ -679,14 +679,20 @@ No agent gains access just because a connection was created. Connections appear 
   test or tools/list. The first tool call may open the app and require Automation permission. Elsewhere the gallery
   says Coming to Windows and Linux.
 
-Apple tools: `calendar({start,end,calendar?,limit?})` (ISO timestamps with timezone, positive range ≤31 days),
+Apple tools: `calendar({start,end,calendar?,limit?})` (Gregorian-validated ISO timestamps with timezone, positive range ≤31 days),
 `create_event({calendar,title,start,end})` (no invitations), `list_reminders({list?,limit?})`,
 `create_reminder({list,title})`, `search_notes({query,limit?})` (title matching, plain-text excerpts ≤2,000 chars).
 Reads default to 20 results (max 100), inspect at most 20 calendars/lists, and are not an exhaustive search or
 availability check. Recurring instances are not expanded. Calls time out at 20 seconds with bounded output.
-User input is validated and passed as JSON argv, never interpolated into script source or a shell. Every creation
-requires **server-side MCP elicitation**, even under trusting/custom allow rules, and fails closed without client
-support, explicit acceptance and `approve:true`. A timeout can have an uncertain creation outcome: inspect the app
+User input is validated and passed as JSON argv, never interpolated into script source or a shell. The exact
+validated timestamp representation is used in both confirmation and execution; impossible dates are rejected.
+Creation tools are available only when the host enables `app.Config.TrustedHumanConfirmations` (default false),
+wired only by the native desktop entry point. Headless hosts offer reads only and refuse creation, even if the
+client advertises elicitation support. Saved server env and model arguments cannot enable this capability.
+The desktop still requires **server-side MCP elicitation** for every creation, even under trusting/custom allow
+rules, and fails closed without client support, explicit acceptance and `approve:true`.
+This does not authenticate the general headless management API or restrict a separately enabled arbitrary shell.
+A timeout can have an uncertain creation outcome: inspect the app
 before retrying. No edit/delete/send tools are exposed.
 
 The **Meeting helper** template appears only when the enabled, tested `apple_calendar` connection offers its
@@ -695,9 +701,9 @@ It uses the careful profile, does not send invitations and explains bounded/recu
 **Inbox helper is deferred**: this curated set has no safely configured automatic mail capability. The calendar
 tool is supplied by the Apple connection, not a synthetic calendar backed by unconnected cloud accounts.
 
-Apple tests use synthetic objects/scripts; `PI_LOCAL_TEST_APPLE=1` opts into a live, metadata-only macOS smoke test
-(application running flags, no personal records). It is off by default. Calendar recurrence expansion and a full
-permission-granted read/write round-trip remain unverified; no live personal-data tests run automatically.
+Apple tests use synthetic objects, in-memory MCP wires and mocked JXA subprocesses only; they never start
+Apple apps or access personal records. Calendar recurrence expansion and a full permission-granted read/write
+round-trip remain unverified.
 
 ## MCP servers (Phase 5)
 
