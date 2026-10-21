@@ -40,6 +40,7 @@ import (
 	"github.com/ncecere/pi-local/internal/secrets"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
+	"github.com/ncecere/pi-local/internal/templates"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/update"
 	"github.com/ncecere/pi-local/internal/usage"
@@ -77,6 +78,8 @@ type App struct {
 	Schedules *schedules.Store
 	Search    *search.Store
 	Updater   *update.Updater
+	// Templates are the New agent gallery's starting points, built-in and the person's.
+	Templates *templates.Store
 	// Web is web search and page reading for agents.
 	Web *web.Service
 	// Elicitations are MCP servers' questions to the person, while a tool call waits (memory only).
@@ -194,6 +197,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	a.MCP.OnChange = a.mcpChanged
 	a.MCP.OnLogin = func(st mcp.LoginStatus) { a.Hub.Publish("mcp-login", st) }
 	a.Web = web.New(db, cfg.Secrets)
+	if a.Templates, err = templates.New(filepath.Join(cfg.DataDir, "templates")); err != nil {
+		return nil, fmt.Errorf("templates: %w", err)
+	}
 	a.Elicitations = elicitations.New(0)
 	a.Elicitations.OnChange = func(e elicitations.Elicitation) { a.Hub.Publish("elicitation", e) }
 	a.Elicitations.AgentName = func(id string) string {
@@ -277,7 +283,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})

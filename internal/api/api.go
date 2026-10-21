@@ -30,6 +30,7 @@ import (
 	"github.com/ncecere/pi-local/internal/search"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
+	"github.com/ncecere/pi-local/internal/templates"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/update"
 	"github.com/ncecere/pi-local/internal/usage"
@@ -61,8 +62,9 @@ type API struct {
 	Schedules *schedules.Store
 	Search    *search.Store
 	// Desktop is the desktop app's own settings (nil in the headless server).
-	Desktop Desktop
-	Updater *update.Updater
+	Desktop   Desktop
+	Updater   *update.Updater
+	Templates *templates.Store
 	// Web: the search service's settings (and a test search).
 	Web *web.Service
 	// Elicitations: MCP servers' questions to the person.
@@ -126,6 +128,7 @@ func (a *API) Handler() http.Handler {
 	a.manageRoutes(m)
 	a.toolRoutes(m)
 	a.mcpRoutes(m)
+	a.templateRoutes(m)
 	a.alwaysRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
@@ -445,7 +448,7 @@ func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, map[string]any{
-		"templates":        agents.Kinds,
+		"templates":        a.templateList(),
 		"models":           choices,
 		"defaultModelId":   a.Catalog.DefaultModel(r.Context()),
 		"allowModelChoice": true,
@@ -538,6 +541,19 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var cfg agents.Config
+	// A template (the gallery's, or the person's own) sets everything first; the request's fields win. An ID that is
+	// only a kind (an older client, or a retired kind) is still a kind.
+	var tmpl *templates.Template
+	if in.TemplateID != nil && a.Templates != nil {
+		if t, err := a.Templates.Get(*in.TemplateID); err == nil {
+			tmpl = t
+			t.Apply(&cfg)
+			in.TemplateID = nil
+			if in.Instructions != nil && strings.TrimSpace(*in.Instructions) == "" {
+				in.Instructions = nil // an empty field in the dialog keeps the template's instructions
+			}
+		}
+	}
 	if in.ModelID == nil || *in.ModelID == "" {
 		def := a.Catalog.DefaultModel(r.Context())
 		in.ModelID = &def
@@ -547,14 +563,33 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agents.KindDefaults(cfg.Kind, &cfg)
-	// New agents can search and read the web unless the request says otherwise (read-only tools).
-	if in.Web == nil {
+	// New agents can search and read the web unless the request or the template says otherwise (read-only tools).
+	if in.Web == nil && (tmpl == nil || tmpl.Web == nil) {
 		cfg.Web = agents.WebTools{Search: true, Fetch: true}
 	}
 	ag, err := a.Agents.Create(r.Context(), cfg)
 	if err != nil {
 		agentFailure(w, err)
 		return
+	}
+	// The template's first schedule, in this computer's time zone (editable after).
+	if tmpl != nil && tmpl.Schedule != nil && a.Schedules != nil {
+		sc := tmpl.Schedule
+		tz, mode := templates.LocalTimezone(), sc.ThreadMode
+		if mode == "" {
+			mode = "new"
+		}
+		in := schedules.Input{Name: &sc.Name, Cron: &sc.Cron, Timezone: &tz, Message: &sc.Message, ThreadMode: &mode}
+		if mode == "this" {
+			// One conversation for every run: named now, made by the first run.
+			b := make([]byte, 8)
+			rand.Read(b)
+			thread := tmpl.ID + "-" + hex.EncodeToString(b)
+			in.ThreadID = &thread
+		}
+		if _, err := a.Schedules.Create(r.Context(), ag.ID, "user", "", in); err != nil {
+			slog.Warn("making a template's schedule", "agent", ag.ID, "template", tmpl.ID, "err", err)
+		}
 	}
 	created(w, a.AgentJSON(ag))
 }

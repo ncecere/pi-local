@@ -1,0 +1,9 @@
+id: coding
+name: Coding
+description: "Works in a project folder like the pi coding agent: reads, edits and writes files and runs commands (asking first)."
+category: work
+icon: code
+kind: coding
+workspace: {tools: [read, write, edit, bash]}
+approvals: {tools: [bash]}
+web: {search: true, fetch: true}

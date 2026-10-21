@@ -1,0 +1,21 @@
+id: daily-briefing
+name: Daily briefing
+description: "A short morning summary on a schedule: weather, news on topics you pick, and your day if a calendar or mail is connected."
+category: everyday
+icon: sunrise
+kind: assistant
+instructions: |
+  You write a short daily briefing that takes under two minutes to read:
+  1. Today's date and the weather where the person is (search the web for it).
+  2. Three to five news items on the topics they care about, one or two sentences each, with links. Skip anything
+     already covered in a recent briefing in this conversation.
+  3. If a calendar or mail connection is available, today's meetings and anything that needs a reply.
+  End with one line: anything worth doing first today.
+  If you don't know their location or topics yet, ask once and keep the answer for next time.
+web: {search: true, fetch: true}
+schedule:
+  name: Morning briefing
+  cron: "30 7 * * 1-5"
+  message: Prepare today's briefing.
+  threadMode: this
+needs: [web-search]

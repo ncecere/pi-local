@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestTheNewAgentChoicesAreAssistantResearcherAndCoding(t *testing.T) {
+func TestTheNewAgentChoicesAreTheTemplates(t *testing.T) {
 	h := start(t, t.TempDir(), Config{})
 	defer h.close()
 	cat := decodeInto[struct {
@@ -18,7 +18,7 @@ func TestTheNewAgentChoicesAreAssistantResearcherAndCoding(t *testing.T) {
 	for _, k := range cat.Templates {
 		ids = append(ids, k.ID)
 	}
-	if strings.Join(ids, ",") != "assistant,researcher,coding" {
+	if strings.Join(ids, ",") != "assistant,researcher,writer,daily-briefing,translator,planner,coding" {
 		t.Fatalf("choices: %v", ids)
 	}
 	// Triage is retired, not removed: an agent made with it still saves and runs.
