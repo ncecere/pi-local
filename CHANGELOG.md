@@ -21,6 +21,8 @@ Works out of the box, every day.
 - **Answer from the notification:** approve or deny a tool, or answer a yes/no question, from the macOS notification.
 - **Fast judgments (optional):** a TypeSafe System One model picks the right agent when you don't ("Auto"), and
   loads the right tools for agents with large MCP servers. Off unless you set it up; self-hosted works.
+- **Security:** `bash` commands no longer inherit the agent runtime's environment. Before, a command could read the
+  agent's model key and the app's per-agent gateway key; now it gets only a minimal environment (PATH, HOME, locale).
 - Many fixes: agents that asked another agent show as themselves; steps read "Declined" and "Denied"; dates follow
   your locale; edited and branched conversations are named apart and keep their model; schedules can move to another
   agent; clearer copy in many places.

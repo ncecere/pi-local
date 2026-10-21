@@ -138,6 +138,10 @@ export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 			return (base as unknown as Record<string, (...a: unknown[]) => unknown>)[method]!.apply(base, args);
 		};
 	}
+	// pi's bash asks to inherit the process's environment, which is the runtime's: its model key, its gateway key, its
+	// MCP servers' secrets. A command gets only the filtered environment (SHELL_ENV_KEEP, TMPDIR) and what the call adds.
+	guarded.exec = (command: string, opts: Record<string, unknown> | undefined, context: Context) =>
+		base.exec(command, { ...(opts ?? {}), inheritEnv: false, env: { ...(shellEnv as Record<string, string>), ...((opts?.env as Record<string, string> | undefined) ?? {}) } } as never, context);
 	guarded.watch = async (targets: readonly { path: string }[], onChange: unknown, context: Context) => {
 		for (const target of targets) {
 			const problem = await check(target.path);
