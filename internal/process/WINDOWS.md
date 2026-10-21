@@ -89,6 +89,67 @@ failure cleanup, and large final supervisor/MCP stdout with slow callbacks.
 The original Unix PID-pinning and zero-loss probe regressions remain enabled.
 No native execution claim may be inferred from `go test -exec true`.
 
+## Handle-count investigation and enclosing-job regression
+
+Native CI run 39688559328 reached the normal Windows suite and reported only
+`TestWindowsHandleCleanup` failing (125 -> 137 handles); Windows race/vet did
+not run after that normal-suite failure. This is not a proven per-launch leak:
+the old baseline launched null stdio without copiers, while its measured loop
+used stdout/stderr `io.Discard` copiers and Windows pipe/IOCP machinery. The
+12-handle difference alone cannot distinguish runtime initialization from lost
+launch resources. No production cleanup change is justified by that trace.
+
+The source ownership audit found these explicit release paths:
+
+| Resource | Successful launch | Refused/failed launch |
+| --- | --- | --- |
+| Attribute-list allocation | Delete on Start return | Same defer |
+| Three inheritable stdio duplicates | Close on Start return | Close every duplicate obtained before the failure |
+| Primary thread | Close after ResumeThread | Terminate/reap suspended leader, close thread |
+| Process handle | Retained until idempotent Tree.Close, after wait/I/O cleanup | Terminate/reap then close |
+| Unnamed job | Retained until Tree.Close; kernel kill-on-last-close on app death | Terminate and close |
+| Owned null/pipe child endpoints | Close immediately after duplication/start | prepare/start cleanup closes all obtained endpoints |
+| Internal parent pipe endpoints | Bounded finish closes all after copier completion/timeout | Close all; no copiers started |
+| External InputPipe/OutputPipe | Remain caller-owned | Remain caller-owned |
+
+The replacement count regression uses **30 success/failure pairs of identical
+warmup paths**, including the same stdout/stderr copier preparation and diagnostic
+sampler as the measured paths. It then records three batches of ten successful
+launches, three of ten suspended failures, and three of ten mixed pairs. Every
+success checks Wait/Close errors and every owned pipe File's closed sentinel;
+every failure must reach the injected suspended gate and produce no marker.
+
+The original **+8 total handle budget is unchanged**, applied both per phase and
+across ALL post-warmup phases, not renewed per batch/launch. This bounded allowance
+covers one late Go M plus one IOCP initialization and small sampling jitter: Go
+1.26.7 `runtime/os_windows.go` minit/semacreate can retain one thread handle, two
+events, two timers and one wait-completion packet per M. Warmup is intended to
+exercise these paths, not assert that this explains the observed CI delta.
+Process/Job/File type counts, when available, additionally allow **zero growth**.
+A live negative control deliberately retains thirty non-inheritable event handles
+and requires the same counter/detector to reject their per-launch slope; every
+control handle is explicitly closed. These tests disable automatic GC for their
+bounded measurement and restore its setting afterward; no forced GC/finalizer
+repair is used. A GC-count change during measurement fails the ownership gate.
+
+Diagnostics log total handles, Go thread-creation count, goroutines, automatic GC
+count, and object-type counts. Bounded NT queries inspect only this test process;
+object names, filesystem paths, kernel addresses and other processes are never
+queried/logged. If runner policy denies type introspection, it is logged explicitly
+and the mandatory total-count gate still runs. The new measurements have not yet
+executed on Windows: a persistent slope or runtime growth beyond the unchanged
+budget remains a failure with phase diagnostics, not an assumed test artifact.
+
+`TestWindowsRestrictiveEnclosingJobFailsBeforeExecution` installs an active-process
+limit of one in a separate synthetic helper's own kill-on-close job. It verifies
+exact membership and installed limits, then requires the target's atomic
+CreateProcessW to fail with access-denied/quota status before the resume callback
+or marker. A control launch must work before installing the constraint. The test
+parent is never assigned to this restrictive job. Unsupported enclosing runner
+policy is a structured **failure**, never a skipped or generically accepted error.
+The helper reports then exits without closing its own last job handle prematurely;
+the kernel closes it at helper death. This fixture too requires native CI execution.
+
 ## Sources inspected
 
 - Go 1.26.7 `src/syscall/exec_windows.go`: SysProcAttr has no job-list attribute;
@@ -104,3 +165,5 @@ No native execution claim may be inferred from `go test -exec true`.
 - [IsProcessInJob](https://learn.microsoft.com/windows/win32/api/jobapi/nf-jobapi-isprocessinjob): exact supplied-job membership query.
 - [GetFileType](https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-getfiletype): reviewed file kinds and UNKNOWN/GetLastError ambiguity. x/sys's `windows/zsyscall_windows.go` captures type/error in the same call; UNKNOWN with zero last error maps to EINVAL in this version, also rejected.
 - [DuplicateHandle](https://learn.microsoft.com/windows/win32/api/handleapi/nf-handleapi-duplicatehandle): converts pseudo process/thread handles into real handles; invalid stdio must never reach it.
+- [AssignProcessToJobObject](https://learn.microsoft.com/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject) and [basic job limits](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information): active-process limit admission failure and nested-job constraints.
+- Test-only handle snapshot layout: [PHNT ntpsapi.h](https://github.com/winsiderss/phnt/blob/master/ntpsapi.h), `PROCESS_HANDLE_TABLE_ENTRY_INFO` / `PROCESS_HANDLE_SNAPSHOT_INFORMATION`. Failure/incomplete classification degrades diagnostics only, never disables the total-count gate.

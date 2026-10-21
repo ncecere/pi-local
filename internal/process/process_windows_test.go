@@ -704,39 +704,3 @@ func nativeHandleCount(t *testing.T) uint32 {
 	}
 	return n
 }
-func TestWindowsHandleCleanup(t *testing.T) {
-	dir := t.TempDir()
-	// Warm up Go's process/pipe machinery before taking the handle baseline.
-	tr, err := Start(context.Background(), windowsHelperCommand(dir, "null"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = waitNativeTree(t, tr)
-	_ = tr.Close()
-	before := nativeHandleCount(t)
-	for i := 0; i < 30; i++ {
-		cmd := windowsHelperCommand(dir, "null")
-		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-		tr, err := Start(context.Background(), cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := waitNativeTree(t, tr); err != nil {
-			t.Fatal(err)
-		}
-		if err := tr.Close(); err != nil {
-			t.Fatal(err)
-		}
-		_, err = startWindows(context.Background(), windowsHelperCommand(dir, "never"), windowsLaunchHooks{beforeResume: func(windows.ProcessInformation, windows.Handle) error { return errors.New("injected") }})
-		if err == nil {
-			t.Fatal("injection accepted")
-		}
-	}
-	after := nativeHandleCount(t)
-	if after > before+8 {
-		t.Fatalf("native handle leak: before=%d after=%d", before, after)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "never.started")); !os.IsNotExist(err) {
-		t.Fatal("failure helper ran")
-	}
-}
