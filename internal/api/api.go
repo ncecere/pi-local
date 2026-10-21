@@ -77,6 +77,8 @@ type API struct {
 	MemoryDefaults func() memory.Basics
 	// Web: the search service's settings (and a test search).
 	Web *web.Service
+	// SecretsInKeychain: keys and secret values go to the system keychain (false: kept in memory, a dev server).
+	SecretsInKeychain bool
 	// Elicitations: MCP servers' questions to the person.
 	Elicitations *elicitations.Store
 	// SaveDialog asks where to save a file (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
@@ -278,7 +280,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{
 		"user":      map[string]string{"id": "local", "name": localName(), "email": "", "role": "admin"},
 		"csrfToken": "",
-		"features":  map[string]bool{"agentRouting": a.Judge != nil && a.Judge.On("agentRouting"), "modelPerConversation": a.Catalog.PerConversation(), "messageSearch": a.Search != nil, "folderDialog": a.FolderDialog != nil, "updates": a.Updater != nil && a.Updater.Status().CanInstall},
+		"features":  map[string]bool{"agentRouting": a.Judge != nil && a.Judge.On("agentRouting"), "modelPerConversation": a.Catalog.PerConversation(), "secretsInKeychain": a.SecretsInKeychain, "messageSearch": a.Search != nil, "folderDialog": a.FolderDialog != nil, "updates": a.Updater != nil && a.Updater.Status().CanInstall},
 		"platform":  map[string]any{"mode": "local", "account": nil},
 	})
 }
@@ -830,6 +832,18 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	w.Write(answer)
 }
 
+// forkTitle is a fork's title: its source's, marked (a mark already there is replaced, not repeated).
+func forkTitle(title, how string) string {
+	base := strings.TrimSpace(title)
+	for _, mark := range []string{" (edited)", " (branch)"} {
+		base = strings.TrimSuffix(base, mark)
+	}
+	if base == "" {
+		base = "Conversation"
+	}
+	return base + " (" + how + ")"
+}
+
 const maxAttachments = 20
 
 // safeWorkspacePath: a path relative to the workspace that stays in it (the runtime checks again, following links).
@@ -934,6 +948,14 @@ func (a *API) forkThread(w http.ResponseWriter, r *http.Request, ag *agents.Agen
 	if err := a.Threads.Adopt(r.Context(), ag.ID, newID, source.Title); err != nil {
 		fail(w, http.StatusInternalServerError, "internal", "could not record the new conversation")
 		return
+	}
+	// Told apart from the conversation it came from in the list: "… (edited)" or "… (branch)".
+	how := "branch"
+	if in.BeforeMessageID != "" {
+		how = "edited"
+	}
+	if _, err := a.Threads.Rename(r.Context(), ag.ID, newID, forkTitle(source.Title, how)); err != nil {
+		slog.Warn("naming a new conversation", "agent", ag.ID, "err", err)
 	}
 	th, _ := a.Threads.Get(r.Context(), ag.ID, newID)
 	created(w, th)

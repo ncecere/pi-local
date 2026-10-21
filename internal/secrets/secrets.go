@@ -86,3 +86,12 @@ func (s *Memory) Names() []string {
 	}
 	return out
 }
+
+// InKeychain reports whether a store keeps secrets in the system keychain (not in memory, as a dev server does).
+func InKeychain(s Store) bool {
+	_, ok := s.(Keychain)
+	if !ok {
+		_, ok = s.(*Keychain)
+	}
+	return ok
+}

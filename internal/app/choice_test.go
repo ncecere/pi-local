@@ -18,6 +18,9 @@ func TestAConversationRunsOnTheModelThePersonChose(t *testing.T) {
 	agent := h.agentOn("Helper", "two/quick", nil)
 
 	me := string(h.mustDo("GET", "/api/me", nil, 200))
+	if !strings.Contains(me, `"secretsInKeychain":false`) {
+		t.Fatalf("tests keep secrets in memory: %s", me)
+	}
 	if !strings.Contains(me, `"modelPerConversation":true`) {
 		t.Fatalf("on by default: %s", me)
 	}

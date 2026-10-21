@@ -83,6 +83,9 @@ type Input struct {
 	ThreadID     *string `json:"threadId"`
 	MissedPolicy *string `json:"missedPolicy"`
 	Paused       *bool   `json:"paused"`
+	// AgentID moves a schedule to another agent (Update, from the app only): its runs then start new conversations
+	// there, since the old agent's conversation isn't the new one's.
+	AgentID *string `json:"agentId"`
 }
 
 // Error is a refusal for people (or an agent's model).
@@ -507,6 +510,17 @@ func (s *Store) Update(ctx context.Context, id string, in Input) (*Schedule, err
 		t := time.UnixMilli(*cur.At)
 		d.at = &t
 	}
+	agentID := cur.AgentID
+	if in.AgentID != nil && *in.AgentID != cur.AgentID {
+		if !s.agents.Exists(*in.AgentID) {
+			return nil, bad("invalid_agent", "Choose an agent that exists.")
+		}
+		agentID = *in.AgentID
+		d.threadMode, d.threadID = "new", ""
+		if in.ThreadMode != nil && *in.ThreadMode == "this" {
+			in.ThreadMode, in.ThreadID = nil, nil
+		}
+	}
 	if err := s.apply(&d, in); err != nil {
 		return nil, err
 	}
@@ -535,9 +549,9 @@ func (s *Store) Update(ctx context.Context, id string, in Input) (*Schedule, err
 	if in.Paused != nil && !*in.Paused {
 		failures = "0" // resumed by a person: start counting again
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE schedules SET name = ?, once = ?, at = ?, cron = ?, timezone = ?, message = ?, thread_mode = ?, thread_id = ?, missed_policy = ?,
+	_, err = s.db.ExecContext(ctx, `UPDATE schedules SET agent_id = ?, name = ?, once = ?, at = ?, cron = ?, timezone = ?, message = ?, thread_mode = ?, thread_id = ?, missed_policy = ?,
 		paused = ?, paused_reason = ?, next_fire_at = ?, failures = `+failures+`, updated_at = ? WHERE id = ?`,
-		d.name, boolInt(d.at != nil), at, nullable(d.cronExpr), d.tz, d.message, d.threadMode, nullable(d.threadID), d.missed,
+		agentID, d.name, boolInt(d.at != nil), at, nullable(d.cronExpr), d.tz, d.message, d.threadMode, nullable(d.threadID), d.missed,
 		boolInt(d.paused), reason, nextMs, s.now().UnixMilli(), id)
 	if err != nil {
 		return nil, err

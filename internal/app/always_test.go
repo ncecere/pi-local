@@ -171,7 +171,7 @@ func TestEditingAMessageMakesANewConversation(t *testing.T) {
 		ThreadID string `json:"threadId"`
 		Title    string `json:"title"`
 	}](t, h.mustDo("POST", "/api/agents/"+agent+"/threads/t1/fork", map[string]string{"beforeMessageId": second}, 201))
-	if forked.ThreadID == "" || forked.ThreadID == "t1" || forked.Title != "first question" {
+	if forked.ThreadID == "" || forked.ThreadID == "t1" || forked.Title != "first question (edited)" {
 		t.Fatalf("fork: %+v (%s)", forked, raw)
 	}
 	if got := h.view(agent, forked.ThreadID); len(got.Messages) != 2 {
@@ -181,7 +181,50 @@ func TestEditingAMessageMakesANewConversation(t *testing.T) {
 	if edited.Messages[2].Text != "second question, better" || len(h.threads(agent)) != 2 {
 		t.Fatalf("the edited conversation: %+v", edited.Messages)
 	}
+	// A branch from the copy is marked once, not "(edited) (branch)".
+	branch := decodeInto[struct{ Title string }](t, h.mustDo("POST", "/api/agents/"+agent+"/threads/"+forked.ThreadID+"/fork", map[string]string{"afterMessageId": lastUserMessageID(t, h, agent, forked.ThreadID)}, 201))
+	if branch.Title != "first question (branch)" {
+		t.Fatalf("a branch's title: %q", branch.Title)
+	}
 	if code, _ := h.do("POST", "/api/agents/"+agent+"/threads/t1/fork", map[string]string{"beforeMessageId": "e999999"}); code != 400 {
 		t.Fatalf("a message that isn't there: %d", code)
 	}
+}
+
+// A schedule moves to another agent: its runs start conversations there.
+func TestAScheduleMovesToAnotherAgent(t *testing.T) {
+	h := start(t, t.TempDir(), Config{DemoTokensPerSecond: "100000"})
+	from := h.createAgent("Old")
+	to := h.createAgent("New")
+	s := decodeInto[scheduleJSON](t, h.mustDo("POST", "/api/agents/"+from+"/schedules", map[string]any{"cron": "@daily", "message": "Digest"}, 201))
+	moved := decodeInto[struct {
+		AgentID, ThreadMode string
+	}](t, h.mustDo("PATCH", "/api/schedules/"+s.ID, map[string]any{"agentId": to}, 200))
+	if moved.AgentID != to || moved.ThreadMode != "new" {
+		t.Fatalf("moved: %+v", moved)
+	}
+	h.mustDo("PATCH", "/api/schedules/"+s.ID, map[string]any{"agentId": "ag_nobody"}, 400)
+	h.mustDo("POST", "/api/schedules/"+s.ID+"/run", nil, 200)
+	eventually(t, 20*time.Second, "the run on the new agent", func() bool {
+		got := h.schedule(s.ID)
+		return got.LastRun != nil && got.LastRun.Status == "done"
+	})
+	if v := h.view(to, h.schedule(s.ID).LastRun.ThreadID); len(v.Messages) == 0 || v.Messages[0].Text != "Digest" {
+		t.Fatalf("the run's conversation on the new agent: %+v", v.Messages)
+	}
+}
+
+// lastUserMessageID is the id of a thread's last user message (branching after it).
+func lastUserMessageID(t *testing.T, h *harness, agent, thread string) string {
+	t.Helper()
+	v := decodeInto[struct {
+		Messages []struct{ ID, Role string } `json:"messages"`
+	}](t, h.mustDo("GET", "/api/agents/"+agent+"/threads/"+thread, nil, 200))
+	for i := len(v.Messages) - 1; i >= 0; i-- {
+		if v.Messages[i].Role == "user" {
+			return v.Messages[i].ID
+		}
+	}
+	t.Fatal("no user message")
+	return ""
 }
