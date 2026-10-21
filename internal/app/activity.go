@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/ncecere/pi-local/internal/activity"
@@ -40,6 +41,10 @@ func (a *App) recordApproval(ap *approvals.Approval) {
 	}
 	waited := max(at-ap.RequestedAt, 0)
 	detail := map[string]any{"approvalId": ap.ID, "tool": ap.Tool}
+	var arguments any
+	if json.Unmarshal(ap.Arguments, &arguments) == nil {
+		detail["arguments"] = agents.RedactValue(arguments)
+	}
 	if ap.Summary != nil && *ap.Summary != "" {
 		detail["summary"] = *ap.Summary
 	}

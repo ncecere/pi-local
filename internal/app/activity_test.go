@@ -142,7 +142,7 @@ func TestTheActivityLogRecordsMessagesToolCallsAndApprovals(t *testing.T) {
 	titles := map[string]string{}
 	for _, e := range decided {
 		titles[e.Title] = e.Outcome
-		if e.Actor == "" || e.DurationMs == nil {
+		if e.Actor == "" || e.DurationMs == nil || e.field("arguments.command") == nil {
 			t.Fatalf("an approval: %+v", e)
 		}
 	}

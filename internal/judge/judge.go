@@ -73,7 +73,38 @@ type Service struct {
 
 // New makes the service.
 func New(db *sql.DB, store secrets.Store) *Service {
-	return &Service{db: db, secrets: store, client: &http.Client{Timeout: 8 * time.Second}}
+	return &Service{db: db, secrets: store, client: &http.Client{Timeout: 8 * time.Second, CheckRedirect: sameOriginRedirect}}
+}
+
+// sameOriginRedirect prevents credentials and judged text from leaving the service's original origin. Go's default
+// redirect policy allows forwarding Authorization to a subdomain or a different port; that is too broad here.
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if len(via) == 0 || req.URL.User != nil || !sameOrigin(via[0].URL, req.URL) {
+		return http.ErrUseLastResponse
+	}
+	return nil
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil || !strings.EqualFold(a.Scheme, b.Scheme) || !strings.EqualFold(a.Hostname(), b.Hostname()) {
+		return false
+	}
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		if strings.EqualFold(u.Scheme, "https") {
+			return "443"
+		}
+		if strings.EqualFold(u.Scheme, "http") {
+			return "80"
+		}
+		return ""
+	}
+	return port(a) == port(b)
 }
 
 // Settings reads the settings.
@@ -251,7 +282,7 @@ func (s *Service) ModelsAt(ctx context.Context, address, apiKey string) ([]strin
 	key := strings.TrimSpace(apiKey)
 	savedURL, savedErr := url.Parse(st.URL)
 	targetURL, targetErr := url.Parse(base)
-	if key == "" && savedErr == nil && targetErr == nil && strings.EqualFold(savedURL.Scheme, targetURL.Scheme) && strings.EqualFold(savedURL.Host, targetURL.Host) {
+	if key == "" && savedErr == nil && targetErr == nil && sameOrigin(savedURL, targetURL) {
 		key, _ = s.secrets.Get(keyName)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)

@@ -18,7 +18,10 @@ Trust and control.
 - **Backups and restore:** automatic daily backups, manual backups, a backup before an update installs, and restore
   with your current data moved aside. Secrets aren't included. Save a redacted diagnostics bundle when reporting a bug.
 - **Activity:** see calls, approvals, messages and scheduled runs in Settings, on each agent, or in a conversation's
-  “What happened” panel. Filter and export the log as CSV.
+  “What happened” panel. Filter and export the log as CSV. Cancelled and expired approvals are recorded even when a
+  reply is stopped.
+- **Security:** fast-judgments requests cannot redirect credentials or judged text to another origin. Command rules
+  remembered from an approval respect whole-word boundaries (`ls` never allows `lsof`).
 
 ## 0.2.0
 
