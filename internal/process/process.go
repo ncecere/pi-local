@@ -17,10 +17,14 @@ var ErrUnsupported = errors.New("process-tree containment is unsupported on this
 var errIdentityLost = errors.New("process: child identity no longer owned")
 
 // Tree owns one launch. Close is mandatory even after Wait, and idempotent.
-// A future Windows implementation must retain a non-inherited, kill-on-close
-// Job handle until Close, disallow breakaway, and assign before any user code
-// runs (never launch first and assign later). Until then Start fails closed.
+// Containment is a lifecycle boundary, not a security sandbox. In particular,
+// brokers can create processes outside ordinary child inheritance.
 type Tree interface {
+	// PID is diagnostic only, stable through Close; never use it for signalling.
+	PID() int
+	// ExitCode returns -1 until Done closes (or if the status is unavailable).
+	// Windows returns the real unsigned 32-bit process exit status as an int.
+	ExitCode() int
 	Wait() error
 	Done() <-chan struct{}
 	Term() error
@@ -53,12 +57,16 @@ type tree struct {
 	closeErr  error
 }
 
-// Start establishes containment before launching. ctx is checked before launch;
+// Start establishes containment before launching. Cmd is consumed: do not reuse
+// it or call its process methods. On Windows it is a launch descriptor only;
+// Process/ProcessState stay nil. Use Tree.PID/ExitCode instead. Use the package's
+// caller-owned InputPipe/OutputPipe rather than exec.Cmd's private pipe methods.
+// ctx is checked before launch;
 // it does not own the running command. Use Watch for a lifetime deadline, or a
 // caller's readiness select for a startup-only deadline. Do not use CommandContext:
 // its default Cancel kills only the leader, outside this ownership contract.
 func Start(ctx context.Context, cmd *exec.Cmd) (Tree, error) {
-	return start(ctx, cmd, platformContainment())
+	return platformStart(ctx, cmd)
 }
 
 func start(ctx context.Context, cmd *exec.Cmd, owner containment) (Tree, error) {
@@ -103,6 +111,17 @@ func (t *tree) reap() {
 
 func (t *tree) Done() <-chan struct{} { return t.done }
 func (t *tree) Wait() error           { <-t.done; return t.err }
+func (t *tree) PID() int              { return t.cmd.Process.Pid }
+func (t *tree) ExitCode() int {
+	select {
+	case <-t.done:
+		if t.cmd.ProcessState != nil {
+			return t.cmd.ProcessState.ExitCode()
+		}
+	default:
+	}
+	return -1
+}
 
 func (t *tree) signal(kill bool) error {
 	t.mu.Lock()

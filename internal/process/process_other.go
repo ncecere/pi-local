@@ -1,12 +1,10 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package process
 
 import "os/exec"
 
-// Windows is deliberately unsupported until race-free Job Object ownership can
-// be established before user code. No Process.Kill, taskkill, no-op containment,
-// or launch-then-assign fallback is acceptable.
+// Platforms without a reviewed containment backend fail before launching.
 type unsupported struct{}
 
 func platformContainment() containment            { return &unsupported{} }

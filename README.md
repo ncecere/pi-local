@@ -153,7 +153,7 @@ configuration, not external document folders. See [Knowledge folders in the API]
 
 ## Development
 
-You need Go 1.26+, Node 22.19+ and pnpm.
+You need Go 1.26.10+, Node 22.19+ and pnpm.
 
 ```sh
 make deps            # runtime and frontend packages

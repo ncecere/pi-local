@@ -146,7 +146,7 @@ func (c *Catalog) Login(ctx context.Context, slug string) (LoginStatus, error) {
 		cancel()
 		end := time.Now().UnixMilli()
 		run.mu.Lock()
-		code := cmd.ProcessState.ExitCode()
+		code := tree.ExitCode()
 		run.status.ExitCode, run.status.FinishedAt = &code, &end
 		switch {
 		case run.cancelled:

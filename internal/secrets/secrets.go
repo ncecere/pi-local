@@ -1,46 +1,17 @@
-// Package secrets keeps what must not be on disk in the clear (provider API keys, header values, later MCP tokens)
-// in the OS keychain: macOS Keychain, Windows Credential Manager, the Secret Service on Linux.
+// Package secrets stores sensitive values through an explicit Store boundary.
+// Keychain uses the OS vault; Memory is an explicitly selected in-memory store.
 package secrets
 
-import (
-	"errors"
-	"sync"
-
-	"github.com/zalando/go-keyring"
-)
+import "sync"
 
 // Service is the keychain service every item is filed under.
 const Service = "Pi Local"
-
-// ErrNotFound: nothing is stored under that name.
-var ErrNotFound = errors.New("secret not found")
 
 // Store holds secrets by name.
 type Store interface {
 	Get(name string) (string, error)
 	Set(name, value string) error
 	Delete(name string) error
-}
-
-// Keychain is the OS keychain.
-type Keychain struct{}
-
-func (Keychain) Get(name string) (string, error) {
-	v, err := keyring.Get(Service, name)
-	if errors.Is(err, keyring.ErrNotFound) {
-		return "", ErrNotFound
-	}
-	return v, err
-}
-
-func (Keychain) Set(name, value string) error { return keyring.Set(Service, name, value) }
-
-func (Keychain) Delete(name string) error {
-	err := keyring.Delete(Service, name)
-	if errors.Is(err, keyring.ErrNotFound) {
-		return nil
-	}
-	return err
 }
 
 // Memory is a Store in memory, for tests and a data directory that must not touch the keychain.

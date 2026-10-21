@@ -8,6 +8,7 @@ on:
       - 'internal/process/**'
       - 'internal/runtimeenv/**'
       - 'internal/host/**'
+      - 'internal/secrets/**'
       - 'internal/supervisor/**'
       - 'go.mod'
       - 'go.sum'
@@ -40,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           go version
-          go test -count=1 -race -v ./internal/datalock ./internal/process ./internal/runtimeenv ./internal/host
-          go vet ./internal/datalock ./internal/process ./internal/runtimeenv ./internal/host
+          go test -count=1 -race -v ./internal/datalock ./internal/process ./internal/runtimeenv ./internal/host ./internal/secrets
+          go vet ./internal/datalock ./internal/process ./internal/runtimeenv ./internal/host ./internal/secrets
 # These are isolated contract tests using synthetic temporary directories and helper processes.
 # Windows Server CI is not Windows 11 UI evidence; no WebView, sandbox, keyring or installer parity is claimed.
