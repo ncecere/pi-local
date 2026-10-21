@@ -7,6 +7,7 @@ on:
       - 'internal/datalock/**'
       - 'internal/process/**'
       - 'internal/runtimeenv/**'
+      - 'internal/host/**'
       - 'internal/supervisor/**'
       - 'go.mod'
       - 'go.sum'
@@ -17,7 +18,7 @@ permissions:
 
 jobs:
   contracts:
-    name: Lock, process and environment (${{ matrix.os }})
+    name: Native foundation contracts (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           go version
-          go test -count=1 -race -v ./internal/datalock ./internal/process ./internal/runtimeenv
-          go vet ./internal/datalock ./internal/process ./internal/runtimeenv
+          go test -count=1 -race -v ./internal/datalock ./internal/process ./internal/runtimeenv ./internal/host
+          go vet ./internal/datalock ./internal/process ./internal/runtimeenv ./internal/host
 # These are isolated contract tests using synthetic temporary directories and helper processes.
 # Windows Server CI is not Windows 11 UI evidence; no WebView, sandbox, keyring or installer parity is claimed.
