@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ncecere/pi-local/internal/activity"
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/backup"
@@ -67,6 +68,8 @@ type API struct {
 	Teams     *teams.Store
 	Manager   Manager
 	Approvals *approvals.Store
+	// Activity: the audit log.
+	Activity  *activity.Store
 	MCP       *mcp.Catalog
 	Schedules *schedules.Store
 	Search    *search.Store
@@ -155,6 +158,7 @@ func (a *API) Handler() http.Handler {
 	a.chatSettingsRoutes(m)
 	a.alwaysRoutes(m)
 	a.backupRoutes(m)
+	a.activityRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
 	if os.Getenv("PI_LOCAL_TRACE") == "1" {
@@ -892,6 +896,7 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	if err := a.Budget.Check(r.Context(), ag.ID); err != nil {
 		var over *budget.OverBudgetError
 		if errors.As(err, &over) {
+			a.Activity.Refused(ag.ID, "message", err)
 			writeJSON(w, http.StatusPaymentRequired, map[string]any{"error": map[string]any{"code": "over_budget", "message": over.Message, "details": map[string]any{"budget": over.Status}}})
 			return
 		}
@@ -925,6 +930,10 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 		if createdNow {
 			a.Threads.Delete(context.WithoutCancel(r.Context()), ag.ID, t)
 		}
+		if r.Context().Err() == nil {
+			a.Activity.Record(activity.Entry{Kind: activity.KindError, AgentID: ag.ID, ThreadID: t, Actor: localName(), Title: "A message could not be delivered", Outcome: "error",
+				Detail: activity.Detail(map[string]any{"error": agents.RedactText(err.Error())})})
+		}
 		runtimeFailure(w, r, ag, err)
 		return
 	}
@@ -932,6 +941,17 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	answer, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && createdNow {
 		a.Threads.Delete(context.WithoutCancel(r.Context()), ag.ID, t)
+	}
+	if resp.StatusCode < 400 {
+		// Who sent what to which agent and thread, and when: the first words only (never the whole message).
+		detail := map[string]any{"preview": activity.Preview(msg.Text), "chars": utf8.RuneCountInString(msg.Text)}
+		if len(msg.Attachments) > 0 {
+			detail["attachments"] = len(msg.Attachments)
+		}
+		if modelID != "" {
+			detail["model"] = modelID
+		}
+		a.Activity.Record(activity.Entry{Kind: activity.KindMessage, AgentID: ag.ID, ThreadID: t, Actor: localName(), Title: "Message sent", Outcome: "ok", Detail: activity.Detail(detail)})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)

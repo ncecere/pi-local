@@ -31,6 +31,7 @@ interface Tab {
     | '/settings/schedules'
     | '/settings/conversations'
     | '/settings/usage'
+    | '/settings/activity'
     | '/settings/backups';
   label: string;
   exact: boolean;
@@ -49,6 +50,7 @@ const ALL_TABS: Tab[] = [
   { to: '/settings/schedules', label: 'Schedules', exact: false },
   { to: '/settings/conversations', label: 'Conversations', exact: false },
   { to: '/settings/usage', label: 'Usage', exact: false },
+  { to: '/settings/activity', label: 'Activity', exact: false },
   { to: '/settings/backups', label: 'Backups', exact: false },
 ];
 

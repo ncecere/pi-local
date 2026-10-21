@@ -291,6 +291,12 @@ export class Approvals implements ApprovalRequester {
 		return { status: result.record.status, applied: result.applied };
 	}
 
+	/** The request made for a call of a conversation, if it asked (the audit reads how it was decided). */
+	forCall(conversationId: number, callId: string): ApprovalRecord | undefined {
+		for (const r of this.cache.values()) if (r.conversationId === conversationId && r.callId === callId) return r;
+		return undefined;
+	}
+
 	/** Every request (pending first, then newest), or one thread's. */
 	list(threadId?: string): ApprovalRecord[] {
 		return [...this.cache.values()]
@@ -506,7 +512,7 @@ export class Approvals implements ApprovalRequester {
 	 * The thread a conversation belongs to (a subagent's conversation belongs to its owner's), and who its current run
 	 * is for: the author of the message that started it.
 	 */
-	private async placeOf(conversationId: number): Promise<{ threadId?: string; requestedFor?: Author } | undefined> {
+	async placeOf(conversationId: number): Promise<{ threadId?: string; requestedFor?: Author } | undefined> {
 		const harness = this.bound();
 		const byConversation = new Map((await this.threads!.list()).map((t) => [t.conversationId, t.threadId]));
 		let id = conversationId;

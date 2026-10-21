@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -108,6 +109,7 @@ func (c *Catalog) Login(ctx context.Context, slug string) (LoginStatus, error) {
 		run.out = []byte("Couldn't start " + *s.Command + ": " + err.Error() + "\n")
 		c.logins.Store(slug, run)
 		c.OnLogin(run.snapshot())
+		c.authEnded(slug, "sign_in", "error", "the sign-in command could not start")
 		return run.snapshot(), nil
 	}
 	c.logins.Store(slug, run)
@@ -159,6 +161,14 @@ func (c *Catalog) Login(ctx context.Context, slug string) (LoginStatus, error) {
 		state := run.status.State
 		run.mu.Unlock()
 		c.OnLogin(run.snapshot())
+		switch state {
+		case "succeeded":
+			c.authEnded(slug, "sign_in", "ok", "")
+		case "cancelled":
+			c.authEnded(slug, "sign_in", "cancelled", "")
+		default:
+			c.authEnded(slug, "sign_in", "error", fmt.Sprintf("the sign-in command exited with code %d", code))
+		}
 		if state == "succeeded" {
 			// Signed in: test it again, so its tools (and any "not signed in" error) are current (unless quitting).
 			testCtx, stop := context.WithTimeout(context.Background(), 2*time.Minute)

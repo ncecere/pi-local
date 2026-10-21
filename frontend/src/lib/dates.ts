@@ -111,6 +111,15 @@ export function formatExact(when: Moment, options: DateOptions = {}): string {
   );
 }
 
+/** The time of day to the second, for a timeline: "2:03:22 PM" ("14:03:22" where the system uses 24 hours). */
+export function formatTimeSeconds(when: Moment, options: DateOptions = {}): string {
+  const date = dateOf(when);
+  return (
+    invalid(date, when) ??
+    format(options.locale, { ...TIME, second: '2-digit', timeZone: options.timeZone }).format(date)
+  );
+}
+
 /** A weekday and a time, for something a few days off: "Thu 9:00 AM". */
 export function formatWeekdayTime(when: Moment, options: DateOptions = {}): string {
   const date = dateOf(when);

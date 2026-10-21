@@ -124,7 +124,7 @@ describe("the schedule tools", () => {
 		await agent.send("t1", "Remind me to check the deploy tomorrow at nine");
 		await agent.settled("t1");
 
-		expect(await selection(agent, "t1")).toEqual(["assistant", "pdp-schedules", "pdp-scrub"]);
+		expect(await selection(agent, "t1")).toEqual(["assistant", "pdp-schedules", "pdp-audit", "pdp-scrub"]);
 		expect(gw.seen[0]).toEqual({
 			method: "POST",
 			path: "/schedules",
@@ -186,10 +186,11 @@ describe("the schedule tools", () => {
 
 	it("are not there when the version doesn't allow them, or the definition leaves them out", async () => {
 		const gw = await fakeGateway();
-		for (const [definition, environment] of [
-			[assistantAgent, env(gw.url, false)],
-			[defineAgent({ ...assistantAgent, schedules: false }), env(gw.url)],
-			[assistantAgent, { PLATFORM_SCHEDULES: "true" }], // no gateway to call
+		// (With a gateway the audit log's extension is there, last; without one there is nothing to tell.)
+		for (const [definition, environment, extensions] of [
+			[assistantAgent, env(gw.url, false), ["assistant", "pdp-audit", "pdp-scrub"]],
+			[defineAgent({ ...assistantAgent, schedules: false }), env(gw.url), ["assistant", "pdp-audit", "pdp-scrub"]],
+			[assistantAgent, { PLATFORM_SCHEDULES: "true" }, ["assistant", "pdp-scrub"]], // no gateway to call
 		] as const) {
 			const seen: ModelContext[] = [];
 			const model = fakeModel();
@@ -198,7 +199,7 @@ describe("the schedule tools", () => {
 			const { agent } = await start(definition, environment, model);
 			await agent.send("t1", "Hello");
 			await agent.settled("t1");
-			expect(await selection(agent, "t1")).toEqual(["assistant", "pdp-scrub"]);
+			expect(await selection(agent, "t1")).toEqual(extensions);
 			expect((seen[0]!.messages.at(-1) as { isError?: boolean }).isError).toBe(true);
 		}
 		expect(gw.seen).toEqual([]);
@@ -214,7 +215,7 @@ describe("the schedule tools", () => {
 		const { agent } = await start(custom, env(gw.url), model);
 		await agent.send("t1", "Hello");
 		await agent.settled("t1");
-		expect(await selection(agent, "t1")).toEqual(["acme", "pdp-schedules", "pdp-scrub"]);
+		expect(await selection(agent, "t1")).toEqual(["acme", "pdp-schedules", "pdp-audit", "pdp-scrub"]);
 		expect(gw.seen).toEqual([{ method: "GET", path: "/schedules", auth: `Bearer ${KEY}`, body: undefined }]);
 		expect(lastText(seen[0]!)).toBe("You have no schedules.");
 	});

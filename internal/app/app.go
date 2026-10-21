@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ncecere/pi-local/internal/activity"
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/api"
 	"github.com/ncecere/pi-local/internal/appdb"
@@ -73,19 +74,21 @@ type Config struct {
 // App is a running Pi Local.
 type App struct {
 	// policyMu serializes telling runtimes their approval rules (pushApprovalPolicy).
-	policyMu   sync.Mutex
-	cfg        Config
-	Agents     *agents.Store
-	Threads    *threads.Index
-	Hub        *events.Hub
-	Sup        *supervisor.Supervisor
-	API        *api.API
-	Catalog    *models.Catalog
-	Usage      *usage.Store
-	Budget     *budget.Service
-	Teams      *teams.Store
-	Asks       *asks.Broker
-	Approvals  *approvals.Store
+	policyMu  sync.Mutex
+	cfg       Config
+	Agents    *agents.Store
+	Threads   *threads.Index
+	Hub       *events.Hub
+	Sup       *supervisor.Supervisor
+	API       *api.API
+	Catalog   *models.Catalog
+	Usage     *usage.Store
+	Budget    *budget.Service
+	Teams     *teams.Store
+	Asks      *asks.Broker
+	Approvals *approvals.Store
+	// Activity is the audit log.
+	Activity   *activity.Store
 	MCP        *mcp.Catalog
 	Schedules  *schedules.Store
 	Search     *search.Store
@@ -199,6 +202,8 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	if a.Agents, err = agents.Open(ctx, db, filepath.Join(cfg.DataDir, "agents")); err != nil {
 		return nil, err
 	}
+	a.Activity = activity.New(db)
+	a.Activity.AgentName = a.Agents.NameOf
 	if cfg.Secrets == nil {
 		cfg.Secrets = secrets.Keychain{}
 	}
@@ -244,6 +249,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.MCP.OnChange = a.mcpChanged
 	a.MCP.OnLogin = func(st mcp.LoginStatus) { a.Hub.Publish("mcp-login", st) }
+	a.MCP.OnAuth = a.recordSignIn
 	a.Web = web.New(db, cfg.Secrets)
 	a.Memory = memory.New(db)
 	a.Judge = judge.New(db, cfg.Secrets)
@@ -264,6 +270,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
 		if c.Thread != nil && !c.Thread.Busy {
+			a.recordReplyError(c.AgentID, c.Thread)
 			// A reply ended: its scheduled run (if any) is done, and its text is kept searchable.
 			if a.Schedules != nil {
 				a.Schedules.ThreadChanged(c.AgentID, c.Thread)
@@ -302,6 +309,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			if c.Status == supervisor.Asleep || c.Status == supervisor.Failed {
 				a.Elicitations.ForgetAgent(c.AgentID)
 			}
+			if c.Status == supervisor.Failed {
+				a.recordAgentFailed(c.AgentID, c.LastError)
+			}
 			a.publishAgent(c.AgentID)
 		},
 		OnStarted:    a.started,
@@ -312,9 +322,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		StopGrace:    cfg.StopGrace,
 	})
 	a.Asks = asks.New(db, a.Sup, a.Agents, permissions{a}, a.Threads)
-	a.Asks.Budget = a.Budget.Check
+	a.Asks.Budget = a.budgetCheck("ask")
+	a.Asks.OnFinish = a.recordAsk
 	a.Schedules = schedules.New(db, a.Sup, a.Agents, a.Threads)
-	a.Schedules.Budget = a.Budget.Check
+	a.Schedules.Budget = a.budgetCheck("schedule")
 	a.Schedules.OnChange = func(id string, sc *schedules.Schedule) {
 		if sc == nil {
 			a.Hub.Publish("schedule", map[string]any{"scheduleId": id, "deleted": true})
@@ -324,21 +335,25 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.Schedules.OnRunEnd = func(sc *schedules.Schedule, run *schedules.Run) {
 		a.Hub.Publish("schedule_run", map[string]any{"scheduleId": sc.ID, "agentId": sc.AgentID, "name": sc.Name, "run": run})
+		a.recordScheduleRun(sc, run)
 	}
 	a.Approvals = approvals.New(db, a.Sup, approvalAgents{a})
 	a.Approvals.Person = localPersonName()
 	a.Approvals.OnChange = func(ap *approvals.Approval) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
+		if ap.Status != "pending" {
+			a.recordApproval(ap)
+		}
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, JudgeApproval: a.Judge.RiskyCall, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, Activity: a.Activity, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, JudgeApproval: a.Judge.RiskyCall, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, Activity: a.Activity, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
@@ -892,6 +907,9 @@ func (a *App) Close() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		a.gateway.Shutdown(ctx)
 		cancel()
+	}
+	if a.Activity != nil {
+		a.Activity.Close() // writes what is queued, before app.db closes
 	}
 	if a.closeDB != nil {
 		a.closeDB()

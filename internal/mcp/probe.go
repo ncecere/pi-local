@@ -215,15 +215,23 @@ func (c *Catalog) SignIn(ctx context.Context, slug string) (string, error) {
 			}
 		})
 		close(authorize)
+		failure := ""
 		if err != nil {
-			c.recordTest(context.Background(), slug, nil, err.Error())
+			failure = err.Error()
+			c.recordTest(context.Background(), slug, nil, failure)
 		} else if final.Type == "result" {
 			c.recordTest(context.Background(), slug, final.Tools, "")
 		} else {
-			c.recordTest(context.Background(), slug, nil, describe(final))
+			failure = describe(final)
+			c.recordTest(context.Background(), slug, nil, failure)
 		}
 		if s, err := c.Get(context.Background(), slug); err == nil {
 			c.OnChange(slug, s)
+		}
+		if failure == "" {
+			c.authEnded(slug, "sign_in", "ok", "")
+		} else {
+			c.authEnded(slug, "sign_in", "error", failure)
 		}
 	}()
 	select {

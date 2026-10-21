@@ -86,6 +86,22 @@ type State struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// Finished is an ask that ended.
+type Finished struct {
+	ID           string
+	Caller       string
+	CallerThread string
+	Target       string
+	TargetThread string
+	// Message is what was asked.
+	Message string
+	// Status: done or failed.
+	Status string
+	Error  string
+	Asked  time.Time
+	Ended  time.Time
+}
+
 // Broker runs asks.
 type Broker struct {
 	db       *sql.DB
@@ -95,6 +111,8 @@ type Broker struct {
 	index    *threads.Index
 	// Budget, when set, refuses an ask to an agent that is over a budget that says stop (its error is passed on as is).
 	Budget func(ctx context.Context, agentID string) error
+	// OnFinish is told once of each ask that ended (done or failed), for the activity log.
+	OnFinish func(Finished)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -325,10 +343,16 @@ func (b *Broker) finish(id, status, result, errText string) {
 	if len([]rune(result)) > maxResultChars {
 		result = string([]rune(result)[:maxResultChars]) + "\n\n(The reply was cut here.)"
 	}
-	_, err := b.db.ExecContext(context.Background(), `UPDATE asks SET status = ?, result = ?, error = ?, finished_at = ? WHERE id = ? AND status = 'pending'`,
-		status, nullable(result), nullable(errText), time.Now().UnixMilli(), id)
+	ended := time.Now()
+	res, err := b.db.ExecContext(context.Background(), `UPDATE asks SET status = ?, result = ?, error = ?, finished_at = ? WHERE id = ? AND status = 'pending'`,
+		status, nullable(result), nullable(errText), ended.UnixMilli(), id)
 	if err != nil {
 		slog.Warn("recording an ask's outcome", "ask", id, "err", err)
+	} else if n, _ := res.RowsAffected(); n > 0 && b.OnFinish != nil {
+		if a, err := b.load(context.Background(), `id = ?`, id); err == nil {
+			b.OnFinish(Finished{ID: id, Caller: a.caller, CallerThread: a.callerThread, Target: a.target, TargetThread: a.targetThread,
+				Message: a.message, Status: status, Error: errText, Asked: a.created, Ended: ended})
+		}
 	}
 	b.mu.Lock()
 	ch, ok := b.waiters[id]
