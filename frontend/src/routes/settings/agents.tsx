@@ -1,5 +1,5 @@
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { ChevronRight, MessageSquarePlus, Plus, Upload } from 'lucide-react';
+import { ChevronRight, Dices, MessageSquarePlus, Plus, Upload } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { type Agent, ApiError, type CatalogModel, errorMessage } from '~/api/client';
@@ -35,6 +35,7 @@ import {
 import { useTemplates } from '~/hooks/use-templates';
 import { useWebSearchReady } from '~/hooks/use-web';
 import { agentKindLabel } from '~/lib/agent-groups';
+import { randomAgentName } from '~/lib/agent-names';
 import { agentFieldText } from '~/lib/agent-text';
 import { usePageTitle } from '~/lib/document-title';
 import { groupModelsByProvider } from '~/lib/models';
@@ -72,6 +73,10 @@ export function AgentDialog({
   const templates = templateList.data?.templates ?? catalog.templates;
   const webSearchReady = useWebSearchReady(!agent);
   const [name, setName] = useState(agent?.name ?? '');
+  // A new agent left unnamed gets a friendly random name, shown as the placeholder.
+  const agentList = useAgents();
+  const takenNames = (agentList.data ?? []).map((other) => other.name);
+  const [suggestedName, setSuggestedName] = useState(() => randomAgentName(takenNames));
   const [templateId, setTemplateId] = useState(catalog.templates[0]?.id ?? '');
   const [modelId, setModelId] = useState(agent?.model?.id ?? catalog.defaultModelId ?? '');
   const [description, setDescription] = useState(agent?.description ?? '');
@@ -85,7 +90,11 @@ export function AgentDialog({
   const coding = kind === 'coding';
   const text = agentFieldText(kind);
   const templateText = template?.instructions.trim() ?? '';
-  const newName = name.trim() || template?.name || '';
+  // Recomputed once the agent list arrives, if the first pick turned out to be taken.
+  const fallbackName = takenNames.some((n) => n.toLowerCase() === suggestedName.toLowerCase())
+    ? randomAgentName(takenNames)
+    : suggestedName;
+  const newName = name.trim() || fallbackName;
   const folderError =
     error instanceof ApiError && error.code === 'invalid_workspace_folder' ? error.message : null;
   // An agent whose model was removed or turned off keeps it until given another.
@@ -167,14 +176,46 @@ export function AgentDialog({
           {template && <TemplateSummary template={template} webSearchReady={webSearchReady} />}
           <label htmlFor={`${id}-name`} className="flex flex-col gap-1.5 text-sm font-medium">
             Name
-            <input
-              id={`${id}-name`}
-              maxLength={60}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder={template?.name ?? 'Research helper'}
-              className={FIELD}
-            />
+            {agent ? (
+              <input
+                id={`${id}-name`}
+                maxLength={60}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                className={FIELD}
+              />
+            ) : (
+              <span className="flex items-center gap-2">
+                <input
+                  id={`${id}-name`}
+                  maxLength={60}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder={fallbackName}
+                  aria-describedby={`${id}-name-hint`}
+                  className={cn(FIELD, 'flex-1')}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="icon"
+                  aria-label="Pick another name"
+                  title="Pick another name"
+                  onClick={() => {
+                    const next = randomAgentName(takenNames, name.trim() || fallbackName);
+                    setSuggestedName(next);
+                    setName(next);
+                  }}
+                >
+                  <Dices />
+                </Button>
+              </span>
+            )}
+            {!agent && !name.trim() && (
+              <span id={`${id}-name-hint`} className="text-xs font-normal text-[var(--text-muted)]">
+                Leave it empty and it's called {fallbackName}.
+              </span>
+            )}
           </label>
           <label
             htmlFor={`${id}-description`}

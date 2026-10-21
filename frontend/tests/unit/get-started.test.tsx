@@ -378,7 +378,7 @@ describe('Get started', () => {
     await click(buttonByText('Make agent'));
     expect(
       backend.calls.find((call) => call.path === '/api/agents' && call.method === 'POST'),
-    ).toMatchObject({ body: { name: 'Assistant', templateId: 'assistant' } });
+    ).toMatchObject({ body: { templateId: 'assistant' } });
     expect(navigate).toHaveBeenCalledWith({ to: '/', search: { agent: 'ag_new' } });
   });
 

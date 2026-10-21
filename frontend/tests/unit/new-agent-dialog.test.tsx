@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AgentTemplate, ApiError } from '../../src/api/client';
 import type { AgentCatalog } from '../../src/hooks/use-agents';
+import { AGENT_NAMES, randomAgentName } from '../../src/lib/agent-names';
 import { shortSchedule, templateChips } from '../../src/lib/templates';
 import { AgentDialog } from '../../src/routes/settings/agents';
 import {
@@ -184,7 +185,10 @@ describe('new agent dialog: the templates gallery', () => {
 
     expect(chips()).toEqual(['Web', 'Schedule: weekdays 7:30']);
     expect(text()).toContain('Works best with web search: set it up in Settings → Models.');
-    expect(fieldByLabel('Name')?.getAttribute('placeholder')).toBe('Daily briefing');
+    // An unnamed agent gets a friendly random name, shown as the placeholder.
+    const suggested = fieldByLabel('Name')?.getAttribute('placeholder') ?? '';
+    expect(AGENT_NAMES).toContain(suggested);
+    expect(text()).toContain(`Leave it empty and it's called ${suggested}.`);
     expect(fieldByLabel('Description')?.getAttribute('placeholder')).toBe(
       'A short morning summary on a schedule.',
     );
@@ -201,15 +205,37 @@ describe('new agent dialog: the templates gallery', () => {
       BRIEFING.instructions,
     );
 
-    // An empty name is the template's.
+    // An empty name is the suggested one.
     await click(buttonByText('Make agent'));
     const post = backend.calls.find((call) => call.method === 'POST');
     expect(post).toEqual({
       method: 'POST',
       path: '/api/agents',
-      body: { name: 'Daily briefing', templateId: 'daily-briefing' },
+      body: { name: suggested, templateId: 'daily-briefing' },
     });
-    expect(toast).toHaveBeenCalledWith('Daily briefing is ready.');
+    expect(toast).toHaveBeenCalledWith(`${suggested} is ready.`);
+  });
+
+  it('avoids names in use, and shuffles to another name', async () => {
+    const taken = AGENT_NAMES.filter((name) => name !== 'Wren' && name !== 'Sage');
+    const backend = fakeBackend({
+      'GET /api/agents': () => taken.map((name, i) => ({ id: `ag_${i}`, name })),
+      'GET /api/settings/web': () => WEB_OFF,
+      'POST /api/agents': created,
+    });
+    await openDialog();
+    await settle();
+    const first = fieldByLabel('Name')?.getAttribute('placeholder');
+    expect(['Wren', 'Sage']).toContain(first);
+    await click(document.querySelector('[aria-label="Pick another name"]'));
+    const field = fieldByLabel('Name') as HTMLInputElement;
+    expect(field.value).toBe(first === 'Wren' ? 'Sage' : 'Wren');
+    // A name of its own hides the hint.
+    expect(text()).not.toContain('Leave it empty');
+    await click(buttonByText('Make agent'));
+    expect(backend.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+      name: field.value,
+    });
   });
 
   it('sends a name and instructions of its own when given', async () => {
@@ -424,7 +450,9 @@ describe('new agent dialog: coding', () => {
 
     await typeInto(fieldByLabel('Name'), 'Coder');
     await click(buttonByText('Make agent'));
-    expect(backend.calls.find((call) => call.path === '/api/agents')?.body).toMatchObject({
+    expect(
+      backend.calls.find((call) => call.method === 'POST' && call.path === '/api/agents')?.body,
+    ).toMatchObject({
       workspace: { folder: '/Users/ada/code/app' },
     });
   });
@@ -436,5 +464,20 @@ describe('new agent dialog: coding', () => {
     await typeInto(fieldByLabel('Project folder'), '/Users/ada/code/old');
     await click(buttonByText('Choose…'));
     expect((fieldByLabel('Project folder') as HTMLInputElement).value).toBe('/Users/ada/code/old');
+  });
+});
+
+describe('randomAgentName', () => {
+  it('picks a free name, ignoring case, and never the current one', () => {
+    expect(AGENT_NAMES).toContain(randomAgentName([]));
+    const free = AGENT_NAMES.filter((name) => name !== 'Kit');
+    expect(randomAgentName(free.map((name) => name.toUpperCase()))).toBe('Kit');
+    expect(randomAgentName(free, 'Kit')).toMatch(/ 2$/);
+  });
+  it('numbers a name when every one is taken', () => {
+    expect(randomAgentName(AGENT_NAMES, '', () => 0)).toBe(`${AGENT_NAMES[0]} 2`);
+    expect(randomAgentName([...AGENT_NAMES, `${AGENT_NAMES[0]} 2`], '', () => 0)).toBe(
+      `${AGENT_NAMES[0]} 3`,
+    );
   });
 });
