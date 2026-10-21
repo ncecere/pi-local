@@ -2,7 +2,8 @@
  * runtime. _start's FIRST syscall is getrlimit; no descriptor is opened before
  * a bounded initial inherited-FD scan. Raw getdents64 of /proc/self/fd
  * then covers descriptors above a subsequently lowered RLIMIT_NOFILE.
- * Only a constant success marker is output; every failure is silent.
+ * Only a constant success marker is output; failures are silent unless the
+ * standalone-only EXEC_AUTHORITY_FD_DIAGNOSTICS build option is enabled.
  * See exec_authority_linux_amd64_test.go for the fixed exit-status contract.
  */
 typedef unsigned long u64;
@@ -130,9 +131,23 @@ static int pipe_link(const char *s) {
 /* RLIMIT_NOFILE limits future allocation, NOT the numbers of existing FDs.
  * Enumerate our own proc directory before any libc/runtime (there is none).
  * Exclude ONLY the actual FD just opened for this enumeration. */
-static void inherited_fd(long fd) {
+static void inherited_fd(long fd, unsigned stage) {
     long r = raw(72, fd, 1 /* F_GETFD */, 0);
-    if (r >= 0) finish(12);
+    if (r >= 0) {
+#ifdef EXEC_AUTHORITY_FD_DIAGNOSTICS
+        /* Standalone controls only. One fixed-size numeric record, no opens,
+         * links, paths, inode identities, or contents. Never close the FD or
+         * alter rejection. stage 1 = initial scan, 2 = own proc enumeration. */
+        struct stat64 st;
+        long stat_result = raw(5, fd, (long)&st, 0);
+        u64 record[6] = {0x3144464145UL, stage, (u64)fd, (u64)r,
+                         stat_result ? 0 : st.mode & 0170000, (u64)stat_result};
+        raw(1, 1, (long)record, sizeof(record));
+#else
+        (void)stage;
+#endif
+        finish(12);
+    }
     if (r != -9 /* EBADF */) finish(13);
 }
 static void inherited_fds(void) {
@@ -152,7 +167,7 @@ static void inherited_fds(void) {
             u64 candidate = number(s);
             if (candidate > 2147483647) finish(57);
             if (candidate == (u64)fd) continue;
-            if (candidate > 2) inherited_fd(candidate);
+            if (candidate > 2) inherited_fd(candidate, 2);
             else {
                 if (raw(5, candidate, (long)&supplied_stdio[candidate], 0)) finish(58);
                 stdio |= 1u << candidate;
@@ -246,7 +261,7 @@ __attribute__((noreturn, used)) void probe(u64 *stack, long limit_result) {
     if (limit_result) finish(10);
     u64 bound = limits.soft > limits.hard ? limits.soft : limits.hard;
     if (bound < 3 || bound > 1048576) finish(11); /* No truncated scan. */
-    for (u64 fd = 3; fd < bound; ++fd) inherited_fd(fd);
+    for (u64 fd = 3; fd < bound; ++fd) inherited_fd(fd, 1);
     inherited_fds();
     char **argv = (char **)(stack + 1);
     if (stack[0] == 2) self_control(argv);

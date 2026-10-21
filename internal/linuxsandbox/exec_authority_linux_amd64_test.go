@@ -18,14 +18,18 @@ import (
 
 // buildExecAuthorityProbe checks the static executable contract independently
 // of bwrap admission, so fixture-only detector controls can run on native Linux.
-func buildExecAuthorityProbe(t *testing.T, payload string) {
+func buildExecAuthorityProbe(t *testing.T, payload string, fdDiagnostics bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cc := exec.CommandContext(ctx, "cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+	args := []string{"-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
 		"-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pie", "-no-pie",
 		"-nostdlib", "-static", "-Wl,-e,_start", "-Wl,--build-id=none",
-		"-o", payload, "testdata/exec_authority_probe.c")
+		"-o", payload, "testdata/exec_authority_probe.c"}
+	if fdDiagnostics {
+		args = append(args, "-DEXEC_AUTHORITY_FD_DIAGNOSTICS=1")
+	}
+	cc := exec.CommandContext(ctx, "cc", args...)
 	if _, err := cc.CombinedOutput(); err != nil {
 		t.Fatal("runtime-free native fixture build failed (cc is required)")
 	}
@@ -64,7 +68,7 @@ func TestExecAuthorityDetectorControls(t *testing.T) {
 		t.Skip("native raw-syscall detector controls not opted in")
 	}
 	payload := filepath.Join(t.TempDir(), "exec-authority-probe")
-	buildExecAuthorityProbe(t, payload)
+	buildExecAuthorityProbe(t, payload, true)
 	for _, control := range []struct {
 		name, arg string
 		inherited bool
@@ -106,8 +110,26 @@ func TestExecAuthorityDetectorControls(t *testing.T) {
 				}
 				code = exit.ExitCode()
 			}
+			diagnostic, diagnosticErr := decodeExecAuthorityFDDiagnostic(stdout.Bytes())
 			if code != control.want {
-				t.Fatalf("same detector: got assertion %d (%s), want %d", code, execAuthorityAssertion(code), control.want)
+				// Never dump arbitrary subprocess output, even on decode failure.
+				t.Fatalf("same detector: got assertion %d (%s), want %d; %s",
+					code, execAuthorityAssertion(code), control.want, diagnostic.summary(diagnosticErr))
+			}
+			if code == 12 {
+				if diagnosticErr != nil {
+					t.Fatal("inherited-FD rejection lacks valid bounded diagnostic")
+				}
+				stage, fd := uint64(1), uint64(3)
+				if control.arg == "--high-fd-control" {
+					stage, fd = 2, 100
+				}
+				if diagnostic.stage != stage || diagnostic.fd != fd || diagnostic.flags != 0 ||
+					diagnostic.fileType != 0020000 || diagnostic.statResult != 0 {
+					t.Fatalf("negative control did not reach its intended detector path: %s", diagnostic.summary(nil))
+				}
+			} else if stdout.Len() != 0 {
+				t.Fatal("standalone control produced unexpected output")
 			}
 		})
 	}
@@ -118,7 +140,7 @@ func TestExecAuthorityDetectorControls(t *testing.T) {
 func TestNativeExecEntryAuthority(t *testing.T) {
 	f := nativeSetup(t)
 	payload := filepath.Join(f.p.Workspace, "exec-authority-probe")
-	buildExecAuthorityProbe(t, payload)
+	buildExecAuthorityProbe(t, payload, false)
 
 	// Seed unrelated non-CLOEXEC input descriptors in the outer driver. These
 	// belong ONLY to this disposable fixture. Inode identities, never secret
