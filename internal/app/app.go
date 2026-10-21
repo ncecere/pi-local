@@ -46,6 +46,7 @@ import (
 	"github.com/ncecere/pi-local/internal/memory"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/prompts"
+	"github.com/ncecere/pi-local/internal/runtimeenv"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/search"
 	"github.com/ncecere/pi-local/internal/secrets"
@@ -945,13 +946,7 @@ func (a *App) started(id string, status supervisor.RuntimeStatus) {
 
 // baseEnv is what every runtime's environment starts from: enough to run node and tools, none of the app's secrets.
 func baseEnv(dataDir string) map[string]string {
-	env := map[string]string{"NODE_COMPILE_CACHE": filepath.Join(dataDir, "cache", "node")}
-	for _, k := range []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SHELL"} {
-		if v, ok := os.LookupEnv(k); ok {
-			env[k] = v
-		}
-	}
-	return env
+	return runtimeenv.BaseEnv(dataDir)
 }
 
 // Close stops every agent gracefully (work in flight stays pending in its storage) and closes everything.

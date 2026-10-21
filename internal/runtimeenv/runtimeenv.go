@@ -1,6 +1,6 @@
-// Package runtimeenv finds what the agent runtime needs on this machine: a Node binary, the person's own PATH (an
-// app opened from Finder gets a minimal one, without Homebrew, nix or version managers), and the runtime bundle
-// written out from the app's own copy.
+// Package runtimeenv discovers Node, recovers Unix login PATHs for GUI launches,
+// filters the runtime environment, and writes the app's embedded runtime bundle.
+// It does not infer platform-specific application package layouts.
 package runtimeenv
 
 import (
@@ -12,72 +12,107 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ncecere/pi-local/internal/supervisor"
 )
 
-// LoginPath is the PATH the person's login shell sets up, or the process's own PATH if that can't be read.
+// LoginPath reads a non-interactive login shell on Unix, never on Windows.
+// Empty and relative entries are excluded even when login recovery fails.
 func LoginPath(ctx context.Context) string {
-	current := os.Getenv("PATH")
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/zsh"
+	lookup := environmentLookup(runtime.GOOS, os.Environ())
+	current, _ := lookup("PATH")
+	shell, _ := lookup("SHELL")
+	return loginPathForOS(ctx, runtime.GOOS, current, shell, commandOutput)
+}
+
+type commandRunner func(context.Context, string, ...string) ([]byte, error)
+
+func commandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	// A shell wrapper/profile can leave a descendant holding stdout open after
+	// cancellation. Bound pipe draining as well as the direct process lifetime.
+	cmd.WaitDelay = 250 * time.Millisecond
+	return cmd.Output()
+}
+
+func loginPathForOS(ctx context.Context, goos, current, shell string, run commandRunner) string {
+	current = mergePathsForOS(goos, current, "")
+	if goos == "windows" {
+		return current
+	}
+	if !absolutePath(goos, shell) {
+		shell = "/bin/sh"
+		if goos == "darwin" {
+			shell = "/bin/zsh"
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	// A login shell (not interactive: no prompts, no rc noise on stdout); the marker separates PATH from anything a
-	// profile prints.
-	out, err := exec.CommandContext(ctx, shell, "-l", "-c", `printf '__PI_PATH__%s' "$PATH"`).Output()
+	if ctx.Err() != nil {
+		return current
+	}
+	// The marker separates PATH from profile output. Tests inject the executor;
+	// they must not source the developer's actual login profiles.
+	out, err := run(ctx, shell, "-l", "-c", `printf '__PI_PATH__%s' "$PATH"`)
 	if err != nil {
 		return current
 	}
-	_, path, found := strings.Cut(string(out), "__PI_PATH__")
-	if !found || strings.TrimSpace(path) == "" {
+	_, recovered, found := strings.Cut(string(out), "__PI_PATH__")
+	if !found || strings.TrimSpace(recovered) == "" {
 		return current
 	}
-	return mergePaths(strings.TrimSpace(path), current)
+	return mergePathsForOS(goos, strings.TrimSpace(recovered), current)
 }
 
-// mergePaths is a's entries, then b's that a lacks.
 func mergePaths(a, b string) string {
-	seen := map[string]bool{}
-	var out []string
-	for _, p := range append(strings.Split(a, ":"), strings.Split(b, ":")...) {
-		if p != "" && !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	return strings.Join(out, ":")
+	return mergePathsForOS(runtime.GOOS, a, b)
 }
 
 // MinNodeMajor, MinNodeMinor: the runtime needs node:sqlite and pi-durable's engines (Node 22.19).
 const MinNodeMajor, MinNodeMinor = 22, 19
 
-// FindNode returns a Node binary new enough for the runtime: explicit (PI_LOCAL_NODE), bundled next to the app,
-// or the first on path.
+// FindNode tries PI_LOCAL_NODE, the caller's exact bundled candidate, then PATH.
+// Explicit relative paths (including a bare filename) deliberately resolve against
+// the cwd, never PATH. PATH itself accepts only absolute dirs. Windows probes only
+// node.exe, without PATHEXT, shell wrappers, or Unix executable-bit requirements.
 func FindNode(ctx context.Context, path string, bundled string) (string, error) {
-	var candidates []string
-	if v := os.Getenv("PI_LOCAL_NODE"); v != "" {
-		candidates = append(candidates, v)
-	}
-	if bundled != "" {
-		candidates = append(candidates, bundled)
-	}
-	for _, dir := range strings.Split(path, ":") {
-		if dir != "" {
-			candidates = append(candidates, filepath.Join(dir, "node"))
-		}
-	}
+	lookup := environmentLookup(runtime.GOOS, os.Environ())
+	explicit, _ := lookup("PI_LOCAL_NODE")
+	candidates := nodeCandidates(runtime.GOOS, explicit, bundled, path)
 	var problems []string
-	for _, c := range candidates {
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		c := candidate
+		if !filepath.IsAbs(c) {
+			var err error
+			c, err = filepath.Abs(c)
+			if err != nil {
+				continue
+			}
+		}
+		if seen[pathKey(runtime.GOOS, c)] {
+			continue
+		}
+		seen[pathKey(runtime.GOOS, c)] = true
+		if !nodeExecutableName(runtime.GOOS, c) {
+			continue
+		}
 		info, err := os.Stat(c)
-		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+		if err != nil || !nodeFileMode(runtime.GOOS, info.Mode()) {
 			continue
 		}
 		version, err := nodeVersion(ctx, c)
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", c, err))
 			continue
@@ -88,6 +123,9 @@ func FindNode(ctx context.Context, path string, bundled string) (string, error) 
 		}
 		return c, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	msg := fmt.Sprintf("Pi Local needs Node.js %d.%d or newer to run agents", MinNodeMajor, MinNodeMinor)
 	if len(problems) > 0 {
 		msg += " (found: " + strings.Join(problems, "; ") + ")"
@@ -95,22 +133,47 @@ func FindNode(ctx context.Context, path string, bundled string) (string, error) 
 	return "", errors.New(msg)
 }
 
+func nodeFileMode(goos string, mode os.FileMode) bool {
+	return mode.IsRegular() && (goos == "windows" || mode&0o111 != 0)
+}
+
 func nodeVersion(ctx context.Context, node string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	return nodeVersionWithRunner(ctx, node, 10*time.Second, commandOutput)
+}
+
+func nodeVersionWithRunner(ctx context.Context, node string, timeout time.Duration, run commandRunner) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, node, "--version").Output()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	out, err := run(ctx, node, "--version")
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Require a stable semver, not a partial version, banner, or prerelease.
+var stableNodeVersion = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
+
 func atLeast(version string, major, minor int) bool {
-	var M, m, p int
-	if _, err := fmt.Sscanf(strings.TrimPrefix(version, "v"), "%d.%d.%d", &M, &m, &p); err != nil {
+	parts := stableNodeVersion.FindStringSubmatch(version)
+	if parts == nil {
 		return false
 	}
-	return M > major || (M == major && m >= minor)
+	values := [3]uint64{}
+	for i := range values {
+		n, err := strconv.ParseUint(parts[i+1], 10, 64)
+		if err != nil {
+			return false
+		}
+		values[i] = n
+	}
+	return values[0] > uint64(major) || (values[0] == uint64(major) && values[1] >= uint64(minor))
 }
 
 // WriteBundle writes the runtime bundle to <dir>/<hash>/runtime.mjs once (a new app version gets a new directory)
