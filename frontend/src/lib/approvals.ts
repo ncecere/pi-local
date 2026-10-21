@@ -1,4 +1,12 @@
-import type { Agent, AgentApprovals, Approval, ApprovalStatus, WorkspaceTool } from '~/api/types';
+import type {
+  Agent,
+  AgentApprovals,
+  Approval,
+  ApprovalProfile,
+  ApprovalRule,
+  ApprovalStatus,
+  WorkspaceTool,
+} from '~/api/types';
 
 /**
  * Workspace tools and approvals (docs/api.md, "Workspace tools, approvals and
@@ -157,15 +165,124 @@ export function formatTimeout(seconds: number): string {
 /** The agent's settings as the Tools tab reads them, with the contract's defaults for an older backend. */
 export function readToolSettings(agent: Pick<Agent, 'workspace' | 'approvals'>): {
   tools: WorkspaceTool[];
-  approvals: AgentApprovals;
+  approvals: AgentApprovals & {
+    profile: ApprovalProfile;
+    rules: ApprovalRule[];
+    builtinRules: ApprovalRule[];
+  };
 } {
   return {
     tools: normaliseTools(agent.workspace?.tools ?? []),
     approvals: {
+      // An agent without a profile (an older backend, or one made before profiles) keeps its tools list: custom.
+      profile: agent.approvals?.profile ?? 'custom',
       tools: agent.approvals?.tools ?? [],
+      rules: agent.approvals?.rules ?? [],
+      builtinRules: agent.approvals?.builtinRules ?? [],
       timeoutSeconds: agent.approvals?.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
     },
   };
+}
+
+// ── Profiles and rules ──────────────────────────────────────────────────────────────────────
+
+export interface ProfileOption {
+  id: ApprovalProfile;
+  label: string;
+  description: string;
+}
+
+export const PROFILE_OPTIONS: readonly ProfileOption[] = [
+  {
+    id: 'careful',
+    label: 'Careful',
+    description:
+      "Asks before anything that changes something: writing and editing files, running commands, scheduling, and MCP tools that aren't read-only.",
+  },
+  {
+    id: 'balanced',
+    label: 'Balanced',
+    description:
+      'Asks before running commands, and before MCP tools that delete, send or change things. Changes files in its workspace on its own.',
+  },
+  {
+    id: 'trusting',
+    label: 'Trusting',
+    description: 'Asks for nothing, except the built-in rules below.',
+  },
+  {
+    id: 'custom',
+    label: 'Custom',
+    description: 'You choose which tools ask, by name.',
+  },
+];
+
+/** The profile new agents get. */
+export const DEFAULT_PROFILE: ApprovalProfile = 'balanced';
+
+/**
+ * The workspace tools that run without asking under a profile, for the warning
+ * on the Tools tab. Balanced asks for commands and leaves files to the agent
+ * (as the recommended setting, it says nothing); trusting asks for nothing.
+ */
+export function unguardedTools(
+  profile: ApprovalProfile,
+  tools: readonly WorkspaceTool[],
+  patterns: readonly string[],
+): WorkspaceTool[] {
+  if (profile === 'careful' || profile === 'balanced') return [];
+  const changing = tools.filter((tool) => tool !== 'read');
+  return profile === 'trusting'
+    ? changing
+    : changing.filter((tool) => !needsApproval(tool, patterns));
+}
+
+const ACTION_LABEL: Record<ApprovalRule['action'], string> = {
+  allow: 'Allow',
+  ask: 'Ask',
+  deny: 'Deny',
+};
+
+export const actionLabel = (action: ApprovalRule['action']) => ACTION_LABEL[action];
+
+/** What a rule matches: "bash", "bash · command: git status*". */
+export function describeRule(rule: Pick<ApprovalRule, 'tool' | 'args'>): string {
+  const args = Object.entries(rule.args ?? {}).map(([name, glob]) => `${name}: ${glob}`);
+  return args.length === 0 ? rule.tool : `${rule.tool} · ${args.join(', ')}`;
+}
+
+/** Whether a shell command chains or nests commands (an allow rule would never match it). */
+export function isCompoundCommand(command: string): boolean {
+  const plain = command.trim().replace(/\d*>&\d+|\d*>>?\s*\/dev\/null/g, '');
+  return /[;&|`\n\r<>]|\$\(/.test(plain);
+}
+
+/**
+ * The rule "Approve and always allow this" adds for a call: for a shell
+ * command its first word and subcommand (`git status --short` → `git status*`,
+ * `ls -la` → `ls*`), for any other tool the tool alone. Null when no allow
+ * rule could cover the call (a compound command, or an empty one).
+ */
+export function suggestRule(
+  tool: string,
+  args: unknown,
+): { tool: string; args?: Record<string, string> } | null {
+  if (tool !== 'bash') return { tool };
+  const given = asRecord(args)?.command;
+  const command = typeof given === 'string' ? given : null;
+  if (command === null || isCompoundCommand(command)) return null;
+  const [first, second] = command.trim().split(/\s+/);
+  if (!first) return null;
+  // A subcommand is a plain word (`status`, `run`), not an option, a path or a value.
+  const sub = second && /^[A-Za-z][A-Za-z0-9:_-]*$/.test(second) ? ` ${second}` : '';
+  return { tool, args: { command: `${first}${sub}*` } };
+}
+
+/** Whether the card offers "Approve and always allow this": not for what a built-in or an ask rule, or the agent's own code, asked. */
+export function canAlwaysAllow(approval: { source?: string }): boolean {
+  return (
+    approval.source !== 'builtin' && approval.source !== 'rule' && approval.source !== 'author'
+  );
 }
 
 // ── A request as the conversation shows it ──────────────────────────────────────────────────

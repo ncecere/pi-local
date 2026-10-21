@@ -262,17 +262,27 @@ across restarts of the app) until you approve or deny it, or it times out (denie
     folder: string;   // a project folder (absolute); "": its own private workspace
     dir: string;      // read-only: the folder it works in (the project folder, or …/agents/<id>/workspace)
   };
-  approvals: { tools: string[]; timeoutSeconds: number };          // tool names or patterns with *; 60 s – 30 days
+  approvals: {
+    profile: "careful" | "balanced" | "trusting" | "custom";       // v0.3; an agent without one is "custom"
+    tools: string[];                                               // custom only: tool names or patterns with *
+    rules: ApprovalRule[];                                         // v0.3: see "Approval rules and profiles"
+    builtinRules: ApprovalRule[];                                  // v0.3, read-only: ask under every profile
+    timeoutSeconds: number;                                        // 60 s – 30 days
+  };
   pendingApprovals: number;                                        // waiting for you now
 ```
 
-`PATCH /api/agents/{id}` takes `workspace?` (`{tools, folder?}`; `dir` is ignored) and `approvals?`. Send the whole
-workspace: `tools` left out is no tools, `folder` left out is its own folder. `folder` must be an absolute path (a
+`PATCH /api/agents/{id}` takes `workspace?` (`{tools, folder?}`; `dir` is ignored) and `approvals?`
+(`{profile?, tools?, rules?, timeoutSeconds?}`: `tools` and `timeoutSeconds` replace what is there, so send both;
+`profile` and `rules` left out keep what the agent has, so a client that doesn't know them doesn't lose them).
+Send the whole workspace: `tools` left out is no tools, `folder` left out is its own folder. `folder` must be an absolute path (a
 leading `~/` is expanded) to an existing folder, and not `/`, `/Users`, `/System` or the home folder itself; otherwise
 `400 invalid_workspace_folder` with a message to show. Errors: `invalid_workspace_tools`,
-`invalid_approval_tools` (at most 100 patterns of 1–200 of `[A-Za-z0-9_.*-]`), `invalid_approval_timeout`.
+`invalid_approval_tools` (at most 100 patterns of 1–200 of `[A-Za-z0-9_.*-]`), `invalid_approval_timeout`,
+`invalid_approval_profile`, `invalid_approval_rules`.
 
-The UI offers three presets for an agent with tools (it may also edit the list):
+Before v0.3 `approvals.tools` was all there was; that is now the **custom** profile (below), and the UI offers these
+presets for the list under it (it may also edit the list):
 - **Ask first**: approvals `["bash", "write", "edit"]` (the default when tools are turned on)
 - **Ask for commands**: approvals `["bash"]`
 - **Don't ask**: no approvals for its workspace tools (show a warning: the agent can then change files and run
@@ -285,7 +295,7 @@ type Approval = {
   threadId: string | null;
   tool: string;
   arguments: unknown;         // a redacted, bounded view of the call's arguments
-  summary: string | null;     // why it asks, when the agent's code says
+  summary: string | null;     // why it asks: a built-in rule, one of your rules, fast judgments, or the agent's code
   status: "pending" | "approved" | "denied" | "timed_out" | "cancelled";
   requestedAt: number;        // Unix ms
   expiresAt: number;
@@ -302,6 +312,83 @@ type Approval = {
 
 Live events: `event: approval`, `data: {agentId, approval: Approval}` whenever one is asked or changes. In a
 thread's view, `ChatView.approvals` lists its pending requests and a tool call carries `approval` (runtime view.ts).
+A view's `ChatApproval` has `source`: what made the call ask, one of `builtin`, `rule` (an ask rule), `profile`,
+`tools` (the custom list), `judge` (fast judgments) or `author` (an agent's own code). Its `summary` says why for
+`builtin`, `rule` and `judge`.
+
+### Approval rules and profiles (v0.3)
+
+Which calls ask, run or are refused is the agent's **approval policy**: a profile, the person's rules, and rules built
+into the app. Nothing here changes how a decision is made or delivered (above).
+
+```ts
+type ApprovalRule = {
+  id: string;                          // "r_…" (built-in: "builtin-…"); stable, used to remove it
+  tool: string;                        // a tool name, or a pattern with * (1–200 of [A-Za-z0-9_.*-])
+  args?: Record<string, string>;       // each argument's glob; all must match (≤ 10, 1–500 characters each)
+  action: "allow" | "ask" | "deny";
+};
+```
+
+`args` globs match the argument's string value (a number or boolean as written, anything else as its JSON); `*` is any
+characters, everything else is literal and case-sensitive: `{command: "git status*"}`. An argument the call doesn't
+have doesn't match. Two guards keep a glob from being walked around:
+- For `bash`'s `command`, an **allow** rule only matches a *simple* command: one with no `;`, `&`, `|`, backticks,
+  `$(…)`, line breaks or redirects (`2>&1` and `>/dev/null` don't count). `git status && rm -rf ~` is not `git
+  status*`. An **ask** or **deny** rule matches the whole command or any part of a compound one.
+- An allow rule doesn't match an argument with a `..` path segment.
+
+**Order, for each call:**
+1. `rules`, in order: the first that matches decides. `deny` refuses the call without asking: the model reads *"Tool
+   call blocked: Not allowed by your approval rules"*.
+2. The built-in rules: a match asks, whatever the rule above says (an allow rule can't loosen them; a deny stands).
+3. That first rule's `ask` or `allow`.
+4. The profile.
+5. Otherwise the call runs.
+
+**Profiles** (`approvals.profile`; new agents are `balanced`; an agent whose `agent.yaml` has only `approvals.tools`
+has no `profile` key and is `custom`, behaving as before):
+
+| Profile | Asks before |
+|---|---|
+| `careful` | every tool that can change something: `write`, `edit`, `bash`, `schedule`, `cancel_schedule`, and MCP tools not marked read-only (`notify_person`, memory, web and read tools don't) |
+| `balanced` | `bash`; MCP tools marked destructive, and MCP tools not marked read-only whose name has a word like `delete`, `remove`, `send`, `update`, `create`, `write` or `post` |
+| `trusting` | nothing (but the built-in rules) |
+| `custom` | the tools in `approvals.tools` (names or patterns), as before profiles |
+
+MCP tools' `readOnlyHint` and `destructiveHint` annotations come from the last test of the server (Settings → MCP:
+test it again to pick them up; `McpTool.annotations`); a tool without them is judged by its name. `tools` is only read
+under `custom`; the other profiles keep it in `agent.yaml` but ignore it.
+
+**Built-in rules** (`approvals.builtinRules`, same for every agent and profile, `ask`, can't be removed): `bash`
+commands matching `rm -rf*`, `sudo *`, `git push --force*`, `* | sh`, `curl * | *sh`.
+
+| Route | Answer |
+|---|---|
+| `GET /api/agents/{a}/approval-rules` | `{profile, rules: ApprovalRule[], builtinRules: ApprovalRule[]}`. |
+| `POST /api/agents/{a}/approval-rules` | Body `{tool, args?, action?}` (`action` default `allow`): appends a rule (so earlier rules keep priority); this is the approval card's **Approve and always allow this**. `201 {rule, rules}`; `200` with the existing rule when the same one is there. `400 invalid_approval_rules` with a message. |
+| `DELETE /api/agents/{a}/approval-rules/{id}` | Removes a rule: `{rules}`. `404 rule_not_found`. Built-in rules can't be removed (they're not in `rules`). |
+
+The whole list can also be set with `PATCH /api/agents/{a}` `approvals.rules`. Rules and the profile reach a running
+agent at once, **without restarting it** (the app tells its runtime, `POST /approvals/policy`); a change to anything
+else about an agent still restarts it. Rules written by hand in `agent.yaml` get an ID (the same each time it is read).
+Templates carry the profile and tools but never rules.
+
+**Approve and always allow this.** The approval card offers it unless the request came from a `builtin` or `rule` ask
+or an agent's own code (`source`). It adds the rule, then approves: for `bash` the command's first word and subcommand
+(`git status --short` → `{tool: "bash", args: {command: "git status*"}}`; `ls -la` → `ls*`), for any other tool the
+tool alone. It isn't offered for a compound command (an allow rule would never match it).
+
+**Fast-judgment tightening.** With fast judgments on and the `approvals` use switched on (Settings → Models), a call
+the rules and profile would let run is judged — "could this cause harm or be hard to undo?", a yes at or above the
+confidence threshold — and then asks, with the summary *"Asked because fast judgments thought it could be risky."*
+(`source: "judge"`). It only ever tightens: an `ask` or `deny` stays, a failed or slow judgment (more than 5 s) changes
+nothing, and a call the person's own **allow rule** let through is not judged. Only calls that can change something are
+judged (`write`, `edit`, `bash`, the schedule tools, MCP tools not marked read-only). The service sees the tool's name
+and the redacted view of its arguments.
+
+Runtime → app: `POST /judge/approval` on the gateway, body `{tool, arguments}` (redacted), answers `{risky: boolean}`
+(`false` when the use is off or the judgment fails).
 
 ### Attachments
 
@@ -337,7 +424,7 @@ values or an OAuth sign-in. Env and header values and OAuth tokens are kept in t
 An agent's tools from a server are named `mcp__<slug>__<tool>`.
 
 ```ts
-type McpTool = { name: string; title: string | null; description: string | null; modelVisible: boolean };
+type McpTool = { name: string; title: string | null; description: string | null; modelVisible: boolean; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean } };
 type McpServer = {
   slug: string;                 // 1–32 of [a-z0-9_] (no leading/trailing _): the tool prefix
   name: string;                 // 1–60 chars
@@ -581,7 +668,7 @@ type Template = {
   kind: "assistant" | "researcher" | "coding" | string;   // the runtime kind its agents get
   instructions: string;
   workspace?: { tools: string[] };
-  approvals?: { tools: string[]; timeoutSeconds: number };
+  approvals?: { profile?: string; tools: string[]; timeoutSeconds: number };
   web?: { search: boolean; fetch: boolean };              // left out: both on
   schedules?: { agentMade: boolean };                     // may set its own schedules
   schedule?: { name: string; cron: string; message: string; threadMode?: "new" | "this" };  // made with the agent
@@ -696,7 +783,7 @@ In conversations, agents have three tools:
 
 Optional and off by default: quick, typed decisions by a System One model (TypeSafe's Jev, or a self-hosted service
 speaking its API). The text being judged is sent to that service. Its key lives in the OS keychain and is never
-returned. Each use has its own switch; only `agentRouting` and `toolPreselection` do anything yet.
+returned. Each use has its own switch; `agentRouting`, `toolPreselection` and `approvals` (v0.3: see [Approval rules and profiles](#approval-rules-and-profiles-v03)) do something so far.
 
 ```ts
 type JudgmentSettings = {

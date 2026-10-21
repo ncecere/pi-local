@@ -262,10 +262,25 @@ describe('new agent dialog: the templates gallery', () => {
   it('describes each template in chips', () => {
     expect(templateChips(CODING)).toEqual(['Web', 'Files', 'Runs commands (asks first)']);
     expect(templateChips(PLANNER)).toEqual(['Web', 'Sets its own reminders']);
+    // A template that says nothing about approvals gives the balanced profile, which asks before commands.
     expect(templateChips({ ...MINE, workspace: { tools: ['bash'] } })).toEqual([
       'Web',
-      'Runs commands',
+      'Runs commands (asks first)',
     ]);
+    expect(
+      templateChips({
+        ...MINE,
+        workspace: { tools: ['bash'] },
+        approvals: { profile: 'trusting', tools: [], timeoutSeconds: 86400 },
+      }),
+    ).toEqual(['Web', 'Runs commands']);
+    expect(
+      templateChips({
+        ...MINE,
+        workspace: { tools: ['bash'] },
+        approvals: { tools: ['write'], timeoutSeconds: 86400 },
+      }),
+    ).toEqual(['Web', 'Runs commands']);
     expect(templateChips({ ...MINE, web: { search: false, fetch: false } })).toEqual([]);
     expect(shortSchedule('0 8 * * *')).toBe('daily 8:00');
     expect(shortSchedule('0 9 * * 1')).toBe('every Monday at 9:00');

@@ -212,7 +212,7 @@ export interface AgentTemplate {
   kind: string;
   instructions: string;
   workspace?: { tools: string[] };
-  approvals?: { tools: string[]; timeoutSeconds: number };
+  approvals?: { profile?: ApprovalProfile; tools: string[]; timeoutSeconds: number };
   web?: WebTools;
   /** Whether its agents may set their own schedules. */
   schedules?: { agentMade: boolean };
@@ -275,11 +275,30 @@ export interface AgentWorkspaceInput {
   folder?: string;
 }
 
+/** How much an agent asks: see docs/api.md, "Approval rules and profiles". An agent with none is `custom`. */
+export type ApprovalProfile = 'careful' | 'balanced' | 'trusting' | 'custom';
+
+/** A rule: the first that matches a call decides. `args` are globs (`*`: any characters) that must all match. */
+export interface ApprovalRule {
+  /** "r_…" (built in: "builtin-…"). */
+  id: string;
+  /** A tool name, or a pattern with `*`. */
+  tool: string;
+  args?: Record<string, string>;
+  action: 'allow' | 'ask' | 'deny';
+}
+
 export interface AgentApprovals {
-  /** Tool names or patterns with `*` (at most 100 of 1–200 of [A-Za-z0-9_.*-]). */
+  /** Tool names or patterns with `*` (at most 100 of 1–200 of [A-Za-z0-9_.*-]); read under `custom` only. */
   tools: string[];
   /** How long a request waits before it is denied: 60 s – 30 days. */
   timeoutSeconds: number;
+  /** v0.3. Left out of a save: the agent keeps its own. */
+  profile?: ApprovalProfile;
+  /** v0.3, read-only here: added and removed through the approval-rules routes. */
+  rules?: ApprovalRule[];
+  /** v0.3, read-only: they ask under every profile and can't be removed. */
+  builtinRules?: ApprovalRule[];
 }
 
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'timed_out' | 'cancelled';
@@ -972,6 +991,8 @@ export type ChatApproval = {
   requestedAt: number;
   expiresAt?: number;
   summary?: string;
+  /** What made it ask: `builtin` or `rule` (approval rules), `profile`, `tools`, `judge` (fast judgments), `author`. */
+  source?: string;
   requestedFor?: Author;
   decidedAt?: number;
   decidedBy?: { kind: 'user' | 'service_account' | 'system'; id?: string; name: string };

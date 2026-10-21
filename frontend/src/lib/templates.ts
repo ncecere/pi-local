@@ -62,6 +62,17 @@ function asksFirst(tool: string, patterns: readonly string[]): boolean {
   });
 }
 
+/**
+ * Whether commands ask first for an agent made from the template: by its profile (careful and balanced ask,
+ * trusting doesn't), by its tools list (custom), and a template that says nothing gives the balanced profile.
+ */
+function bashAsks(approvals: AgentTemplate['approvals']): boolean {
+  const tools = approvals?.tools ?? [];
+  const profile = approvals?.profile ?? (tools.length > 0 ? 'custom' : 'balanced');
+  if (profile === 'custom') return asksFirst('bash', tools);
+  return profile !== 'trusting';
+}
+
 /** What an agent made from the template gets, in a few words each. */
 export function templateChips(template: AgentTemplate): string[] {
   const chips: string[] = [];
@@ -71,11 +82,7 @@ export function templateChips(template: AgentTemplate): string[] {
   if (tools.some((tool) => tool === 'read' || tool === 'write' || tool === 'edit'))
     chips.push('Files');
   if (tools.includes('bash'))
-    chips.push(
-      asksFirst('bash', template.approvals?.tools ?? [])
-        ? 'Runs commands (asks first)'
-        : 'Runs commands',
-    );
+    chips.push(bashAsks(template.approvals) ? 'Runs commands (asks first)' : 'Runs commands');
   if (template.schedule) chips.push(`Schedule: ${shortSchedule(template.schedule.cron)}`);
   if (template.schedules?.agentMade) chips.push('Sets its own reminders');
   if ((template.mcp?.length ?? 0) > 0) chips.push('Uses your connected apps');

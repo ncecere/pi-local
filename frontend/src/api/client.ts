@@ -23,6 +23,8 @@ export type {
   AgentWorkspaceInput,
   Approval,
   ApprovalEvent,
+  ApprovalProfile,
+  ApprovalRule,
   ApprovalStatus,
   Attachment,
   Basics,

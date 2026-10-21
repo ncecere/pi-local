@@ -1,10 +1,12 @@
 import { Link } from '@tanstack/react-router';
-import { ChevronRight, FolderOpen, TriangleAlert } from 'lucide-react';
+import { ChevronRight, FolderOpen, Lock, Trash2, TriangleAlert } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type Agent,
   ApiError,
+  type ApprovalProfile,
+  type ApprovalRule,
   errorMessage,
   type WebTools,
   type WorkspaceTool,
@@ -16,25 +18,29 @@ import { Button } from '~/components/ui/button';
 import { Switch } from '~/components/ui/switch';
 import { useReveal } from '~/hooks/use-agent-manager';
 import { useUpdateAgent } from '~/hooks/use-agents';
+import { useRemoveApprovalRule } from '~/hooks/use-approvals';
 import { useMcpServers } from '~/hooks/use-mcp';
 import { useWebSearchReady } from '~/hooks/use-web';
 import {
   APPROVAL_PRESETS,
+  actionLabel,
   applyPreset,
   approvalPatternsError,
   DEFAULT_PRESET,
+  describeRule,
   formatTimeout,
   MAX_TIMEOUT_SECONDS,
   MIN_TIMEOUT_SECONDS,
   minutesToTimeout,
-  needsApproval,
   normaliseTools,
+  PROFILE_OPTIONS,
   type PresetId,
   presetOf,
   readToolSettings,
   TIMEOUT_CHOICES,
   type TimeoutChoice,
   timeoutChoiceOf,
+  unguardedTools,
   WORKSPACE_TOOLS,
 } from '~/lib/approvals';
 import { formatToolList, parseToolList } from '~/lib/kind-settings';
@@ -123,12 +129,14 @@ function ToolsForm({
   const initial = {
     folder: savedFolder,
     tools: saved.tools,
+    profile: saved.approvals.profile,
     patterns: formatToolList(saved.approvals.tools),
     timeoutChoice: initialChoice,
     minutes: String(Math.round(saved.approvals.timeoutSeconds / 60)),
   };
   const [form, setForm] = useState(initial);
   const advanced = advancedOpen ?? presetOf(saved.approvals.tools) === 'custom';
+  const custom = form.profile === 'custom';
   // The person chose an approvals option here: turning tools on leaves it alone.
   const [presetChosen, setPresetChosen] = useState(false);
   const update = useUpdateAgent();
@@ -141,16 +149,23 @@ function ToolsForm({
     form.timeoutChoice === 'custom'
       ? minutesToTimeout(form.minutes)
       : (TIMEOUT_CHOICES.find((choice) => choice.id === form.timeoutChoice)?.seconds ?? null);
-  const valid = patternsError === null && timeoutSeconds !== null;
+  const valid = (!custom || patternsError === null) && timeoutSeconds !== null;
 
   const next = {
     // The whole workspace: a `workspace` without `tools` would leave it none.
     workspace: { tools: normaliseTools(form.tools), folder: form.folder.trim() },
-    approvals: { tools: patterns, timeoutSeconds: timeoutSeconds ?? 0 },
+    // No `rules`: they are added and removed on their own, and a save leaves them as they are.
+    approvals: {
+      // Only a profile the person chose: an agent without one stays as it is.
+      ...(form.profile !== saved.approvals.profile ? { profile: form.profile } : {}),
+      tools: patterns,
+      timeoutSeconds: timeoutSeconds ?? 0,
+    },
   };
   const dirty =
     next.workspace.folder !== savedFolder ||
     JSON.stringify(next.workspace.tools) !== JSON.stringify(saved.tools) ||
+    form.profile !== saved.approvals.profile ||
     JSON.stringify(patterns) !== JSON.stringify(saved.approvals.tools) ||
     (timeoutSeconds !== null && timeoutSeconds !== saved.approvals.timeoutSeconds);
 
@@ -167,14 +182,16 @@ function ToolsForm({
     setForm({
       ...form,
       tools,
-      patterns: preselectsAskFirst({
-        on,
-        preset,
-        presetChosen,
-        savedApprovals: saved.approvals.tools,
-      })
-        ? formatToolList(applyPreset(patterns, DEFAULT_PRESET))
-        : form.patterns,
+      patterns:
+        custom &&
+        preselectsAskFirst({
+          on,
+          preset,
+          presetChosen,
+          savedApprovals: saved.approvals.tools,
+        })
+          ? formatToolList(applyPreset(patterns, DEFAULT_PRESET))
+          : form.patterns,
     });
   };
   const choosePreset = (choice: PresetId) => {
@@ -183,7 +200,7 @@ function ToolsForm({
   };
 
   // Tools that change things or run commands without asking.
-  const unguarded = form.tools.filter((tool) => tool !== 'read' && !needsApproval(tool, patterns));
+  const unguarded = unguardedTools(form.profile, normaliseTools(form.tools), patterns);
   const noTools = form.tools.length === 0;
 
   const save = () => saveAgentChange(agent, () => update.mutateAsync({ id: agent.id, ...next }));
@@ -303,21 +320,16 @@ function ToolsForm({
       >
         <div className="flex flex-col gap-5">
           <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
-            <legend className="mb-2 text-sm font-medium">Before it uses its workspace tools</legend>
-            {noTools && (
-              <p className="mb-1 text-xs text-[var(--text-muted)]">
-                It has no workspace tools now; this applies once you turn some on.
-              </p>
-            )}
-            {APPROVAL_PRESETS.map((option) => {
-              const inputId = `${id}-preset-${option.id}`;
+            <legend className="mb-2 text-sm font-medium">How careful it is</legend>
+            {PROFILE_OPTIONS.map((option) => {
+              const inputId = `${id}-profile-${option.id}`;
               return (
                 <label
                   key={option.id}
                   htmlFor={inputId}
                   className={cn(
                     'flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
-                    preset === option.id
+                    form.profile === option.id
                       ? 'border-[var(--border-strong)] bg-[var(--bg-control)]'
                       : 'border-[var(--border-subtle)] hover:bg-[var(--bg-control)]/60',
                   )}
@@ -325,16 +337,16 @@ function ToolsForm({
                   <input
                     id={inputId}
                     type="radio"
-                    name={`${id}-preset`}
-                    checked={preset === option.id}
-                    onChange={() => choosePreset(option.id)}
+                    name={`${id}-profile`}
+                    checked={form.profile === option.id}
+                    onChange={() => setForm({ ...form, profile: option.id as ApprovalProfile })}
                     aria-describedby={`${inputId}-hint`}
                     className="mt-0.5 size-4 shrink-0 accent-[var(--accent)]"
                   />
                   <span className="min-w-0">
                     <span className="text-sm font-medium">
                       {option.label}
-                      {option.id === DEFAULT_PRESET && (
+                      {option.id === 'balanced' && (
                         <span className="font-normal text-[var(--text-muted)]"> (recommended)</span>
                       )}
                     </span>
@@ -348,13 +360,68 @@ function ToolsForm({
                 </label>
               );
             })}
-            {preset === 'custom' && (
-              <p className="rounded-lg border border-[var(--border-subtle)] px-3 py-2.5 text-xs text-[var(--text-muted)]">
-                <span className="font-medium text-[var(--text-secondary)]">Custom:</span> the list
-                below decides which workspace tools ask. Choose an option above to replace it.
-              </p>
-            )}
           </fieldset>
+
+          {custom && (
+            <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+              <legend className="mb-2 text-sm font-medium">
+                Before it uses its workspace tools
+              </legend>
+              {noTools && (
+                <p className="mb-1 text-xs text-[var(--text-muted)]">
+                  It has no workspace tools now; this applies once you turn some on.
+                </p>
+              )}
+              {APPROVAL_PRESETS.map((option) => {
+                const inputId = `${id}-preset-${option.id}`;
+                return (
+                  <label
+                    key={option.id}
+                    htmlFor={inputId}
+                    className={cn(
+                      'flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
+                      preset === option.id
+                        ? 'border-[var(--border-strong)] bg-[var(--bg-control)]'
+                        : 'border-[var(--border-subtle)] hover:bg-[var(--bg-control)]/60',
+                    )}
+                  >
+                    <input
+                      id={inputId}
+                      type="radio"
+                      name={`${id}-preset`}
+                      checked={preset === option.id}
+                      onChange={() => choosePreset(option.id)}
+                      aria-describedby={`${inputId}-hint`}
+                      className="mt-0.5 size-4 shrink-0 accent-[var(--accent)]"
+                    />
+                    <span className="min-w-0">
+                      <span className="text-sm font-medium">
+                        {option.label}
+                        {option.id === DEFAULT_PRESET && (
+                          <span className="font-normal text-[var(--text-muted)]">
+                            {' '}
+                            (recommended)
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        id={`${inputId}-hint`}
+                        className="mt-0.5 block text-xs text-[var(--text-muted)]"
+                      >
+                        {option.description}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+              {preset === 'custom' && (
+                <p className="rounded-lg border border-[var(--border-subtle)] px-3 py-2.5 text-xs text-[var(--text-muted)]">
+                  <span className="font-medium text-[var(--text-secondary)]">Custom:</span> the list
+                  below decides which workspace tools ask. Choose an option above to replace it.
+                </p>
+              )}
+            </fieldset>
+          )}
 
           {unguarded.length > 0 && (
             <div
@@ -376,59 +443,61 @@ function ToolsForm({
             </div>
           )}
 
-          <div>
-            <button
-              type="button"
-              aria-expanded={advanced}
-              aria-controls={`${id}-advanced`}
-              onClick={() => onAdvancedOpen(!advanced)}
-              className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            >
-              <ChevronRight
-                className={cn('size-4 transition-transform', advanced && 'rotate-90')}
-                aria-hidden="true"
-              />
-              Advanced: every tool that asks first
-            </button>
-            {advanced && (
-              <div id={`${id}-advanced`} className="mt-3 flex flex-col gap-1.5">
-                <label htmlFor={`${id}-patterns`} className="text-sm font-medium">
-                  Tools that ask first
-                </label>
-                <textarea
-                  id={`${id}-patterns`}
-                  rows={5}
-                  value={form.patterns}
-                  onChange={(event) => setForm({ ...form, patterns: event.target.value })}
-                  placeholder={'e.g. bash\nwrite\nedit\nmcp__github__create_*'}
-                  spellCheck={false}
-                  aria-invalid={Boolean(patternsError || fieldError('patterns')) || undefined}
-                  aria-describedby={`${id}-patterns-hint`}
-                  className={cn(
-                    FIELD,
-                    'h-auto min-h-28 resize-y py-2 font-mono text-xs placeholder:text-[var(--text-muted)] placeholder:opacity-70',
-                  )}
+          {custom && (
+            <div>
+              <button
+                type="button"
+                aria-expanded={advanced}
+                aria-controls={`${id}-advanced`}
+                onClick={() => onAdvancedOpen(!advanced)}
+                className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              >
+                <ChevronRight
+                  className={cn('size-4 transition-transform', advanced && 'rotate-90')}
+                  aria-hidden="true"
                 />
-                <p id={`${id}-patterns-hint`} className="text-xs text-[var(--text-muted)]">
-                  {patternsError ?? (
-                    <>
-                      One tool name per line; <span className="font-mono">*</span> matches any
-                      characters (<span className="font-mono">mcp__github__create_*</span>). Up to
-                      100.
-                    </>
-                  )}
-                </p>
-                {fieldError('patterns') && <ErrorNotice>{fieldError('patterns')}</ErrorNotice>}
-                <McpToolAdder
-                  agent={agent}
-                  present={patterns}
-                  onAdd={(name) =>
-                    setForm({ ...form, patterns: formatToolList([...patterns, name]) })
-                  }
-                />
-              </div>
-            )}
-          </div>
+                Advanced: every tool that asks first
+              </button>
+              {advanced && (
+                <div id={`${id}-advanced`} className="mt-3 flex flex-col gap-1.5">
+                  <label htmlFor={`${id}-patterns`} className="text-sm font-medium">
+                    Tools that ask first
+                  </label>
+                  <textarea
+                    id={`${id}-patterns`}
+                    rows={5}
+                    value={form.patterns}
+                    onChange={(event) => setForm({ ...form, patterns: event.target.value })}
+                    placeholder={'e.g. bash\nwrite\nedit\nmcp__github__create_*'}
+                    spellCheck={false}
+                    aria-invalid={Boolean(patternsError || fieldError('patterns')) || undefined}
+                    aria-describedby={`${id}-patterns-hint`}
+                    className={cn(
+                      FIELD,
+                      'h-auto min-h-28 resize-y py-2 font-mono text-xs placeholder:text-[var(--text-muted)] placeholder:opacity-70',
+                    )}
+                  />
+                  <p id={`${id}-patterns-hint`} className="text-xs text-[var(--text-muted)]">
+                    {patternsError ?? (
+                      <>
+                        One tool name per line; <span className="font-mono">*</span> matches any
+                        characters (<span className="font-mono">mcp__github__create_*</span>). Up to
+                        100.
+                      </>
+                    )}
+                  </p>
+                  {fieldError('patterns') && <ErrorNotice>{fieldError('patterns')}</ErrorNotice>}
+                  <McpToolAdder
+                    agent={agent}
+                    present={patterns}
+                    onAdd={(name) =>
+                      setForm({ ...form, patterns: formatToolList([...patterns, name]) })
+                    }
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           <TimeoutField
             id={`${id}-timeout`}
@@ -453,6 +522,8 @@ function ToolsForm({
           />
         </div>
       </Panel>
+
+      <ApprovalRulesPanel agent={agent} />
     </div>
   );
 }
@@ -684,5 +755,93 @@ function TimeoutField({
       )}
       {serverError && <ErrorNotice>{serverError}</ErrorNotice>}
     </fieldset>
+  );
+}
+
+/**
+ * The agent's approval rules: the built-in ones (they ask under every profile
+ * and can't be removed), then the ones added with "Approve and always allow
+ * this", each removable. A removal is saved at once and reaches the running
+ * agent without a restart.
+ */
+function ApprovalRulesPanel({ agent }: { agent: Agent }) {
+  const remove = useRemoveApprovalRule();
+  const { rules, builtinRules } = readToolSettings(agent).approvals;
+  const ruleRow = (rule: ApprovalRule, locked: boolean) => (
+    <li
+      key={rule.id}
+      data-approval-rule={rule.id}
+      className="flex items-center gap-3 rounded-lg border border-[var(--border-subtle)] px-3 py-2"
+    >
+      <span
+        className={cn(
+          'w-12 shrink-0 rounded-full px-2 py-0.5 text-center text-xs font-medium',
+          rule.action === 'allow' && 'bg-[var(--success)]/15 text-[var(--success)]',
+          rule.action === 'ask' && 'bg-[var(--warning)]/15 text-[var(--warning)]',
+          rule.action === 'deny' && 'bg-[var(--danger)]/15 text-[var(--danger-on-tint)]',
+        )}
+      >
+        {actionLabel(rule.action)}
+      </span>
+      <code className="min-w-0 flex-1 break-all font-mono text-xs text-[var(--text-primary)]">
+        {describeRule(rule)}
+      </code>
+      {locked ? (
+        <span className="inline-flex shrink-0 items-center gap-1 text-xs text-[var(--text-muted)]">
+          <Lock className="size-3" aria-hidden="true" />
+          Built in
+        </span>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-label={`Remove the rule: ${actionLabel(rule.action)} ${describeRule(rule)}`}
+          disabled={remove.isPending}
+          onClick={() =>
+            remove.mutate(
+              { agentId: agent.id, ruleId: rule.id },
+              {
+                onSuccess: () => toast('Rule removed.'),
+              },
+            )
+          }
+        >
+          <Trash2 />
+          Remove
+        </Button>
+      )}
+    </li>
+  );
+  return (
+    <Panel
+      title="Approval rules"
+      description="The first rule that matches a call decides, before the profile above. Built-in rules always ask, whatever your rules say."
+    >
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <h3 className="text-sm font-medium">Your rules</h3>
+          {rules.length === 0 ? (
+            <p className="text-xs text-[var(--text-muted)]">
+              No rules yet. When it asks to run something, choose “Approve and always allow this” to
+              add one.
+            </p>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+              {rules.map((rule) => ruleRow(rule, false))}
+            </ul>
+          )}
+          {remove.error && <ErrorNotice>{errorMessage(remove.error)}</ErrorNotice>}
+        </div>
+        {builtinRules.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <h3 className="text-sm font-medium">Built in</h3>
+            <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+              {builtinRules.map((rule) => ruleRow(rule, true))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </Panel>
   );
 }
