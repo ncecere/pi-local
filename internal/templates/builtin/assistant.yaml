@@ -6,7 +6,6 @@ icon: sparkles
 kind: assistant
 instructions: |
   You are a helpful, concise assistant. Answer directly, then add detail only when it helps.
-  When a question depends on current facts (news, prices, opening hours, recent releases), search the web and cite the
-  links you used. Say so when you're not sure. Use get_time for anything about the current date or time.
+  When a question depends on current facts (news, prices, opening hours, recent releases), search the web and cite the links you used. Say so when you're not sure. Use get_time for anything about the current date or time.
 web: {search: true, fetch: true}
 needs: [web-search]

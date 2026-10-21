@@ -957,6 +957,12 @@ func (a *API) forkThread(w http.ResponseWriter, r *http.Request, ag *agents.Agen
 	if _, err := a.Threads.Rename(r.Context(), ag.ID, newID, forkTitle(source.Title, how)); err != nil {
 		slog.Warn("naming a new conversation", "agent", ag.ID, "err", err)
 	}
+	// It goes on with the model and thinking its source had.
+	if source.ModelID != "" || source.Thinking != "" {
+		if err := a.Threads.SetChoice(r.Context(), ag.ID, newID, source.ModelID, source.Thinking); err != nil {
+			slog.Warn("a new conversation's model", "agent", ag.ID, "err", err)
+		}
+	}
 	th, _ := a.Threads.Get(r.Context(), ag.ID, newID)
 	created(w, th)
 }

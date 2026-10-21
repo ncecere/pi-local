@@ -1,6 +1,8 @@
 package app
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -90,4 +92,33 @@ func TestFirstRunWithAKeyedProvider(t *testing.T) {
 	}
 	h.mustDo("POST", "/api/providers/setup", map[string]any{"preset": "openrouter", "models": []string{"nope"}}, 400)
 	h.mustDo("POST", "/api/providers/setup", map[string]any{"preset": "nonsense"}, 400)
+}
+
+// OpenRouter's model list is public: a wrong key is caught by an endpoint that needs one.
+func TestFirstRunChecksAKeyAModelListDoesNot(t *testing.T) {
+	h := start(t, t.TempDir(), Config{})
+	defer h.close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Write([]byte(`{"data":[{"id":"big-1"}]}`))
+		case "/v1/key":
+			if r.Header.Get("Authorization") != "Bearer sk-or-good" {
+				w.WriteHeader(401)
+				return
+			}
+			w.Write([]byte(`{"data":{"label":"x"}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	h.app.Catalog.SetPresetURL("openrouter", srv.URL+"/v1")
+	if body := string(h.mustDo("POST", "/api/providers/setup", map[string]any{"preset": "openrouter", "apiKey": "sk-bogus"}, 400)); !strings.Contains(body, "didn't accept this key") {
+		t.Fatalf("a bogus key: %s", body)
+	}
+	if list := decodeInto[struct{ Providers []struct{ ID string } }](t, h.mustDo("GET", "/api/providers", nil, 200)); len(list.Providers) != 0 {
+		t.Fatalf("kept after a bogus key: %+v", list.Providers)
+	}
+	h.mustDo("POST", "/api/providers/setup", map[string]any{"preset": "openrouter", "apiKey": "sk-or-good"}, 200)
 }

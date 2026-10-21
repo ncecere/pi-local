@@ -714,6 +714,7 @@ type JudgmentSettings = {
 | `GET /api/settings/judgments` | `{settings: JudgmentSettings, uses: string[], defaultUrl, defaultModel}`. `uses`: agentRouting, toolPreselection, inbox, approvals, memory, knowledge, triggers. |
 | `PUT /api/settings/judgments` | Body `{enabled?, url?, model?, apiKey?, uses?: {name: boolean}, threshold?}`. `apiKey` left out keeps the stored key; `""` removes it. Answers `JudgmentSettings`. Errors: `400 invalid_key` ("Paste a TypeSafe API key…", turning it on at TypeSafe's address without a key), `invalid_url`, `invalid_model`, `invalid_threshold`, `invalid_use`. |
 | `GET /api/settings/judgments/models` | The service's models: `string[]`. `502 judge_failed` with a message. |
+| `POST /api/settings/judgments/models` | Body `{url?, apiKey?}`: the same list with values not saved yet (the settings form's); each falls back to the saved one when empty. Nothing is saved. |
 | `POST /api/settings/judgments/test` | One yes/no question with the saved settings: `{model, answer}`. `502 judge_failed` with a message for people. |
 | `POST /api/route` | Body `{text}`: which agent should take a message sent without one. `{agentId, decided: boolean, confidence, alternatives: [{agentId, probability}], model}`; `decided` only above the threshold. `409 off` when agent routing is off; `400 invalid_text`. |
 
@@ -729,7 +730,9 @@ the UI.
 
 Every agent has three tools for working with the person (subagents don't):
 
-- `ask_person` `{question, choices?: string[], yes_no?: boolean}` asks and waits up to 15 minutes. The question is an
+- `ask_person` `{question, choices?: string[], yes_no?: boolean}` asks and waits up to 15 minutes. Its result's
+  `details`: `{question, outcome: "answered" | "declined" | "expired" | "withdrawn", answer?: string | boolean}` (a yes/no
+  answered No is `answered` with `answer: false`). The question is an
   elicitation (`server: "agent"`, `serverName` the agent's name, `tool: "ask_person"`), answered like an MCP server's:
   the cards in the conversation, `POST /api/elicitations/{id}`. Choices are an `enum` field `answer`, yes/no a boolean
   `yes`, otherwise a text `answer`.

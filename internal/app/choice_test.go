@@ -43,6 +43,12 @@ func TestAConversationRunsOnTheModelThePersonChose(t *testing.T) {
 	if thread.ModelID != "two/strong" || thread.Thinking != "high" {
 		t.Fatalf("thread keeps the choice: %+v", thread)
 	}
+	// An edit or a branch goes on with it.
+	firstUser := lastUserMessageID(t, h, agent, "t1")
+	forked := decodeInto[struct{ ThreadID string }](t, h.mustDo("POST", "/api/agents/"+agent+"/threads/t1/fork", map[string]string{"afterMessageId": firstUser}, 201))
+	if th := decodeInto[struct{ ModelID, Thinking string }](t, h.mustDo("GET", "/api/agents/"+agent+"/threads/"+forked.ThreadID, nil, 200)); th.ModelID != "two/strong" || th.Thinking != "high" {
+		t.Fatalf("the branch's choice: %+v", th)
+	}
 	// A message that doesn't say keeps it.
 	h.sendAndWait(agent, "t1", "third", "r3")
 	if m := last().Model; m != "strong" {

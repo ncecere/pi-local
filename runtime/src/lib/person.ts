@@ -31,8 +31,8 @@ export type PersonOptions = {
 	fetch?: typeof fetch;
 };
 
-function text(value: string, isError = false) {
-	return { output: [{ type: "text" as const, text: value }], ...(isError ? { isError: true } : {}) };
+function text(value: string, isError = false, details?: { [key: string]: string | boolean }) {
+	return { output: [{ type: "text" as const, text: value }], ...(isError ? { isError: true } : {}), ...(details ? { details } : {}) };
 }
 
 const mark = (s: TodoItem["status"]) => (s === "done" ? "[x]" : s === "doing" ? "[~]" : "[ ]");
@@ -83,15 +83,31 @@ export function personExtension(options: PersonOptions): Extension {
 						ctx.abortSignal,
 						35_000,
 					);
-					if (!res.ok) return text(res.status === 404 ? "The question was withdrawn (the app restarted or the agent slept); ask again if you still need the answer." : res.message, true);
+					// The details say what happened, for the app's step ("Asked you: … · Answered "Morning"").
+					const question = args.question;
+					if (!res.ok) {
+						if (res.status === 404) {
+							return text("The question was withdrawn (the app restarted or the agent slept); ask again if you still need the answer.", true, { question, outcome: "withdrawn" });
+						}
+						return text(res.message, true);
+					}
 					if (!res.data.done) continue;
 					const { action, content } = res.data;
+					const yesNo = args.yes_no === true && !args.choices;
 					if (action === "accept") {
-						if (args.yes_no && !args.choices) return text(content?.yes === true ? "They answered: yes." : "They answered: no.");
-						return text(`They answered: ${String(content?.answer ?? "")}`);
+						if (yesNo) {
+							const yes = content?.yes === true;
+							return text(yes ? "They answered: yes." : "They answered: no.", false, { question, outcome: "answered", answer: yes });
+						}
+						const answer = String(content?.answer ?? "");
+						return text(`They answered: ${answer}`, false, { question, outcome: "answered", answer });
 					}
-					if (action === "decline") return text(args.yes_no ? "They answered: no." : "They declined to answer.");
-					return text("Nobody answered (the question expired or was dismissed). Carry on without it, or ask again later.");
+					if (action === "decline") {
+						return yesNo
+							? text("They answered: no.", false, { question, outcome: "answered", answer: false })
+							: text("They declined to answer.", false, { question, outcome: "declined" });
+					}
+					return text("Nobody answered (the question expired or was dismissed). Carry on without it, or ask again later.", false, { question, outcome: "expired" });
 				}
 			} finally {
 				ctx.abortSignal?.removeEventListener("abort", withdraw);
