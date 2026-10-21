@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { Check, ChevronDown, Plus, Search, Users } from 'lucide-react';
+import { Check, ChevronDown, Plus, Search, Sparkles, Users } from 'lucide-react';
 import { memo, useMemo, useRef, useState } from 'react';
 import type { Agent, Team } from '~/api/client';
 import { AgentAvatar, agentStatusLabel } from '~/components/agent/agent-avatar';
@@ -11,7 +11,10 @@ import { cn } from '~/lib/utils';
 /** One choice: an agent, or a team (a chat with its lead). */
 type Item =
   | { key: string; kind: 'agent'; agent: Agent }
-  | { key: string; kind: 'team'; team: Team; lead: Agent };
+  | { key: string; kind: 'team'; team: Team; lead: Agent }
+  | { key: string; kind: 'auto' };
+
+const AUTO_KEY = 'auto';
 
 const optionId = (key: string) => `agent-option-${key.replace(':', '-')}`;
 
@@ -21,7 +24,29 @@ function matches(values: readonly string[], query: string): boolean {
   return values.some((value) => value.toLowerCase().includes(q));
 }
 
-const itemAgent = (item: Item) => (item.kind === 'agent' ? item.agent : item.lead);
+const itemAgent = (item: Item): Agent | null =>
+  item.kind === 'agent' ? item.agent : item.kind === 'team' ? item.lead : null;
+
+/** Auto in the picker: fast judgments choose the agent for the message. */
+export interface AutoChoice {
+  selected: boolean;
+  onSelect: () => void;
+}
+
+/** The Auto icon, where an agent's avatar would be. */
+function AutoMark({ small = false }: { small?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'flex shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/15 text-[var(--accent-bright)]',
+        small ? 'size-5' : 'size-8',
+      )}
+    >
+      <Sparkles className={small ? 'size-3' : 'size-4'} />
+    </span>
+  );
+}
 
 /**
  * Chooses the agent a new conversation is with, or a team (a chat with its
@@ -38,6 +63,7 @@ export const AgentPicker = memo(function AgentPicker({
   onSelectTeam,
   loading = false,
   locked = false,
+  auto,
 }: {
   agents: Agent[];
   selected: Agent | null;
@@ -50,6 +76,8 @@ export const AgentPicker = memo(function AgentPicker({
   loading?: boolean;
   /** In a conversation: shows the agent, without choosing another. */
   locked?: boolean;
+  /** A new chat with agent routing on: "Auto" comes first. */
+  auto?: AutoChoice;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -69,17 +97,24 @@ export const AgentPicker = memo(function AgentPicker({
           return [{ key: `team:${team.id}`, kind: 'team', team, lead }];
         })
       : [];
+    const autoItems: Item[] =
+      auto && matches(['Auto', 'Pick the right agent'], query)
+        ? [{ key: AUTO_KEY, kind: 'auto' }]
+        : [];
     return [
+      { label: 'Auto', items: autoItems },
       { label: 'Your agents', items: agentItems },
       { label: 'Teams', items: teamItems },
     ].filter((group) => group.items.length > 0);
-  }, [agents, teams, byId, query, onSelectTeam]);
+  }, [agents, teams, byId, query, onSelectTeam, auto]);
   const visible = useMemo(() => groups.flatMap((group) => group.items), [groups]);
-  const selectedKey = selectedTeam
-    ? `team:${selectedTeam.id}`
-    : selected
-      ? `agent:${selected.id}`
-      : null;
+  const selectedKey = auto?.selected
+    ? AUTO_KEY
+    : selectedTeam
+      ? `team:${selectedTeam.id}`
+      : selected
+        ? `agent:${selected.id}`
+        : null;
   const active =
     visible.find((item) => item.key === activeKey) ??
     visible.find((item) => item.key === selectedKey) ??
@@ -87,7 +122,8 @@ export const AgentPicker = memo(function AgentPicker({
     null;
 
   function choose(item: Item) {
-    if (item.kind === 'team') onSelectTeam?.(item.team);
+    if (item.kind === 'auto') auto?.onSelect();
+    else if (item.kind === 'team') onSelectTeam?.(item.team);
     else onSelect(item.agent);
     setOpen(false);
   }
@@ -101,20 +137,22 @@ export const AgentPicker = memo(function AgentPicker({
     document.getElementById(optionId(next.key))?.scrollIntoView({ block: 'nearest' });
   }
 
-  const name = selected
-    ? selectedTeam
-      ? teamChatLabel(selectedTeam, selected)
-      : selected.name
-    : 'Choose an agent';
+  const name = auto?.selected
+    ? 'Auto'
+    : selected
+      ? selectedTeam
+        ? teamChatLabel(selectedTeam, selected)
+        : selected.name
+      : 'Choose an agent';
   const label = (
     <>
-      {selected && <AgentAvatar agent={selected} size="sm" />}
+      {auto?.selected ? <AutoMark small /> : selected && <AgentAvatar agent={selected} size="sm" />}
       <span className="min-w-0 truncate">{name}</span>
     </>
   );
 
   const hasTeams = Boolean(onSelectTeam) && teams.some((team) => byId.has(team.leadId));
-  if (locked || (agents.length <= 1 && selected && !hasTeams)) {
+  if (locked || (agents.length <= 1 && selected && !hasTeams && !auto)) {
     return (
       <span
         className="inline-flex h-8 min-w-0 items-center gap-1.5 whitespace-nowrap px-2 text-[0.8125rem] font-semibold text-[var(--text-primary)]"
@@ -145,8 +183,8 @@ export const AgentPicker = memo(function AgentPicker({
       <PopoverTrigger
         role="combobox"
         aria-haspopup="listbox"
-        aria-label={`Select agent. Current: ${selected ? name : 'none'}`}
-        title={selected ? name : undefined}
+        aria-label={`Select agent. Current: ${selected || auto?.selected ? name : 'none'}`}
+        title={selected || auto?.selected ? name : undefined}
         className="inline-flex h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-[0.8125rem] font-semibold text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-control-hover)]"
       >
         {label}
@@ -184,7 +222,7 @@ export const AgentPicker = memo(function AgentPicker({
                 moveActive(event.key === 'ArrowDown' ? 1 : -1);
               } else if (event.key === 'Enter' && active) {
                 event.preventDefault();
-                if (itemAgent(active).enabled) choose(active);
+                if (itemAgent(active)?.enabled !== false) choose(active);
               }
             }}
             className="h-9 w-full bg-transparent text-[0.9375rem] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
@@ -204,7 +242,7 @@ export const AgentPicker = memo(function AgentPicker({
             groups.map((group) => (
               // biome-ignore lint/a11y/useSemanticElements: a listbox's options are grouped with role="group" (WAI-ARIA), not a fieldset
               <div key={group.label} role="group" aria-label={group.label}>
-                {groups.length > 1 && (
+                {groups.length > 1 && group.label !== 'Auto' && (
                   <p
                     aria-hidden="true"
                     className="px-2.5 pt-2 pb-1 text-xs font-medium text-[var(--text-muted)]"
@@ -215,6 +253,36 @@ export const AgentPicker = memo(function AgentPicker({
                 {group.items.map((item) => {
                   const agent = itemAgent(item);
                   const isSelected = item.key === selectedKey;
+                  if (!agent)
+                    return (
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        key={item.key}
+                        id={optionId(item.key)}
+                        role="option"
+                        aria-selected={isSelected}
+                        onPointerMove={() => setActiveKey(item.key)}
+                        onClick={() => choose(item)}
+                        className={cn(
+                          'flex w-full cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 text-left',
+                          active?.key === item.key && 'bg-[var(--bg-control-hover)]',
+                        )}
+                      >
+                        <AutoMark />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-[var(--text-primary)]">
+                            Auto
+                          </span>
+                          <span className="line-clamp-2 text-xs text-[var(--text-muted)]">
+                            Picks the right agent for your message.
+                          </span>
+                        </span>
+                        {isSelected && (
+                          <Check className="mt-1 size-4 shrink-0 text-[var(--accent-bright)]" />
+                        )}
+                      </button>
+                    );
                   return (
                     <button
                       type="button"

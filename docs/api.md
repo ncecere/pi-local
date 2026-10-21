@@ -53,7 +53,7 @@ type Agent = {
 | `GET /api/agents` | `Agent[]`, newest first. Never starts a runtime. |
 | `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. `templates` are the New agent gallery's starting points, the same list as `GET /api/templates` (see [Templates](#templates-and-web-tools-v02)): the built-ins Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner and Coding, then the person's own. `triage` is retired: no longer offered, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
 | `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?, web?}` (`workspace`: see [Workspace tools](#workspace-tools-approvals-and-attachments-phase-4)). `templateId` is a template's ID: the agent starts from it (its kind, instructions, tools, approvals, web tools and first schedule), and the body's own fields win; an empty `instructions` keeps the template's. `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`, `invalid_workspace_folder`. A `coding` agent made without `workspace.tools` gets `["read", "write", "edit", "bash"]`. |
-| `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?}` (later phases add more). Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
+| `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?, memory?}` (later phases add more; `memory`: see [Memory](#memory-v02)). Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
 | `DELETE /api/agents/{id}` | Stops its runtime and moves its folder to the OS trash (or deletes it). Answers `{ok: true}`. |
 
 ## Threads
@@ -95,6 +95,9 @@ type AgentThread = {
   [MCP elicitation](#mcp-elicitation))
 - `event: update`, `data: UpdateStatus` when the update status changes: a check, or an install's stage (see
   [Updates](#updates))
+- `event: memory`, `data: {agentId}` when memory changes: `agentId` `""` is the person's (the About me card, facts,
+  suggestions), otherwise that agent's notes. Nothing else is sent: read `/api/you…` or `/api/agents/{id}/memory` again
+  (see [Memory](#memory-v02))
 - `event: resync`, `data: {}` when events may have been missed; the lists should be read again
 - `: keep-alive` every 15 s
 
@@ -581,6 +584,7 @@ type Template = {
 | `GET /api/templates` | `{templates: Template[], categories: string[]}` (categories in the gallery's order). |
 | `POST /api/templates` | Body: the template file's raw YAML (send text or an ArrayBuffer, not a Blob: Wails drops Blob bodies). Imports it; an ID already taken gets a fresh one. `201 Template`. `400 invalid_template` with a message for people; `400 empty_file`. |
 | `GET /api/templates/{id}/export` | The YAML file, `Content-Disposition: attachment; filename="<id>.pi-template.yaml"`. |
+| `POST /api/templates/{id}/export-save` | Desktop app: asks where to save it (the system Save dialog) and writes the YAML there. `{path}`, or `{cancelled: true}`; `501` in a browser (use `/export`). |
 | `DELETE /api/templates/{id}` | `{ok: true}`. `409 builtin` for a built-in. Agents made from it keep working. |
 | `POST /api/agents/{id}/save-template` | Body `{name?, description?}` (default: the agent's). A template of the agent's kind, instructions, workspace tools, approvals, web tools, `schedules.agentMade` and MCP server IDs (never its project folder, memory or conversations). `201 Template` (category `yours`). |
 
@@ -611,6 +615,103 @@ type WebSettings = {
 | `GET /api/settings/web` | `WebSettings` |
 | `PUT /api/settings/web` | Body `{provider, url?, apiKey?}`. `apiKey` left out keeps the stored key; `""` removes it. `url` left out keeps the stored one; `""` clears it. `provider: ""` turns search off (and removes the key and address). Answers `WebSettings`. Errors: `400 invalid_provider`, `400 invalid_key` ("Paste the API key from Brave Search."), `400 invalid_url`. |
 | `POST /api/settings/web/test` | Body `{query?}` (default "Pi Local test search"). One search with the saved settings: `{results: [{title, url, snippet}]}` (at most 3). `409 not_set_up`; `502 search_failed` with a message for people. |
+
+## Memory (v0.2)
+
+What agents know about the person, and what each agent learned about its own work. Everything stays on this computer
+(`app.db`, and `memory.json` in each agent's folder); each turn, an agent's model provider gets what that agent may see.
+
+- **About me** (`Basics`): a card every agent with memory on sees. Until it is saved, it holds defaults from this
+  computer (`saved: false`).
+- **Facts** about the person, by category. Every agent sees the `preferences` category; the others (`shareable`) only
+  when its `agent.yaml` shares them (`memory.share`).
+  - A fact the person said, in a conversation they started, is saved as known (`status: "active"`).
+  - What an agent concluded (`trust: "inferred"`), outside text (`trust: "external"`: a web page, mail, a file, a tool's
+    result), or anything saved during a schedule's or another agent's run, is a **suggestion** (`status: "suggested"`)
+    until the person accepts it. External facts never join the profile agents always see.
+- **Notes**: an agent's own, about its job. Saved directly.
+
+```ts
+type Basics = { name: string; role: string; organization: string; timezone: string; language: string;
+  addressAs: string; answerStyle: string; signOff: string };       // all strings, "" when unset
+type Fact = {
+  id: string;                          // "um_"
+  category: string;                    // one of `categories`
+  text: string;
+  trust: "said" | "inferred" | "external";
+  status: "active" | "suggested";
+  pinned: boolean;
+  sourceAgent: string | null;          // the agent that saved it; null: the person added it
+  sourceThread: string | null;         // its conversation: /agents/{sourceAgent}/threads/{sourceThread}
+  createdAt: number; updatedAt: number; // Unix ms
+};
+type Note = { id: string; text: string; thread?: string; createdAt: number; updatedAt: number }; // id "an_"
+```
+
+`Agent` gains `memory: {off: boolean, share: string[]}` (`PATCH /api/agents/{id}` with `{memory}`; both fields are
+sent). Memory is on unless `off`; an agent with memory off sees nothing about the person, keeps no notes and has no
+memory tools. `400 invalid_memory` for an unknown category.
+
+| Route | Answer |
+|---|---|
+| `GET /api/you` | `{basics: Basics, saved: boolean, categories: string[], shareable: string[]}`. `categories`: preferences, people, projects, work, health, family, finances, home, interests; `shareable`: all but preferences. |
+| `PUT /api/you/basics` | Body `Basics`. Answers `Basics`. `400 invalid_basics`. |
+| `GET /api/you/memories` | `?status=active\|suggested` (left out: all). `Fact[]`. |
+| `POST /api/you/memories` | Body `{category, text, pinned?}`: the person adds a fact (known, `trust: "said"`). `201 Fact`. |
+| `PATCH /api/you/memories/{id}` | Body `{category?, text?, pinned?, accept?: true}`. `accept` makes a suggestion known. Answers `Fact`. |
+| `DELETE /api/you/memories/{id}` | Deletes it for good (a suggestion too: dismissing it). `{ok: true}`. |
+| `POST /api/you/erase` | Body `{confirm: "erase"}`: forgets every fact and suggestion and the About me card. `{ok: true}`; `400 confirm` without it. |
+| `GET /api/you/export` | A JSON download (`pi-local-about-you.json`): `{basics, memories: Fact[]}`. |
+| `GET /api/agents/{id}/memory` | Its notes, newest first: `Note[]`. |
+| `POST /api/agents/{id}/memory` | Body `{text}`. `201 Note`. |
+| `PATCH /api/agents/{id}/memory/{note}` | Body `{text}`. Answers `Note`. |
+| `DELETE /api/agents/{id}/memory/{note}` | `{ok: true}`. |
+| `DELETE /api/agents/{id}/memory` | Resets its memory: every note. `{ok: true}`. |
+
+Every change sends a [`memory` event](#live-events).
+
+In conversations, agents have three tools:
+- `remember` `{about: "you" | "myself", text, category?, source?: "person" | "inferred" | "outside"}`. Its result's
+  text says what happened, with the new ID in parentheses: `Saved (um_…, category).` (known), `Saved as a suggestion
+  … (um_…); …` (a suggestion), or `Saved to your notes (an_…).` Its details say the same for apps:
+  `{kind: "known" | "suggested" | "note", id, category?}` (older replies only have the text). The chat shows a "Remembered" or "Suggested" chip for
+  it, whose Undo deletes the ID (`DELETE /api/you/memories/{id}`, or `DELETE /api/agents/{agent}/memory/{id}` for
+  `an_`).
+- `recall` `{query, limit?}` and `forget` `{id}` (something about the person only when they ask, in a conversation they
+  started). Shown as ordinary tool steps.
+
+## Fast judgments (v0.2)
+
+Optional and off by default: quick, typed decisions by a System One model (TypeSafe's Jev, or a self-hosted service
+speaking its API). The text being judged is sent to that service. Its key lives in the OS keychain and is never
+returned. Each use has its own switch; only `agentRouting` and `toolPreselection` do anything yet.
+
+```ts
+type JudgmentSettings = {
+  enabled: boolean;
+  url: string;                         // default `defaultUrl`
+  model: string;                       // pinned; default `defaultModel` ("jev-1.14.0")
+  hasKey: boolean;
+  uses: Record<string, boolean>;       // one per `uses`
+  threshold: number;                   // 0.5–0.99: below it, the app asks instead of deciding
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/settings/judgments` | `{settings: JudgmentSettings, uses: string[], defaultUrl, defaultModel}`. `uses`: agentRouting, toolPreselection, inbox, approvals, memory, knowledge, triggers. |
+| `PUT /api/settings/judgments` | Body `{enabled?, url?, model?, apiKey?, uses?: {name: boolean}, threshold?}`. `apiKey` left out keeps the stored key; `""` removes it. Answers `JudgmentSettings`. Errors: `400 invalid_key` ("Paste a TypeSafe API key…", turning it on at TypeSafe's address without a key), `invalid_url`, `invalid_model`, `invalid_threshold`, `invalid_use`. |
+| `GET /api/settings/judgments/models` | The service's models: `string[]`. `502 judge_failed` with a message. |
+| `POST /api/settings/judgments/test` | One yes/no question with the saved settings: `{model, answer}`. `502 judge_failed` with a message for people. |
+| `POST /api/route` | Body `{text}`: which agent should take a message sent without one. `{agentId, decided: boolean, confidence, alternatives: [{agentId, probability}], model}`; `decided` only above the threshold. `409 off` when agent routing is off; `400 invalid_text`. |
+
+`GET /api/me`'s `features.agentRouting` is true while agent routing is on: the new-chat picker then offers **Auto**
+(the default until the person picks an agent). With Auto, sending first asks `POST /api/route`: decided, the message
+goes to that agent (the conversation says "Sent to {agent} (auto)"); not decided, a `409`, or an error, the person picks
+from the likeliest agents.
+
+Tool preselection happens in the runtime, before a model with many deferred tools (MCP) answers; it needs nothing from
+the UI.
 
 ## Not yet (later phases)
 

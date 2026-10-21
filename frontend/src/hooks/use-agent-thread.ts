@@ -78,6 +78,8 @@ export interface Handover {
    * transcript is followed at once, and the message is sent into it.
    */
   existing?: boolean;
+  /** Fast judgments picked the agent (Auto in the new-chat picker): the conversation says so. */
+  routed?: boolean;
 }
 
 const HANDOVER_KEY = 'pai.handover';

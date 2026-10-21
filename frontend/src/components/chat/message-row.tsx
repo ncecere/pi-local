@@ -16,6 +16,7 @@ import {
   textOf,
 } from '~/components/chat/message-content';
 import { MessageEditor } from '~/components/chat/message-editor';
+import { RememberChip, rememberOf } from '~/components/chat/remember-chip';
 import { ReplyFailureNote } from '~/components/chat/reply-outcome-note';
 import { WorkBlock } from '~/components/chat/reply-work';
 import type { ToolPart } from '~/components/chat/tool-steps';
@@ -253,7 +254,8 @@ function ReplyBody({
     message.parts as ToolPart[],
     isToolPart,
     // A call waiting for approval is a step of the work, and its card stays in sight below it.
-    (part) => (waitsForApproval(part) ? 'both' : 'work'),
+    // What `remember` saved shows as a chip in sight, instead of a step.
+    (part) => (rememberOf(part) ? 'result' : waitsForApproval(part) ? 'both' : 'work'),
     (part) => `tool-${part.toolCallId}`,
   );
   const orphans = (message.metadata as ReplyMetadata | undefined)?.approvals ?? [];
@@ -261,6 +263,11 @@ function ReplyBody({
     <>
       {layout.work.length > 0 && (
         <WorkBlock messageId={message.id} layout={layout} streaming={streaming} />
+      )}
+      {layout.results.map((part) =>
+        rememberOf(part) ? (
+          <RememberChip key={`remember-${part.toolCallId}`} part={part} agentId={agentId} />
+        ) : null,
       )}
       {agentId &&
         layout.results.map((part) => {

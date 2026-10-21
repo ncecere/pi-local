@@ -12,6 +12,7 @@ import type {
   McpEvent,
   McpLoginStatus,
   McpServer,
+  MemoryEvent,
   Schedule,
   ScheduleEvent,
   ScheduleRun,
@@ -26,6 +27,7 @@ import { APPROVALS_KEY } from '~/hooks/use-approvals';
 import { applyElicitationData, ELICITATIONS_KEY } from '~/hooks/use-elicitations';
 import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
 import { MCP_LOGINS_KEY, MCP_SERVERS_KEY, putMcpLogin } from '~/hooks/use-mcp';
+import { notesKey, YOU_KEY } from '~/hooks/use-memory';
 import { SCHEDULES_KEY, scheduleRunsKey } from '~/hooks/use-schedules';
 import { TEAMS_KEY } from '~/hooks/use-teams';
 import { UPDATE_KEY } from '~/hooks/use-update';
@@ -65,6 +67,9 @@ import { applyTeamEvent } from '~/lib/teams';
  *   history, when open) change, and a quiet toast links to its conversation.
  * - `update`: the update status changed (a check, or an install's stage). It
  *   replaces ['update'] (Settings → About).
+ * - `memory`: the person's memory changed (`agentId` "": the About me card,
+ *   facts, suggestions) or an agent's notes did. It reads ['you'] or that
+ *   agent's ['agents', id, 'memory'] again.
  * - `resync`, or a reconnect: events may have been missed; the lists are read
  *   again.
  * Mounted once, in the app shell.
@@ -109,8 +114,11 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({ queryKey: MCP_LOGINS_KEY });
       void queryClient.invalidateQueries({ queryKey: SCHEDULES_KEY });
       void queryClient.invalidateQueries({ queryKey: UPDATE_KEY });
+      void queryClient.invalidateQueries({ queryKey: YOU_KEY });
       void queryClient.invalidateQueries({
-        predicate: (query) => query.queryKey[0] === 'agents' && query.queryKey[2] === 'threads',
+        predicate: (query) =>
+          query.queryKey[0] === 'agents' &&
+          (query.queryKey[2] === 'threads' || query.queryKey[2] === 'memory'),
       });
     };
 
@@ -280,6 +288,17 @@ export function usePlatformEvents() {
             }),
         },
       });
+    });
+    source.on('memory', (data) => {
+      let event: MemoryEvent;
+      try {
+        event = JSON.parse(data) as MemoryEvent;
+      } catch {
+        return;
+      }
+      // "": the person's memory (the card, facts, suggestions); otherwise that agent's notes.
+      if (event?.agentId) void queryClient.invalidateQueries({ queryKey: notesKey(event.agentId) });
+      else void queryClient.invalidateQueries({ queryKey: YOU_KEY });
     });
     source.on('update', (data) => {
       let status: UpdateStatus;

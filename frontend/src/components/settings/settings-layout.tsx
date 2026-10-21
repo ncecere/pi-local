@@ -22,6 +22,7 @@ import { useTheme } from '~/providers/theme-provider';
 interface Tab {
   to:
     | '/settings'
+    | '/settings/you'
     | '/settings/customization'
     | '/settings/agents'
     | '/settings/teams'
@@ -38,6 +39,7 @@ interface Tab {
 
 const ALL_TABS: Tab[] = [
   { to: '/settings', label: 'About', exact: true },
+  { to: '/settings/you', label: 'You', exact: false },
   { to: '/settings/customization', label: 'Customization', exact: false },
   { to: '/settings/agents', label: 'Agents', exact: false },
   { to: '/settings/teams', label: 'Teams', exact: false },

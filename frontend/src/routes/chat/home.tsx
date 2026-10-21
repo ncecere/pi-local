@@ -1,8 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Agent, Team } from '~/api/client';
+import { type Agent, ApiError, type RouteResult, type Team } from '~/api/client';
 import { AgentAvatar, agentStatusLabel } from '~/components/agent/agent-avatar';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import {
@@ -13,6 +13,7 @@ import {
 } from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
 import { ElicitationList } from '~/components/chat/elicitation-card';
+import { RouteChooser, type RouteQuestion, routeOptions } from '~/components/chat/route-chooser';
 import { GetStarted } from '~/components/onboarding/get-started';
 import { writeHandover } from '~/hooks/use-agent-thread';
 import {
@@ -24,7 +25,8 @@ import {
 } from '~/hooks/use-agents';
 import { useAttachments } from '~/hooks/use-attachments';
 import { usePendingElicitations } from '~/hooks/use-elicitations';
-import { useCurrentUser } from '~/hooks/use-session';
+import { routeMessage } from '~/hooks/use-judgments';
+import { ME_KEY, useCurrentUser } from '~/hooks/use-session';
 import { useTeams } from '~/hooks/use-teams';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { usePageTitle } from '~/lib/document-title';
@@ -82,6 +84,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   );
   const selectAgent = useCallback(
     (next: Agent) => {
+      setAutoChosen(false);
       setChosenId(next.id);
       setChosenTeamId(undefined);
       rememberAgent(next.id);
@@ -91,6 +94,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   );
   const selectTeam = useCallback(
     (next: Team) => {
+      setAutoChosen(false);
       setChosenId(next.leadId);
       setChosenTeamId(next.id);
       rememberAgent(next.leadId);
@@ -98,11 +102,27 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
     },
     [navigate],
   );
-  const talkingTo = team ? team.name : agent?.name;
+  // Auto (agent routing on): fast judgments pick the agent when the message is sent. The default
+  // only while the person hasn't picked an agent or a team.
+  const routingOn = Boolean(me.features?.agentRouting) && agents.length > 1;
+  const [autoChosen, setAutoChosen] = useState(() => !agentId && !teamId);
+  useEffect(() => {
+    if (agentId || teamId) setAutoChosen(false);
+  }, [agentId, teamId]);
+  const auto = routingOn && autoChosen;
+  const selectAuto = useCallback(() => {
+    setAutoChosen(true);
+    setChosenId(undefined);
+    setChosenTeamId(undefined);
+    void navigate({ to: '/', search: {}, replace: true });
+  }, [navigate]);
+  // The agent the page is about: none with Auto (the fallback agent stays chosen underneath).
+  const shown = auto ? null : agent;
+  const talkingTo = auto ? 'your agents' : team ? team.name : agent?.name;
 
   const [draft, setDraft] = useState('');
   // Files for the first message, saved in the chosen agent's workspace.
-  const attachments = useAttachments(agent);
+  const attachments = useAttachments(shown);
   const drop = useFileDrop(attachments.add, attachments.enabled);
   const started = useRef(false);
   const [submitting, setSubmitting] = useState(false);
@@ -110,22 +130,22 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
 
   // Recent conversations with this agent. Listing wakes it, which also means
   // it is ready by the time the first message is sent.
-  const threads = useAgentThreads(agent?.id, Boolean(agent));
+  const threads = useAgentThreads(shown?.id, Boolean(shown));
   const recent = threads.data?.slice(0, 5) ?? [];
   // An MCP server's question for this agent that isn't part of a conversation is answered here.
   const pendingQuestions = usePendingElicitations();
   const questions = useMemo(
     () =>
       pendingQuestions.filter(
-        (elicitation) => elicitation.agentId === agent?.id && !elicitation.threadId,
+        (elicitation) => elicitation.agentId === shown?.id && !elicitation.threadId,
       ),
-    [pendingQuestions, agent?.id],
+    [pendingQuestions, shown?.id],
   );
 
   const start = useCallback(
-    async (text: string) => {
+    async (text: string, target: Agent | null = agent, routed = false) => {
       const content = text.trim();
-      if (!content || !agent || started.current) return;
+      if (!content || !target || started.current) return;
       started.current = true;
       setSubmitting(true);
       const typing =
@@ -133,20 +153,47 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
         document.activeElement.getAttribute('aria-label') === 'Message input';
       const threadId = newThreadId();
       writeHandover({
-        agentId: agent.id,
+        agentId: target.id,
         threadId,
         text: content,
         requestId: crypto.randomUUID(),
         focus: typing,
+        ...(routed ? { routed: true } : {}),
       });
-      rememberAgent(agent.id);
-      noteNewThread(queryClient, agent.id, threadId, content);
+      rememberAgent(target.id);
+      noteNewThread(queryClient, target.id, threadId, content);
       await navigate({
         to: '/agents/$agentId/threads/$threadId',
-        params: { agentId: agent.id, threadId },
+        params: { agentId: target.id, threadId },
       });
     },
     [agent, navigate, queryClient],
+  );
+
+  // Auto: which agent takes the message. Not sure, off (409) or failing: the person is asked.
+  const [routing, setRouting] = useState(false);
+  const [question, setQuestion] = useState<RouteQuestion | null>(null);
+  const send = useCallback(
+    async (text: string) => {
+      if (!auto) return start(text);
+      const content = text.trim();
+      if (!content || routing || started.current) return;
+      setRouting(true);
+      setQuestion(null);
+      let route: RouteResult | null = null;
+      try {
+        route = await routeMessage(content);
+      } catch (error) {
+        // Turned off meanwhile: the picker stops offering Auto.
+        if (error instanceof ApiError && error.status === 409)
+          void queryClient.invalidateQueries({ queryKey: ME_KEY });
+      }
+      setRouting(false);
+      const decided = route?.decided ? agents.find((a) => a.id === route.agentId) : undefined;
+      if (decided) return start(content, decided, true);
+      setQuestion({ text: content, options: routeOptions(agents, route), unavailable: !route });
+    },
+    [auto, start, routing, agents, queryClient],
   );
 
   const firstName = me && greetingName(me.user.name, null);
@@ -159,11 +206,11 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
       className="relative flex h-full flex-col justify-center md:justify-normal"
       {...drop.handlers}
     >
-      <DropOverlay show={drop.dragging} agentName={agent?.name} />
+      <DropOverlay show={drop.dragging} agentName={shown?.name} />
       <div className="flex-none px-4 pb-8 md:flex-1 md:overflow-y-auto md:pt-[11vh] md:pb-0">
         <div className="mx-auto w-full max-w-[41.75rem]">
           <h1 className="flex flex-col items-center gap-3 text-center text-[1.375rem] font-bold leading-tight tracking-tight md:flex-row md:text-left md:text-[1.875rem]">
-            {agent && <AgentAvatar agent={agent} size="lg" />}
+            {shown && <AgentAvatar agent={shown} size="lg" />}
             <span className={cn(!agent && !loading && !noAgents && 'text-[var(--text-secondary)]')}>
               {agent ? (
                 <>
@@ -189,23 +236,45 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
               )}
             </span>
           </h1>
-          {agent && (
+          {auto && (
+            <p className="mt-3 flex items-center justify-center gap-1.5 text-sm text-[var(--text-muted)] md:justify-start">
+              <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
+              Auto: your message goes to the agent that fits it best.
+            </p>
+          )}
+          {shown && (
             <p className="mt-3 text-center text-sm text-[var(--text-muted)] md:text-left">
               {team
-                ? `${team.description || 'A team'} · led by ${agent.name}`
-                : agent.description || agentKindLabel(agent)}
+                ? `${team.description || 'A team'} · led by ${shown.name}`
+                : shown.description || agentKindLabel(shown)}
               <span className="mx-1.5" aria-hidden="true">
                 ·
               </span>
-              <span>{agentStatusLabel(agent)}</span>
+              <span>{agentStatusLabel(shown)}</span>
             </p>
           )}
 
           {agents.length > 1 && (
             <fieldset className="mt-7 hidden flex-wrap gap-2.5 border-0 p-0 md:flex">
               <legend className="sr-only">Agents</legend>
+              {routingOn && (
+                <button
+                  type="button"
+                  aria-pressed={auto}
+                  onClick={selectAuto}
+                  className={cn(
+                    'inline-flex h-[2.375rem] items-center gap-2 rounded-xl px-3.5 text-sm font-medium transition-colors',
+                    auto
+                      ? 'bg-[var(--accent)] text-[var(--accent-foreground)]'
+                      : 'bg-[var(--bg-control-alt)] text-[var(--text-secondary)] hover:bg-[var(--bg-control-hover)] hover:text-[var(--text-primary)]',
+                  )}
+                >
+                  <Sparkles className="size-4" aria-hidden="true" />
+                  Auto
+                </button>
+              )}
               {agents.slice(0, 8).map((candidate) => {
-                const active = !team && candidate.id === agent?.id;
+                const active = !auto && !team && candidate.id === agent?.id;
                 return (
                   <button
                     key={candidate.id}
@@ -238,16 +307,16 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
 
           <ElicitationList elicitations={questions} className="mt-7" />
 
-          {agent && recent.length > 0 && (
+          {shown && recent.length > 0 && (
             <div className="mt-9 hidden md:block">
               <h2 className="mb-1 text-[0.6875rem] font-semibold text-[var(--accent-bright)]">
-                Recent with {agent.name}
+                Recent with {shown.name}
               </h2>
               {recent.map((thread, index) => (
                 <Link
                   key={thread.threadId}
                   to="/agents/$agentId/threads/$threadId"
-                  params={{ agentId: agent.id, threadId: thread.threadId }}
+                  params={{ agentId: shown.id, threadId: thread.threadId }}
                   className={cn(
                     'flex h-[3.0625rem] w-full items-center gap-3 pr-2 text-left text-[0.9375rem] text-[var(--text-secondary)]',
                     'transition-colors hover:text-[var(--text-primary)]',
@@ -289,21 +358,35 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
         value={draft}
         onChange={setDraft}
         onSubmit={() => {
-          if (!attachments.busy) void start(attachments.compose(draft));
+          if (!attachments.busy) void send(attachments.compose(draft));
         }}
-        submitting={submitting}
-        tray={<AttachmentTray attachments={attachments} agent={agent} />}
-        attach={<AttachButton onFiles={attachments.add} disabled={!agent} />}
-        onPasteFiles={agent ? attachments.add : undefined}
+        submitting={submitting || routing}
+        tray={
+          <>
+            {question && (
+              <RouteChooser
+                question={question}
+                disabled={submitting}
+                onPick={(picked) => void start(question.text, picked)}
+                onCancel={() => setQuestion(null)}
+              />
+            )}
+            <AttachmentTray attachments={attachments} agent={shown} />
+          </>
+        }
+        attach={<AttachButton onFiles={attachments.add} disabled={!shown} />}
+        onPasteFiles={shown ? attachments.add : undefined}
         hasExtra={attachments.ready.length > 0}
         holdSend={attachments.busy ? 'Sending waits until the files are uploaded.' : null}
         disabled={!agent}
         placeholder={
-          agent
-            ? team
-              ? `Message ${team.name} (${agent.name})…`
-              : `Message ${agent.name}…`
-            : 'No agent to message'
+          auto
+            ? 'Message your agents…'
+            : agent
+              ? team
+                ? `Message ${team.name} (${agent.name})…`
+                : `Message ${agent.name}…`
+              : 'No agent to message'
         }
         options={
           <AgentPicker
@@ -314,6 +397,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
             selectedTeam={team}
             onSelectTeam={selectTeam}
             loading={loading}
+            auto={routingOn ? { selected: auto, onSelect: selectAuto } : undefined}
           />
         }
       />

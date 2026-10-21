@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import { errorMessage, type Model, type Provider, type ProviderKind } from '~/api/client';
 import { ConfirmDialog, ErrorNotice, RequestError } from '~/components/models/fields';
+import { JudgmentsSection } from '~/components/models/judgments-section';
 import { DiscoverDialog, ModelDialog } from '~/components/models/model-dialogs';
 import { AddProviderDialog, EditProviderDialog } from '~/components/models/provider-dialogs';
 import { WebSearchSection } from '~/components/models/web-search-section';
@@ -468,6 +469,8 @@ export function SettingsModelsPage() {
       </SettingsSection>
 
       <WebSearchSection />
+
+      <JudgmentsSection />
 
       {open?.kind === 'add-provider' && (
         <AddProviderDialog

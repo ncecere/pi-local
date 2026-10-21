@@ -118,12 +118,17 @@ export function memoryExtension(options: MemoryOptions): Extension {
 					);
 					if (!res.ok) return text(res.message, true);
 					refresh();
-					if (args.about === "myself") return text(`Saved to your notes (${res.data.id}).`);
-					return text(
-						res.data.saved === "known"
-							? `Saved (${res.data.id}, ${res.data.category}).`
-							: `Saved as a suggestion for the person to review (${res.data.id}); it isn't part of what you know until they accept it.`,
-					);
+					// The details tell the app what was saved (its "Remembered" chip, with Undo).
+					if (args.about === "myself") return { ...text(`Saved to your notes (${res.data.id}).`), details: { kind: "note", id: res.data.id } };
+					const kind = res.data.saved === "known" ? "known" : "suggested";
+					return {
+						...text(
+							kind === "known"
+								? `Saved (${res.data.id}, ${res.data.category}).`
+								: `Saved as a suggestion for the person to review (${res.data.id}); it isn't part of what you know until they accept it.`,
+						),
+						details: { kind, id: res.data.id, ...(res.data.category ? { category: res.data.category } : {}) },
+					};
 				},
 			}),
 			defineTool({

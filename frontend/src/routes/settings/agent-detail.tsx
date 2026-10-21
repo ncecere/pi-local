@@ -9,6 +9,7 @@ import { ConfigTab } from '~/components/agent-manager/config-tab';
 import { KindSettingsTab } from '~/components/agent-manager/kind-settings-tab';
 import { LogsTab } from '~/components/agent-manager/logs-tab';
 import { McpTab } from '~/components/agent-manager/mcp-tab';
+import { MemoryTab } from '~/components/agent-manager/memory-tab';
 import { OverviewTab } from '~/components/agent-manager/overview-tab';
 import { SchedulesTab } from '~/components/agent-manager/schedules-tab';
 import { ToolsTab } from '~/components/agent-manager/tools-tab';
@@ -20,13 +21,23 @@ import { usePageTitle } from '~/lib/document-title';
 import { hasKindSettings } from '~/lib/kind-settings';
 import { cn } from '~/lib/utils';
 
-type TabId = 'overview' | 'tools' | 'mcp' | 'kind' | 'can-ask' | 'schedules' | 'config' | 'logs';
+type TabId =
+  | 'overview'
+  | 'tools'
+  | 'mcp'
+  | 'kind'
+  | 'memory'
+  | 'can-ask'
+  | 'schedules'
+  | 'config'
+  | 'logs';
 
 const TAB_IDS: readonly string[] = [
   'overview',
   'tools',
   'mcp',
   'kind',
+  'memory',
   'can-ask',
   'schedules',
   'config',
@@ -76,6 +87,7 @@ export function SettingsAgentDetailPage({
     ...(hasKindSettings(agent.agentKind)
       ? [{ id: 'kind' as const, label: `${agentKindLabel(agent)} settings` }]
       : []),
+    { id: 'memory', label: 'Memory' },
     { id: 'can-ask', label: 'Can ask' },
     { id: 'schedules', label: 'Schedules' },
     { id: 'config', label: 'agent.yaml' },
@@ -173,6 +185,7 @@ export function SettingsAgentDetailPage({
           />
         )}
         {current === 'kind' && <KindSettingsTab agent={agent} />}
+        {current === 'memory' && <MemoryTab agent={agent} />}
         {current === 'can-ask' && <CanAskTab agent={agent} agents={agents.data} />}
         {current === 'schedules' && <SchedulesTab agent={agent} />}
         {current === 'config' && <ConfigTab agent={agent} />}

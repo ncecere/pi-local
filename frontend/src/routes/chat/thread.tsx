@@ -1,5 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router';
-import { ArrowDown, ArrowUp, Clock, CornerUpLeft, LoaderCircle } from 'lucide-react';
+import { ArrowDown, ArrowUp, Clock, CornerUpLeft, LoaderCircle, Sparkles } from 'lucide-react';
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { errorMessage, type McpElicitation } from '~/api/client';
@@ -461,7 +461,23 @@ function ThreadConversation({
             onSubmit={() => sendWithFiles()}
             onSteer={() => sendWithFiles(true)}
             onStop={() => void session.stop()}
-            tray={<AttachmentTray attachments={attachments} agent={agent} />}
+            tray={
+              <>
+                {/* Auto picked the agent: said by the composer (in sight) until the person sends again. */}
+                {handover?.routed &&
+                  agent &&
+                  messages.filter((message) => message.role === 'user').length <= 1 && (
+                    <p
+                      className="mb-3 flex items-center gap-1.5 text-xs text-[var(--text-muted)]"
+                      data-auto-routed=""
+                    >
+                      <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
+                      Sent to {agent.name} (auto)
+                    </p>
+                  )}
+                <AttachmentTray attachments={attachments} agent={agent} />
+              </>
+            }
             attach={<AttachButton onFiles={attachments.add} disabled={!agent?.enabled} />}
             onPasteFiles={agent?.enabled ? attachments.add : undefined}
             hasExtra={attachments.ready.length > 0}

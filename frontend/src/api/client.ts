@@ -13,6 +13,7 @@ export type {
   AgentEvent,
   AgentLogs,
   AgentMcpServer,
+  AgentMemory,
   AgentRef,
   AgentStatus,
   AgentTemplate,
@@ -24,6 +25,7 @@ export type {
   ApprovalEvent,
   ApprovalStatus,
   Attachment,
+  Basics,
   CallableAgent,
   CalledBy,
   CatalogModel,
@@ -46,6 +48,12 @@ export type {
   ElicitationField,
   ElicitationSchema,
   ElicitationState,
+  Fact,
+  FactStatus,
+  FactTrust,
+  JudgmentSettings,
+  JudgmentsInfo,
+  JudgmentTest,
   McpElicitation,
   McpEvent,
   McpImportList,
@@ -57,6 +65,8 @@ export type {
   McpServer,
   McpTool,
   McpTransport,
+  MemoryEvent,
+  MemoryNote,
   Model,
   Provider,
   ProviderKind,
@@ -65,6 +75,7 @@ export type {
   ProviderSetupResult,
   ProvidersResponse,
   RevealTarget,
+  RouteResult,
   Schedule,
   ScheduleEvent,
   ScheduleInput,
@@ -86,6 +97,7 @@ export type {
   WebSettings,
   WebTools,
   WorkspaceTool,
+  YouInfo,
 } from './types';
 
 export type Role = 'admin' | 'user';
@@ -93,9 +105,10 @@ export type Role = 'admin' | 'user';
 /**
  * Optional features and whether each is on. Locally: `messageSearch` (Phase 7),
  * `folderDialog` (the native folder dialog, desktop app only) and `updates`
- * (this copy can install updates itself).
+ * (this copy can install updates itself), `agentRouting` (fast judgments pick the agent for a new chat).
  */
 export type FeatureId =
+  | 'agentRouting'
   | 'usage'
   | 'connectedUsage'
   | 'messageSearch'

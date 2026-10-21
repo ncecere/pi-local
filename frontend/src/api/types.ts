@@ -73,6 +73,118 @@ export interface Agent {
    * reading pages. Absent from an older backend (read as both off).
    */
   web?: WebTools;
+  /**
+   * Its memory: on unless `off`; it sees the person's basics and preferences, plus the categories in `share`.
+   * Absent from an older backend (read as on, sharing nothing more).
+   */
+  memory?: AgentMemory;
+}
+
+/** An agent's memory settings (its agent.yaml `memory`). */
+export interface AgentMemory {
+  off: boolean;
+  /** Shareable categories it sees besides the basics and preferences. */
+  share: string[];
+}
+
+// ── Memory (docs/api.md, Memory) ────────────────────────────────────────────────────────────
+
+/** The About me card: what every agent knows about the person. All strings, "" when unset. */
+export interface Basics {
+  name: string;
+  role: string;
+  organization: string;
+  timezone: string;
+  language: string;
+  addressAs: string;
+  answerStyle: string;
+  signOff: string;
+}
+
+/** `GET /api/you`. */
+export interface YouInfo {
+  basics: Basics;
+  /** False: `basics` are defaults from this computer, not saved yet. */
+  saved: boolean;
+  /** Every category, preferences first. */
+  categories: string[];
+  /** The categories an agent sees only when shared with it (all but preferences). */
+  shareable: string[];
+}
+
+export type FactTrust = 'said' | 'inferred' | 'external';
+export type FactStatus = 'active' | 'suggested';
+
+/** Something about the person: known (`active`) or a suggestion waiting for them. */
+export interface Fact {
+  /** "um_…". */
+  id: string;
+  category: string;
+  text: string;
+  trust: FactTrust;
+  status: FactStatus;
+  pinned: boolean;
+  /** The agent that saved it; null: the person added it. */
+  sourceAgent: string | null;
+  /** The conversation it was saved in. */
+  sourceThread: string | null;
+  /** Unix ms. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Something an agent learned about its own job. */
+export interface MemoryNote {
+  /** "an_…". */
+  id: string;
+  text: string;
+  /** The conversation it was saved in. */
+  thread?: string | null;
+  /** Unix ms. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** `GET /api/events` `memory` event: `agentId` "" is the person's memory, otherwise that agent's notes. */
+export interface MemoryEvent {
+  agentId: string;
+}
+
+// ── Fast judgments (docs/api.md, Fast judgments) ────────────────────────────────────────────
+
+export interface JudgmentSettings {
+  enabled: boolean;
+  url: string;
+  model: string;
+  hasKey: boolean;
+  uses: Record<string, boolean>;
+  /** 0.5–0.99. */
+  threshold: number;
+}
+
+/** `GET /api/settings/judgments`. */
+export interface JudgmentsInfo {
+  settings: JudgmentSettings;
+  /** Every use, in order. */
+  uses: string[];
+  defaultUrl: string;
+  defaultModel: string;
+}
+
+/** `POST /api/settings/judgments/test`. */
+export interface JudgmentTest {
+  model: string;
+  answer: { type: string; noul?: number; choice?: string; confidence?: number } | null;
+}
+
+/** `POST /api/route`: the agent for a message sent without one. */
+export interface RouteResult {
+  agentId: string;
+  /** Confident enough to send it there; otherwise ask, offering `alternatives`. */
+  decided: boolean;
+  confidence: number;
+  alternatives: { agentId: string; probability: number }[];
+  model: string;
 }
 
 /** An agent's web tools (read-only: they change nothing). */
