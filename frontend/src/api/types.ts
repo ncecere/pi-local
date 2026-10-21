@@ -68,6 +68,75 @@ export interface Agent {
    * Phase 7; absent from an older backend (read as off).
    */
   schedules?: { agentMade: boolean };
+  /**
+   * Its web tools: search (through the search service in Settings → Models) and
+   * reading pages. Absent from an older backend (read as both off).
+   */
+  web?: WebTools;
+}
+
+/** An agent's web tools (read-only: they change nothing). */
+export interface WebTools {
+  search: boolean;
+  fetch: boolean;
+}
+
+/** A template's group in the New agent gallery. */
+export type TemplateCategory = 'everyday' | 'work' | 'life' | 'meta' | 'yours';
+
+/**
+ * A starting point for a new agent (`GET /api/templates`, the catalog's
+ * `templates`): its kind, instructions, tools and maybe a first schedule.
+ */
+export interface AgentTemplate {
+  /** 1–48 of [a-z0-9-]. */
+  id: string;
+  name: string;
+  description: string;
+  category: TemplateCategory;
+  /** A lucide icon name ("sunrise", "pen-line"); "" or unknown: a default icon. */
+  icon: string;
+  /** The runtime kind its agents get. */
+  kind: string;
+  instructions: string;
+  workspace?: { tools: string[] };
+  approvals?: { tools: string[]; timeoutSeconds: number };
+  web?: WebTools;
+  /** Whether its agents may set their own schedules. */
+  schedules?: { agentMade: boolean };
+  /** A first schedule made with the agent. */
+  schedule?: { name: string; cron: string; message: string; threadMode?: string };
+  /** MCP server IDs it works with, used when this computer has them. */
+  mcp?: string[];
+  /** What makes it work well ("web-search"). */
+  needs?: string[];
+  /** Shipped with the app: can't be deleted. */
+  builtin: boolean;
+}
+
+/** A web search service people can choose (Settings → Models → Web search). */
+export interface WebSearchProvider {
+  id: 'brave' | 'tavily' | 'serpapi' | 'searxng';
+  name: string;
+  needsKey: boolean;
+  needsUrl: boolean;
+  signupUrl: string;
+  note: string;
+}
+
+/** `GET /api/settings/web`: the search service agents use; the key is never returned. */
+export interface WebSettings {
+  /** "": web search is off. */
+  provider: '' | WebSearchProvider['id'];
+  url: string;
+  hasKey: boolean;
+  providers: WebSearchProvider[];
+}
+
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
 }
 
 /** One MCP server an agent uses: `tools` null is all its model-visible tools. */

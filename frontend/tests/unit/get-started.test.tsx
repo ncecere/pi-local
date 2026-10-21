@@ -10,6 +10,7 @@ import {
 } from '../../src/api/client';
 import { GetStarted } from '../../src/components/onboarding/get-started';
 import type { AgentCatalog } from '../../src/hooks/use-agents';
+import { resetPrefWrites } from '../../src/lib/pref-writes';
 import { SettingsModelsPage } from '../../src/routes/settings/models';
 import {
   buttonByText,
@@ -23,6 +24,7 @@ import {
   typeInto,
 } from './ui-test-utils';
 
+const navigate = vi.fn();
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, to, className }: { children: ReactNode; to: string; className?: string }) => (
     <a href={to} className={className}>
@@ -31,7 +33,7 @@ vi.mock('@tanstack/react-router', () => ({
   ),
   Outlet: () => null,
   useLocation: () => ({ pathname: '/' }),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigate,
 }));
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
@@ -97,7 +99,18 @@ const DEMO = { id: 'demo/demo-1', name: 'Demo', provider: 'demo', providerName: 
 
 function catalog(models: AgentCatalog['models'], defaultModelId = 'demo/demo-1'): AgentCatalog {
   return {
-    templates: [],
+    templates: [
+      {
+        id: 'assistant',
+        name: 'Assistant',
+        description: 'A general helper.',
+        category: 'everyday',
+        icon: 'sparkles',
+        kind: 'assistant',
+        instructions: 'You are a helpful assistant.',
+        builtin: true,
+      },
+    ],
     models,
     defaultModelId,
     allowModelChoice: true,
@@ -158,6 +171,8 @@ afterEach(() => {
   view = undefined;
   restoreTransport();
   localStorage.clear();
+  resetPrefWrites();
+  navigate.mockClear();
 });
 
 const text = () => document.body.textContent ?? '';
@@ -171,6 +186,8 @@ function firstRun(routes: Record<string, (body: unknown) => unknown> = {}) {
     'GET /api/agents/catalog': () => catalog([DEMO]),
     'GET /api/providers': () => providers(),
     'GET /api/providers/detect': () => [],
+    'GET /api/me/prefs': () => ({}),
+    'PUT /api/me/prefs/onboarding': () => ({ ok: true }),
     ...routes,
   });
 }
@@ -217,10 +234,7 @@ describe('Get started', () => {
     expect(text()).toContain('Connected. Default model: llama3.2:3b');
     expect(text()).toContain('Connect a model (done)');
     expect(text()).not.toContain('Found on this computer');
-    const make = [...document.querySelectorAll('a')].find(
-      (link) => link.textContent === 'Make an agent',
-    );
-    expect(make?.getAttribute('href')).toBe('/settings/agents');
+    expect(buttonByText('Make an agent')?.disabled).toBe(false);
   });
 
   it('says so quietly when nothing runs here, with where to get one', async () => {
@@ -314,16 +328,58 @@ describe('Get started', () => {
     expect(fieldByLabel('Anthropic API key')).not.toBeNull();
   });
 
-  it('lets the person try the demo model instead, which opens step 2', async () => {
-    firstRun();
+  it('lets the person try the demo model instead, saved in the onboarding pref', async () => {
+    const backend = firstRun();
     await renderFlow();
     await click(buttonByText('try the demo model'));
     expect(text()).toContain('Using the demo model');
     expect(text()).toContain('Connect a model (done)');
-    expect(buttonByText('Make an agent')).toBeUndefined();
-    expect([...document.querySelectorAll('a')].some((a) => a.textContent === 'Make an agent')).toBe(
-      true,
-    );
+    expect(buttonByText('Make an agent')?.disabled).toBe(false);
+    expect(backend.calls.filter((call) => call.method === 'PUT')).toEqual([
+      { method: 'PUT', path: '/api/me/prefs/onboarding', body: { value: { skipModel: true } } },
+    ]);
+    expect(localStorage.getItem('pai.onboarding.skipModel')).toBeNull();
+
+    await click(buttonByText('Connect a model'));
+    expect(text()).not.toContain('Using the demo model');
+    expect(backend.calls.filter((call) => call.method === 'PUT').at(-1)?.body).toEqual({
+      value: { skipModel: false },
+    });
+  });
+
+  it('reads skipModel from the onboarding pref', async () => {
+    const backend = firstRun({ 'GET /api/me/prefs': () => ({ onboarding: { skipModel: true } }) });
+    await renderFlow();
+    expect(text()).toContain('Using the demo model');
+    expect(text()).toContain('Connect a model (done)');
+    expect(backend.calls.some((call) => call.method === 'PUT')).toBe(false);
+  });
+
+  it("moves this browser's old choice into the pref, once", async () => {
+    localStorage.setItem('pai.onboarding.skipModel', 'true');
+    const backend = firstRun();
+    await renderFlow();
+    expect(text()).toContain('Using the demo model');
+    expect(backend.calls.filter((call) => call.method === 'PUT')).toEqual([
+      { method: 'PUT', path: '/api/me/prefs/onboarding', body: { value: { skipModel: true } } },
+    ]);
+    expect(localStorage.getItem('pai.onboarding.skipModel')).toBeNull();
+  });
+
+  it('opens the New agent dialog from step 2, and goes to the new agent', async () => {
+    const backend = firstRun({
+      'GET /api/me/prefs': () => ({ onboarding: { skipModel: true } }),
+      'POST /api/agents': (body) => ({ id: 'ag_new', name: (body as { name: string }).name }),
+    });
+    await renderFlow();
+    await click(buttonByText('Make an agent'));
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('New agent');
+    expect(text()).toContain('Start from');
+    await click(buttonByText('Make agent'));
+    expect(
+      backend.calls.find((call) => call.path === '/api/agents' && call.method === 'POST'),
+    ).toMatchObject({ body: { name: 'Assistant', templateId: 'assistant' } });
+    expect(navigate).toHaveBeenCalledWith({ to: '/', search: { agent: 'ag_new' } });
   });
 
   it('with a model connected and no agents, shows step 1 done and step 2 open', async () => {

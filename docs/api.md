@@ -20,7 +20,11 @@ ported frontend changes as little as possible.
 | `GET /api/me` | `{user: {id: "local", name, email: "", role: "admin"}, csrfToken: "", features: {messageSearch, folderDialog, updates}, platform: {mode: "local", account: null}}`. `name` is the OS user's full name. `features.folderDialog`: `POST /api/choose-folder` opens a native dialog (the desktop app only). `features.updates`: this copy can install updates itself (`canInstall`, see [Updates](#updates)). |
 | `GET /api/auth/config` | `{oidcEnabled: false, devAuthEnabled: false, devAccounts: [], instance: {name: "Pi Local", logoUrl: null, colorTheme: "neutral", defaultTheme: "system", orgName: "", supportUrl: null}}` |
 | `GET /api/me/prefs` | `Record<key, object>`: every saved preference. |
-| `PUT /api/me/prefs/{key}` | Body `{value: object}`. Keys: `inbox` (≤ 512 KiB), `appearance` (≤ 16 KiB); any other key is `404 unknown_pref`. Answers `{ok: true}`. |
+| `PUT /api/me/prefs/{key}` | Body `{value: object}`. Keys: `inbox` (≤ 512 KiB), `appearance` (≤ 16 KiB), `onboarding` (≤ 4 KiB); any other key is `404 unknown_pref`. Answers `{ok: true}`. |
+
+The `onboarding` pref is the Get started card's state: `{skipModel?: boolean}` (the person chose to try the demo model
+rather than connect one). Older versions kept `skipModel` in the browser (`localStorage["pai.onboarding.skipModel"]`);
+the UI reads that once, saves it as the pref, and removes it.
 
 ## Agents
 
@@ -47,9 +51,9 @@ type Agent = {
 | Route | Answer |
 |---|---|
 | `GET /api/agents` | `Agent[]`, newest first. Never starts a runtime. |
-| `GET /api/agents/catalog` | `{templates: [{id, name, description}], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. Templates are the kinds offered for new agents: `assistant`, `researcher` and `coding` (`{id: "coding", name: "Coding", description: "Works in a project folder like the pi coding agent: reads, edits and writes files and runs commands."}`). `triage` is retired: no longer a template, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
-| `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?}` (`workspace`: see [Workspace tools](#workspace-tools-approvals-and-attachments-phase-4)). `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`, `invalid_workspace_folder`. A `coding` agent made without `workspace.tools` gets `["read", "write", "edit", "bash"]`. |
-| `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?}`. Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
+| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. `templates` are the New agent gallery's starting points, the same list as `GET /api/templates` (see [Templates](#templates-and-web-tools-v02)): the built-ins Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner and Coding, then the person's own. `triage` is retired: no longer offered, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
+| `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?, web?}` (`workspace`: see [Workspace tools](#workspace-tools-approvals-and-attachments-phase-4)). `templateId` is a template's ID: the agent starts from it (its kind, instructions, tools, approvals, web tools and first schedule), and the body's own fields win; an empty `instructions` keeps the template's. `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`, `invalid_workspace_folder`. A `coding` agent made without `workspace.tools` gets `["read", "write", "edit", "bash"]`. |
+| `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?}` (later phases add more). Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
 | `DELETE /api/agents/{id}` | Stops its runtime and moves its folder to the OS trash (or deletes it). Answers `{ok: true}`. |
 
 ## Threads
@@ -545,6 +549,68 @@ Live events: `event: update`, `data: UpdateStatus`.
 
 The desktop app shows a notification (while its window isn't in front) when an agent asks for approval, a scheduled
 run ends, or an agent fails; the menu bar menu says how many agents are working and how many requests need you.
+
+## Templates and web tools (v0.2)
+
+### Templates
+
+A **template** is a starting point for a new agent. The built-ins ship with the app; the person's own (category
+`yours`) are YAML files in the data folder's `templates/` folder, so they can be shared.
+
+```ts
+type Template = {
+  id: string;                     // 1–48 of [a-z0-9-]
+  name: string; description: string;
+  category: "everyday" | "work" | "life" | "meta" | "yours";
+  icon: string;                   // a lucide icon name: "sunrise", "pen-line", "languages", "list-checks", "search", …
+  kind: "assistant" | "researcher" | "coding" | string;   // the runtime kind its agents get
+  instructions: string;
+  workspace?: { tools: string[] };
+  approvals?: { tools: string[]; timeoutSeconds: number };
+  web?: { search: boolean; fetch: boolean };              // left out: both on
+  schedules?: { agentMade: boolean };                     // may set its own schedules
+  schedule?: { name: string; cron: string; message: string; threadMode?: "new" | "this" };  // made with the agent
+  mcp?: string[];                 // MCP server IDs it works with, used when this computer has them
+  needs?: string[];               // what makes it work well: "web-search"
+  builtin: boolean;               // shipped with the app: can't be deleted
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/templates` | `{templates: Template[], categories: string[]}` (categories in the gallery's order). |
+| `POST /api/templates` | Body: the template file's raw YAML (send text or an ArrayBuffer, not a Blob: Wails drops Blob bodies). Imports it; an ID already taken gets a fresh one. `201 Template`. `400 invalid_template` with a message for people; `400 empty_file`. |
+| `GET /api/templates/{id}/export` | The YAML file, `Content-Disposition: attachment; filename="<id>.pi-template.yaml"`. |
+| `DELETE /api/templates/{id}` | `{ok: true}`. `409 builtin` for a built-in. Agents made from it keep working. |
+| `POST /api/agents/{id}/save-template` | Body `{name?, description?}` (default: the agent's). A template of the agent's kind, instructions, workspace tools, approvals, web tools, `schedules.agentMade` and MCP server IDs (never its project folder, memory or conversations). `201 Template` (category `yours`). |
+
+`POST /api/agents` with `templateId` makes an agent from one (see [Agents](#agents)). A template with a `schedule` also
+gets that schedule. The `coding` template's project folder is sent as `workspace` as before.
+
+### Web tools
+
+`Agent` gains `web: {search: boolean, fetch: boolean}` (`PATCH` it): its `web_search` tool (through the search service
+below) and `web_fetch`, which reads a web page as text. Both only read. New agents get both on unless their template says
+otherwise.
+
+The search service is the app's, shared by every agent. Its key lives in the OS keychain and is never returned.
+
+```ts
+type WebSearchProvider = { id: "brave" | "tavily" | "serpapi" | "searxng"; name: string;
+  needsKey: boolean; needsUrl: boolean; signupUrl: string; note: string };
+type WebSettings = {
+  provider: "" | WebSearchProvider["id"];   // "": web search is off
+  url: string;                              // a custom address (self-hosted or a proxy); required for SearXNG
+  hasKey: boolean;                          // a key is stored
+  providers: WebSearchProvider[];           // Brave first (the suggested one)
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/settings/web` | `WebSettings` |
+| `PUT /api/settings/web` | Body `{provider, url?, apiKey?}`. `apiKey` left out keeps the stored key; `""` removes it. `url` left out keeps the stored one; `""` clears it. `provider: ""` turns search off (and removes the key and address). Answers `WebSettings`. Errors: `400 invalid_provider`, `400 invalid_key` ("Paste the API key from Brave Search."), `400 invalid_url`. |
+| `POST /api/settings/web/test` | Body `{query?}` (default "Pi Local test search"). One search with the saved settings: `{results: [{title, url, snippet}]}` (at most 3). `409 not_set_up`; `502 search_failed` with a message for people. |
 
 ## Not yet (later phases)
 

@@ -5,6 +5,7 @@ import { errorMessage, type Model, type Provider, type ProviderKind } from '~/ap
 import { ConfirmDialog, ErrorNotice, RequestError } from '~/components/models/fields';
 import { DiscoverDialog, ModelDialog } from '~/components/models/model-dialogs';
 import { AddProviderDialog, EditProviderDialog } from '~/components/models/provider-dialogs';
+import { WebSearchSection } from '~/components/models/web-search-section';
 import { SettingsRow, SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
@@ -366,8 +367,8 @@ type Open =
 
 /**
  * Settings → Models: the model services (providers) and which of their
- * models agents may use, with each model's limits and prices, and the model
- * new agents get.
+ * models agents may use, with each model's limits and prices, the model
+ * new agents get, and the web search service.
  */
 export function SettingsModelsPage() {
   usePageTitle('Models · Settings');
@@ -465,6 +466,8 @@ export function SettingsModelsPage() {
           </Button>
         </div>
       </SettingsSection>
+
+      <WebSearchSection />
 
       {open?.kind === 'add-provider' && (
         <AddProviderDialog

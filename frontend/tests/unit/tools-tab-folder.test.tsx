@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from '../../src/api/client';
 import { ToolsTab } from '../../src/components/agent-manager/tools-tab';
@@ -13,6 +14,13 @@ import {
   typeInto,
 } from './ui-test-utils';
 
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ children, to, className }: { children: ReactNode; to: string; className?: string }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
+}));
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 const PRIVATE = '/data/agents/ag_coder/workspace';

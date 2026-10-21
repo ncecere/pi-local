@@ -1,9 +1,18 @@
 import { useNavigate } from '@tanstack/react-router';
-import { Copy, Download, Trash2 } from 'lucide-react';
+import { BookmarkPlus, Copy, Download, Trash2 } from 'lucide-react';
+import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import { type Agent, errorMessage } from '~/api/client';
-import { ConfirmDialog } from '~/components/models/fields';
+import { ConfirmDialog, ErrorNotice, FIELD, Field, Optional } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '~/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,8 +21,9 @@ import {
 } from '~/components/ui/dropdown-menu';
 import { Spinner } from '~/components/ui/spinner';
 import { useDeleteAgent, useDuplicateAgent, useExportAgent } from '~/hooks/use-agent-manager';
+import { useSaveAsTemplate } from '~/hooks/use-templates';
 
-/** Duplicate, Export (with or without conversations) and Delete, for one agent. */
+/** Duplicate, Save as template, Export (with or without conversations) and Delete, for one agent. */
 export function AgentActions({
   agent,
   deleting,
@@ -27,6 +37,7 @@ export function AgentActions({
   const duplicate = useDuplicateAgent();
   const exportAgent = useExportAgent();
   const remove = useDeleteAgent();
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   const runExport = (conversations: boolean) =>
     exportAgent.mutate(
@@ -62,6 +73,10 @@ export function AgentActions({
         {duplicate.isPending ? <Spinner className="size-3.5 text-current" /> : <Copy />}
         Duplicate
       </Button>
+      <Button type="button" size="sm" variant="secondary" onClick={() => setSavingTemplate(true)}>
+        <BookmarkPlus />
+        Save as template
+      </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button type="button" size="sm" variant="secondary" disabled={exportAgent.isPending}>
@@ -93,6 +108,9 @@ export function AgentActions({
         Delete
       </Button>
 
+      {savingTemplate && (
+        <SaveTemplateDialog agent={agent} onClose={() => setSavingTemplate(false)} />
+      )}
       {deleting && (
         <ConfirmDialog
           title={`Delete ${agent.name}?`}
@@ -113,5 +131,86 @@ export function AgentActions({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Save as template: the agent's kind, instructions, tools and approvals become
+ * a template of the person's own ("Yours" in the New agent gallery).
+ */
+function SaveTemplateDialog({ agent, onClose }: { agent: Agent; onClose: () => void }) {
+  const id = useId();
+  const save = useSaveAsTemplate();
+  const [name, setName] = useState(agent.name);
+  const [description, setDescription] = useState(agent.description);
+  const submit = () =>
+    save.mutate(
+      {
+        agentId: agent.id,
+        ...(name.trim() ? { name: name.trim() } : {}),
+        ...(description.trim() ? { description: description.trim() } : {}),
+      },
+      {
+        onSuccess: () => {
+          toast('Saved as a template.');
+          onClose();
+        },
+      },
+    );
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Save as template</DialogTitle>
+          <DialogDescription>
+            New agents can start from it: its instructions, tools and approvals. Not its memory or
+            conversations.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (name.trim() && !save.isPending) submit();
+          }}
+        >
+          <Field id={`${id}-name`} label="Name">
+            <input
+              id={`${id}-name`}
+              maxLength={60}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className={FIELD}
+            />
+          </Field>
+          <Field
+            id={`${id}-description`}
+            label={
+              <>
+                Description <Optional />
+              </>
+            }
+          >
+            <input
+              id={`${id}-description`}
+              maxLength={500}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              className={FIELD}
+            />
+          </Field>
+          {save.error && <ErrorNotice>{errorMessage(save.error)}</ErrorNotice>}
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={!name.trim() || save.isPending}>
+              {save.isPending && <Spinner className="size-4 text-current" />}
+              Save template
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

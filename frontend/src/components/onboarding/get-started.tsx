@@ -1,4 +1,4 @@
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { Check, ExternalLink, Plus } from 'lucide-react';
 import { type FormEvent, type ReactNode, useId, useState } from 'react';
 import type { DetectedServer, Provider, ProviderPreset } from '~/api/client';
@@ -8,20 +8,9 @@ import { Spinner } from '~/components/ui/spinner';
 import { useAgentCatalog, useAgents } from '~/hooks/use-agents';
 import { useDetectedServers, useProviders, useSetupProvider } from '~/hooks/use-providers';
 import { DEMO_MODEL_ID, filterDiscovered, onlyDemoModel, splitModelId } from '~/lib/models';
+import { useSkipModel } from '~/lib/onboarding';
 import { cn, plural } from '~/lib/utils';
-
-/** The person chose to try the demo model rather than connect one (this browser only). */
-const SKIP_MODEL_KEY = 'pai.onboarding.skipModel';
-
-function useSkipModel(): [boolean, (skip: boolean) => void] {
-  const [skipped, setSkipped] = useState(() => localStorage.getItem(SKIP_MODEL_KEY) === 'true');
-  const set = (skip: boolean) => {
-    if (skip) localStorage.setItem(SKIP_MODEL_KEY, 'true');
-    else localStorage.removeItem(SKIP_MODEL_KEY);
-    setSkipped(skip);
-  };
-  return [skipped, set];
-}
+import { AgentDialog } from '~/routes/settings/agents';
 
 const LINK = 'text-[var(--accent-bright)] underline-offset-4 hover:underline';
 
@@ -372,12 +361,16 @@ export function GetStarted({ className }: { className?: string }) {
   const agents = useAgents();
   const catalog = useAgentCatalog(agents.isSuccess);
   const [skipped, setSkipped] = useSkipModel();
+  const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
   if (!agents.isSuccess || !catalog.data) return null;
 
   const hasAgent = agents.data.length > 0;
   const hasModel = !onlyDemoModel(catalog.data.models);
   const modelDone = hasModel || skipped;
-  if (hasAgent && modelDone) return null;
+  // The New agent dialog stays until it closes, even once the agent is made.
+  if (hasAgent && modelDone && !creating) return null;
+  const canMake = catalog.data.limit > catalog.data.used && catalog.data.templates.length > 0;
 
   const defaultId = catalog.data.defaultModelId;
   const defaultName =
@@ -412,11 +405,14 @@ export function GetStarted({ className }: { className?: string }) {
           <p>An agent has its own instructions, memory and conversations.</p>
           <div className="mt-3">
             {modelDone ? (
-              <Button asChild variant="primary">
-                <Link to="/settings/agents" search={{ new: true }}>
-                  <Plus />
-                  Make an agent
-                </Link>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={!canMake}
+                onClick={() => setCreating(true)}
+              >
+                <Plus />
+                Make an agent
               </Button>
             ) : (
               <div className="flex flex-wrap items-center gap-3">
@@ -448,6 +444,14 @@ export function GetStarted({ className }: { className?: string }) {
         {/* Done first, so progress shows at the top. */}
         {hasAgent && !modelDone ? [agentStep, modelStep] : [modelStep, agentStep]}
       </ol>
+      {creating && (
+        <AgentDialog
+          agent={null}
+          catalog={catalog.data}
+          onClose={() => setCreating(false)}
+          onCreated={(agent) => void navigate({ to: '/', search: { agent: agent.id } })}
+        />
+      )}
     </section>
   );
 }

@@ -192,10 +192,9 @@ func FromAgent(id string, c agents.Config) *Template {
 		a := c.Approvals
 		t.Approvals = &a
 	}
-	if c.Web.Search || c.Web.Fetch {
-		w := c.Web
-		t.Web = &w
-	}
+	// Always recorded: a template without web would give new agents the default (both on).
+	w := c.Web
+	t.Web = &w
 	if c.Schedules.AgentMade {
 		s := c.Schedules
 		t.Schedules = &s
@@ -209,7 +208,7 @@ func FromAgent(id string, c agents.Config) *Template {
 // Marshal writes a template file.
 func Marshal(t *Template) []byte {
 	var buf bytes.Buffer
-	buf.WriteString("# A Pi Local agent template. Import it in Settings → Agents → Templates.\n")
+	buf.WriteString("# A Pi Local agent template. Import it with Import template… in the New agent dialog.\n")
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	enc.Encode(t)

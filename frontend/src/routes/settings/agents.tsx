@@ -9,6 +9,7 @@ import {
   PROJECT_FOLDER_HINT,
   ProjectFolderInput,
 } from '~/components/agent-manager/project-folder-field';
+import { TemplateGallery, TemplateSummary } from '~/components/agent-manager/template-gallery';
 import { ErrorNotice } from '~/components/models/fields';
 import { SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
@@ -31,6 +32,8 @@ import {
   useCreateAgent,
   useUpdateAgent,
 } from '~/hooks/use-agents';
+import { useTemplates } from '~/hooks/use-templates';
+import { useWebSearchReady } from '~/hooks/use-web';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { agentFieldText } from '~/lib/agent-text';
 import { usePageTitle } from '~/lib/document-title';
@@ -45,32 +48,44 @@ const CODING_TOOLS = ['read', 'write', 'edit', 'bash'] as const;
 
 /**
  * Making an agent, or changing one: its name, description, instructions and
- * (if allowed) its model; a new one also its template (the runtime kind).
- * Empty instructions mean the kind's default prompt.
+ * (if allowed) its model; a new one also its template, picked from a gallery.
+ * Empty instructions mean the template's (or the kind's default prompt); an
+ * empty name, the template's.
  */
 export function AgentDialog({
   agent,
   catalog,
   onClose,
+  onCreated,
 }: {
   agent: Agent | null;
   catalog: AgentCatalog;
   onClose: () => void;
+  /** A new agent was made (after the toast; the dialog closes too). */
+  onCreated?: (agent: Agent) => void;
 }) {
   const create = useCreateAgent();
   const update = useUpdateAgent();
   const id = useId();
+  // The gallery follows imports and deletes; the catalog's list until it is read.
+  const templateList = useTemplates(!agent);
+  const templates = templateList.data?.templates ?? catalog.templates;
+  const webSearchReady = useWebSearchReady(!agent);
   const [name, setName] = useState(agent?.name ?? '');
   const [templateId, setTemplateId] = useState(catalog.templates[0]?.id ?? '');
   const [modelId, setModelId] = useState(agent?.model?.id ?? catalog.defaultModelId ?? '');
   const [description, setDescription] = useState(agent?.description ?? '');
   const [instructions, setInstructions] = useState(agent?.instructions ?? '');
+  const [showTemplateText, setShowTemplateText] = useState(false);
   const [folder, setFolder] = useState('');
   const busy = create.isPending || update.isPending;
   const error = create.error ?? update.error;
-  const kind = agent ? agent.agentKind : templateId;
+  const template = agent ? undefined : templates.find((candidate) => candidate.id === templateId);
+  const kind = agent ? agent.agentKind : (template?.kind ?? templateId);
   const coding = kind === 'coding';
   const text = agentFieldText(kind);
+  const templateText = template?.instructions.trim() ?? '';
+  const newName = name.trim() || template?.name || '';
   const folderError =
     error instanceof ApiError && error.code === 'invalid_workspace_folder' ? error.message : null;
   // An agent whose model was removed or turned off keeps it until given another.
@@ -107,7 +122,7 @@ export function AgentDialog({
     else
       create.mutate(
         {
-          name: name.trim(),
+          name: newName,
           ...(description.trim() ? { description: description.trim() } : {}),
           templateId,
           ...(catalog.allowModelChoice && modelId ? { modelId } : {}),
@@ -117,9 +132,10 @@ export function AgentDialog({
             : {}),
         },
         {
-          onSuccess: () => {
-            toast(`${name.trim()} is ready.`);
+          onSuccess: (made) => {
+            toast(`${made.name || newName} is ready.`);
             onClose();
+            onCreated?.(made);
           },
         },
       );
@@ -127,7 +143,7 @@ export function AgentDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={SCROLLING_DIALOG}>
+      <DialogContent className={cn(SCROLLING_DIALOG, !agent && 'max-w-2xl')}>
         <DialogHeader>
           <DialogTitle>{agent ? `Edit ${agent.name}` : 'New agent'}</DialogTitle>
           <DialogDescription>
@@ -137,6 +153,18 @@ export function AgentDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="flex flex-col gap-4">
+          {!agent && (
+            <TemplateGallery
+              id={`${id}-gallery`}
+              templates={templates}
+              selectedId={templateId}
+              onSelect={(next) => {
+                setTemplateId(next);
+                setShowTemplateText(false);
+              }}
+            />
+          )}
+          {template && <TemplateSummary template={template} webSearchReady={webSearchReady} />}
           <label htmlFor={`${id}-name`} className="flex flex-col gap-1.5 text-sm font-medium">
             Name
             <input
@@ -144,7 +172,7 @@ export function AgentDialog({
               maxLength={60}
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="Research helper"
+              placeholder={template?.name ?? 'Research helper'}
               className={FIELD}
             />
           </label>
@@ -159,37 +187,10 @@ export function AgentDialog({
               id={`${id}-description`}
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              placeholder={text.description}
+              placeholder={template?.description || text.description}
               className={FIELD}
             />
           </label>
-          {!agent && (
-            <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
-              <legend className="mb-1.5 text-sm font-medium">Start from</legend>
-              {catalog.templates.map((template) => (
-                <label
-                  key={template.id}
-                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm has-[:checked]:border-[var(--accent-button-border)] has-[:checked]:bg-[var(--accent-soft)]"
-                >
-                  <input
-                    type="radio"
-                    name={`${id}-template`}
-                    checked={templateId === template.id}
-                    onChange={() => setTemplateId(template.id)}
-                    className="mt-0.5 accent-[var(--accent)]"
-                  />
-                  <span className="min-w-0">
-                    <span className="block font-medium">{template.name}</span>
-                    {template.description && (
-                      <span className="block text-xs text-[var(--text-muted)]">
-                        {template.description}
-                      </span>
-                    )}
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-          )}
           {!agent && coding && (
             <div className="flex flex-col gap-1.5">
               <label htmlFor={`${id}-folder`} className="text-sm font-medium">
@@ -217,29 +218,52 @@ export function AgentDialog({
               </span>
             </div>
           )}
-          <label
-            htmlFor={`${id}-instructions`}
-            className="flex flex-col gap-1.5 text-sm font-medium"
-          >
-            <span>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor={`${id}-instructions`} className="text-sm font-medium">
               Instructions <span className="font-normal text-[var(--text-muted)]">(optional)</span>
-            </span>
+            </label>
             <textarea
               id={`${id}-instructions`}
               rows={agent ? 8 : 4}
               value={instructions}
               onChange={(event) => setInstructions(event.target.value)}
-              placeholder={text.instructions}
+              placeholder={
+                templateText ? "Leave empty to use the template's instructions" : text.instructions
+              }
               aria-describedby={`${id}-instructions-hint`}
               className={cn(FIELD, 'h-auto min-h-24 resize-y py-2 font-normal')}
             />
-            <span
-              id={`${id}-instructions-hint`}
-              className="text-xs font-normal text-[var(--text-muted)]"
-            >
-              {text.instructionsHint}
+            <span id={`${id}-instructions-hint`} className="text-xs text-[var(--text-muted)]">
+              {templateText && !coding ? "Yours replace the template's." : text.instructionsHint}
             </span>
-          </label>
+            {templateText && (
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={showTemplateText}
+                  aria-controls={`${id}-template-text`}
+                  onClick={() => setShowTemplateText(!showTemplateText)}
+                  className="flex items-center gap-1 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                >
+                  <ChevronRight
+                    className={cn('size-3.5 transition-transform', showTemplateText && 'rotate-90')}
+                    aria-hidden="true"
+                  />
+                  Show the template's instructions
+                </button>
+                {showTemplateText && (
+                  <div
+                    id={`${id}-template-text`}
+                    role="note"
+                    aria-label={`${template?.name} instructions`}
+                    className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-inset)]/60 px-3 py-2 text-xs leading-relaxed text-[var(--text-secondary)]"
+                  >
+                    {templateText}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           {catalog.allowModelChoice && (catalog.models.length > 1 || missingModel) && (
             <label htmlFor={`${id}-model`} className="flex flex-col gap-1.5 text-sm font-medium">
               Model
@@ -308,7 +332,7 @@ export function AgentDialog({
           </Button>
           <Button
             variant="primary"
-            disabled={!name.trim() || (!agent && !templateId) || busy}
+            disabled={(agent ? !name.trim() : !template || !newName) || busy}
             onClick={submit}
           >
             {busy && <Spinner className="size-4" />}

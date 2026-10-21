@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/ncecere/pi-local/internal/agents"
@@ -15,6 +16,7 @@ func (a *API) templateRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/templates", a.listTemplates)
 	m.HandleFunc("POST /api/templates", a.importTemplate)
 	m.HandleFunc("GET /api/templates/{id}/export", a.exportTemplate)
+	m.HandleFunc("POST /api/templates/{id}/export-save", a.exportTemplateSave)
 	m.HandleFunc("DELETE /api/templates/{id}", a.deleteTemplate)
 	m.HandleFunc("POST /api/agents/{agent}/save-template", a.withAgent(a.saveAsTemplate))
 }
@@ -64,6 +66,34 @@ func (a *API) exportTemplate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pi-template.yaml"`, t.ID))
 	w.Write(templates.Marshal(t))
+}
+
+// exportTemplateSave asks where to save the file (the desktop app's Save dialog) and writes it; 501 without a dialog
+// (the UI downloads GET …/export instead).
+func (a *API) exportTemplateSave(w http.ResponseWriter, r *http.Request) {
+	if a.SaveDialog == nil {
+		fail(w, http.StatusNotImplemented, "not_supported", "Saving through a dialog needs the desktop app.")
+		return
+	}
+	t, err := a.Templates.Get(r.PathValue("id"))
+	if err != nil {
+		templateFailure(w, err)
+		return
+	}
+	path, err := a.SaveDialog(t.ID + ".pi-template.yaml")
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "The save dialog failed: "+err.Error())
+		return
+	}
+	if path == "" {
+		ok(w, map[string]any{"cancelled": true})
+		return
+	}
+	if err := os.WriteFile(path, templates.Marshal(t), 0o600); err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "Could not write "+path+": "+err.Error())
+		return
+	}
+	ok(w, map[string]any{"path": path})
 }
 
 func (a *API) deleteTemplate(w http.ResponseWriter, r *http.Request) {

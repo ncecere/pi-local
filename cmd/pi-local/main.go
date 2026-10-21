@@ -191,7 +191,16 @@ func main() {
 			return wails.Dialog.OpenFile().SetTitle(title).CanChooseDirectories(true).CanChooseFiles(false).CanCreateDirectories(true).AttachToWindow(window).PromptForSingleSelection()
 		}
 		core.API.SaveDialog = func(name string) (string, error) {
-			return wails.Dialog.SaveFile().SetFilename(name).AddFilter("Zip archive", "*.zip").CanCreateDirectories(true).AttachToWindow(window).PromptForSingleSelection()
+			dialog := wails.Dialog.SaveFile().SetFilename(name).CanCreateDirectories(true).AttachToWindow(window)
+			switch {
+			case strings.HasSuffix(name, ".zip"):
+				dialog.AddFilter("Zip archive", "*.zip")
+			case strings.HasSuffix(name, ".yaml"):
+				dialog.AddFilter("Template", "*.yaml")
+			case strings.HasSuffix(name, ".json"):
+				dialog.AddFilter("JSON", "*.json")
+			}
+			return dialog.PromptForSingleSelection()
 		}
 		core.ResumeUnfinished(ctx)
 	}

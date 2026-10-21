@@ -8,7 +8,8 @@ import { ME_KEY } from '../../src/hooks/use-session';
 /**
  * Rendering a component against a fake backend: requests go to `routes`
  * ("METHOD /path" → a handler returning the `data`, or throwing an ApiError),
- * and each is recorded in `calls`.
+ * and each is recorded in `calls`. An upload (raw bytes) is a POST whose body
+ * is recorded, and handed to the handler, as text.
  */
 export type Handler = (body: unknown) => unknown;
 
@@ -26,6 +27,13 @@ export function fakeBackend(routes: Record<string, Handler> = {}): FakeBackend {
       backend.calls.push({ method, path, body });
       const handler = backend.routes[`${method} ${path}`];
       if (!handler) throw new ApiError(404, 'not_found', `No route for ${method} ${path}`);
+      return handler(body) as T;
+    },
+    async upload<T>(path: string, bytes: ArrayBuffer): Promise<T> {
+      const body = new TextDecoder().decode(bytes);
+      backend.calls.push({ method: 'POST', path, body });
+      const handler = backend.routes[`POST ${path}`];
+      if (!handler) throw new ApiError(404, 'not_found', `No route for POST ${path}`);
       return handler(body) as T;
     },
   });

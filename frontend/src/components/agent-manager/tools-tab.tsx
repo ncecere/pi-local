@@ -1,14 +1,23 @@
+import { Link } from '@tanstack/react-router';
 import { ChevronRight, FolderOpen, TriangleAlert } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { toast } from 'sonner';
-import { type Agent, ApiError, errorMessage, type WorkspaceTool } from '~/api/client';
+import {
+  type Agent,
+  ApiError,
+  errorMessage,
+  type WebTools,
+  type WorkspaceTool,
+} from '~/api/client';
 import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
 import { ProjectFolderInput } from '~/components/agent-manager/project-folder-field';
 import { ErrorNotice, FIELD } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
+import { Switch } from '~/components/ui/switch';
 import { useReveal } from '~/hooks/use-agent-manager';
 import { useUpdateAgent } from '~/hooks/use-agents';
 import { useMcpServers } from '~/hooks/use-mcp';
+import { useWebSearchReady } from '~/hooks/use-web';
 import {
   APPROVAL_PRESETS,
   applyPreset,
@@ -286,6 +295,8 @@ function ToolsForm({
         )}
       </Panel>
 
+      <WebPanel agent={agent} />
+
       <Panel
         title="Approvals"
         description="Tools that ask you first. The call waits, even while the agent sleeps, until you approve or deny it in the conversation."
@@ -443,6 +454,82 @@ function ToolsForm({
         </div>
       </Panel>
     </div>
+  );
+}
+
+const LINK = 'text-[var(--accent-bright)] underline-offset-4 hover:underline';
+
+/**
+ * Its web tools, each saved as soon as it is switched: searching (through the
+ * search service in Settings → Models) and reading pages. Both only read.
+ */
+function WebPanel({ agent }: { agent: Agent }) {
+  const id = useId();
+  const update = useUpdateAgent();
+  const saved: WebTools = agent.web ?? { search: false, fetch: false };
+  // While a change saves, the switches show it.
+  const web = (update.isPending && update.variables?.web) || saved;
+  // Asked only when it matters: search is on.
+  const searchReady = useWebSearchReady(web.search);
+  const set = (change: Partial<WebTools>) =>
+    saveAgentChange(agent, () => update.mutateAsync({ id: agent.id, web: { ...web, ...change } }));
+
+  const row = (key: keyof WebTools, label: string, hint: ReactNode, extra?: ReactNode) => (
+    <div className="flex items-start justify-between gap-6">
+      <div className="min-w-0">
+        <p id={`${id}-${key}-label`} className="text-sm font-medium">
+          {label}
+        </p>
+        <p id={`${id}-${key}-hint`} className="mt-0.5 text-xs text-[var(--text-muted)]">
+          {hint}
+        </p>
+        {extra}
+      </div>
+      <Switch
+        checked={web[key]}
+        disabled={update.isPending}
+        aria-labelledby={`${id}-${key}-label`}
+        aria-describedby={`${id}-${key}-hint`}
+        onCheckedChange={(on) => set({ [key]: on })}
+      />
+    </div>
+  );
+
+  return (
+    <Panel title="Web" description="Looking things up and reading pages. Neither changes anything.">
+      <div className="flex flex-col gap-4">
+        {row(
+          'search',
+          'Search the web',
+          <>
+            Uses the search service in{' '}
+            <Link to="/settings/models" className={LINK}>
+              Settings → Models
+            </Link>
+            .
+          </>,
+          web.search && searchReady === false && (
+            <p
+              role="note"
+              className="mt-2 flex gap-2 rounded-lg border border-[var(--warning)]/45 bg-[var(--warning)]/[0.08] px-3 py-2 text-xs text-[var(--text-primary)]"
+            >
+              <TriangleAlert
+                className="mt-px size-3.5 shrink-0 text-[var(--warning)]"
+                aria-hidden="true"
+              />
+              No search service is set up yet, so its searches will fail. Choose one in Settings →
+              Models.
+            </p>
+          ),
+        )}
+        {row(
+          'fetch',
+          'Read web pages',
+          'Open a link and read the page as text: ones you send, or ones it finds.',
+        )}
+        {update.error && <ErrorNotice>{errorMessage(update.error)}</ErrorNotice>}
+      </div>
+    </Panel>
   );
 }
 

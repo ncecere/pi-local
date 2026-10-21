@@ -84,7 +84,8 @@ func failed(format string, args ...any) error {
 // ErrNotSetUp: no search service chosen yet.
 var ErrNotSetUp = &Error{Status: http.StatusConflict, Code: "not_set_up", Message: "Web search isn't set up yet: choose a search service in Settings → Models → Web search."}
 
-const keyName = "web:search:key"
+// keyFor is where a search service's key is kept: one per service, so switching back finds it again.
+func keyFor(provider string) string { return "web:search:key:" + provider }
 
 // Service is the app's web access.
 type Service struct {
@@ -120,8 +121,12 @@ func (s *Service) put(key, value string) error {
 
 // Settings reads the chosen service.
 func (s *Service) Settings() Settings {
-	key, _ := s.secrets.Get(keyName)
-	return Settings{Provider: s.setting("web_search_provider"), URL: s.setting("web_search_url"), HasKey: key != "", Providers: Providers}
+	provider := s.setting("web_search_provider")
+	key := ""
+	if provider != "" {
+		key, _ = s.secrets.Get(keyFor(provider))
+	}
+	return Settings{Provider: provider, URL: s.setting("web_search_url"), HasKey: key != "", Providers: Providers}
 }
 
 // SettingsInput changes the search service; a nil key keeps the stored one, "" removes it.
@@ -138,7 +143,6 @@ func (s *Service) Save(in SettingsInput) (Settings, error) {
 	if in.Provider == "" {
 		s.put("web_search_provider", "")
 		s.put("web_search_url", "")
-		s.secrets.Delete(keyName)
 		return s.Settings(), nil
 	}
 	p, ok := providerByID(in.Provider)
@@ -146,6 +150,9 @@ func (s *Service) Save(in SettingsInput) (Settings, error) {
 		return Settings{}, bad("invalid_provider", "Choose one of the search services offered.")
 	}
 	url := s.setting("web_search_url")
+	if s.setting("web_search_provider") != p.ID && in.URL == nil {
+		url = "" // another service's address doesn't carry over
+	}
 	if in.URL != nil {
 		url = strings.TrimRight(strings.TrimSpace(*in.URL), "/")
 	}
@@ -159,15 +166,15 @@ func (s *Service) Save(in SettingsInput) (Settings, error) {
 	}
 	if in.APIKey != nil {
 		if k := strings.TrimSpace(*in.APIKey); k != "" {
-			if err := s.secrets.Set(keyName, k); err != nil {
+			if err := s.secrets.Set(keyFor(p.ID), k); err != nil {
 				return Settings{}, err
 			}
 		} else {
-			s.secrets.Delete(keyName)
+			s.secrets.Delete(keyFor(p.ID))
 		}
 	}
 	if p.NeedsKey {
-		if k, _ := s.secrets.Get(keyName); k == "" {
+		if k, _ := s.secrets.Get(keyFor(p.ID)); k == "" {
 			return Settings{}, bad("invalid_key", "Paste the API key from %s.", p.Name)
 		}
 	}
@@ -200,7 +207,7 @@ func (s *Service) Search(ctx context.Context, query string, count int) ([]Result
 	if !ok {
 		return nil, ErrNotSetUp
 	}
-	key, _ := s.secrets.Get(keyName)
+	key, _ := s.secrets.Get(keyFor(p.ID))
 	base := p.base
 	if st.URL != "" {
 		base = st.URL

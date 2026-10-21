@@ -3,12 +3,14 @@ import {
   type Agent,
   type AgentApprovals,
   type AgentMcpServer,
+  type AgentTemplate,
   type AgentThread,
   type AgentWorkspaceInput,
   agentPath,
   api,
   type CatalogModel,
   threadPath,
+  type WebTools,
 } from '~/api/client';
 
 export const AGENTS_KEY = ['agents'] as const;
@@ -192,7 +194,8 @@ export function newThreadId(): string {
 // ── Making and managing agents (docs/api.md, Agents) ────────────────────────────────────────
 
 export interface AgentCatalog {
-  templates: { id: string; name: string; description: string }[];
+  /** The templates for the New agent gallery, in order (built-ins first). */
+  templates: AgentTemplate[];
   /** Every enabled model of every enabled provider, and the demo model. */
   models: CatalogModel[];
   defaultModelId: string | null;
@@ -217,8 +220,10 @@ export function useCreateAgent() {
     mutationFn: (body: {
       name: string;
       description?: string;
+      /** A template's ID: the agent starts from it; the fields here still win. */
       templateId: string;
       modelId?: string;
+      /** Left out or empty: the template's instructions. */
       instructions?: string;
       /** Left out: the kind's default tools (coding: read, write, edit, bash) in its own folder. */
       workspace?: AgentWorkspaceInput;
@@ -252,6 +257,7 @@ export function useUpdateAgent() {
       approvals?: AgentApprovals;
       mcp?: AgentMcpServer[];
       schedules?: { agentMade: boolean };
+      web?: WebTools;
     }) => api.patch<Agent>(agentPath(id), body),
     onSuccess: (agent) =>
       queryClient.setQueryData<Agent[]>(AGENTS_KEY, (list) =>
