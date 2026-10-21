@@ -1,6 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { ApiError, api, errorMessage, threadPath } from '~/api/client';
+import {
+  ArtifactDraftProvider,
+  artifactDraftKey,
+  useArtifactDrafts,
+} from '~/components/chat/artifact-drafts';
 import { HighlightedCode, Markdown } from '~/components/chat/markdown';
 import { Button } from '~/components/ui/button';
 import { useAgent } from '~/hooks/use-agents';
@@ -58,19 +63,26 @@ export function ArtifactPreview({ artifact }: { artifact: ArtifactVersion }) {
 }
 
 /** Lives inside DocumentsPanel: only one side-panel portal, shared with the other conversation documents. */
-export function ArtifactCanvas({
-  agentId,
-  threadId,
-  value,
-}: {
+type ArtifactCanvasProps = {
   agentId: string;
   threadId: string;
   value: unknown;
-}) {
+};
+
+export function ArtifactCanvas(props: ArtifactCanvasProps) {
+  return (
+    <ArtifactDraftProvider>
+      <ArtifactCanvasView {...props} />
+    </ArtifactDraftProvider>
+  );
+}
+
+function ArtifactCanvasView({ agentId, threadId, value }: ArtifactCanvasProps) {
   const canWrite = useAgent(agentId)?.workspace?.tools.includes('write') ?? false;
   const artifacts = artifactList(value);
-  const [selected, setSelected] = useState('');
-  const artifact = artifacts.find((a) => a.id === selected) ?? artifacts[0];
+  const { selections, select } = useArtifactDrafts();
+  const selectionKey = artifactDraftKey(agentId, threadId);
+  const artifact = artifacts.find((a) => a.id === selections[selectionKey]) ?? artifacts[0];
   if (!artifact) return <p>No artifacts yet.</p>;
   return (
     <section className="space-y-3" aria-label="Artifact canvas">
@@ -80,7 +92,7 @@ export function ArtifactCanvas({
           className="mt-1 block w-full rounded bg-[var(--bg-control)] p-2"
           aria-label="Select artifact"
           value={artifact.id}
-          onChange={(e) => setSelected(e.target.value)}
+          onChange={(e) => select(selectionKey, e.target.value)}
         >
           {artifacts.map((a) => (
             <option key={a.id} value={a.id}>
@@ -90,7 +102,7 @@ export function ArtifactCanvas({
         </select>
       </label>
       <ArtifactEditor
-        key={`${agentId}/${threadId}/${artifact.id}`}
+        key={artifactDraftKey(agentId, threadId, artifact.id)}
         agentId={agentId}
         threadId={threadId}
         artifact={artifact}
@@ -112,7 +124,10 @@ function ArtifactEditor({
   canWrite: boolean;
 }) {
   const queryClient = useQueryClient();
-  const [editing, setEditing] = useState<{ base: Artifact; content: string } | null>(null);
+  const { drafts, setDraft, saved } = useArtifactDrafts();
+  const draftKey = artifactDraftKey(agentId, threadId, artifact.id);
+  const editing = drafts[draftKey] ?? null;
+  const setEditing = (draft: typeof editing) => setDraft(draftKey, draft);
   const [history, setHistory] = useState<ArtifactVersion[] | null>(null);
   const [revision, setRevision] = useState<number | null>(null);
   const [error, setError] = useState('');
@@ -144,7 +159,7 @@ function ArtifactEditor({
         content: editing.content,
         expectedRevision: editing.base.revision,
       });
-      setEditing(null);
+      saved(draftKey, editing);
       setHistory(null);
       setRevision(null);
       await queryClient.invalidateQueries({
@@ -300,12 +315,17 @@ function ArtifactEditor({
               aria-label="Artifact content"
               className="mt-1 h-96 w-full rounded bg-[var(--bg-control)] p-2 font-mono text-xs"
               value={editing.content}
+              disabled={busy}
               onChange={(e) => setEditing({ ...editing, content: e.target.value })}
             />
           </label>
           <p className="text-xs">
             {new TextEncoder().encode(editing.content).byteLength} / 65,536 bytes · editing revision{' '}
             {editing.base.revision}
+          </p>
+          <p className="text-xs text-[var(--text-muted)]">
+            Unsaved drafts stay in this app window across conversations. Reloading or closing the
+            window loses them.
           </p>
           <div className="flex gap-2">
             <Button size="sm" disabled={busy} onClick={() => void save()}>

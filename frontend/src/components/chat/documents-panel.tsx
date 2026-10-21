@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { errorMessage } from '~/api/client';
 import type { ChatDocumentRef } from '~/api/types';
 import { ArtifactCanvas } from '~/components/chat/artifact-canvas';
+import { ArtifactDraftProvider } from '~/components/chat/artifact-drafts';
 import { DocumentValue } from '~/components/chat/document-views';
 import { SidePanelPortal } from '~/components/layout/side-panel-slot';
 import { Dialog, DialogContent, DialogTitle } from '~/components/ui/dialog';
@@ -116,15 +117,21 @@ function DocumentList({
  * its sources, a triage queue), beside the transcript on a wide window and
  * as a drawer on a narrow one. Nothing when there are none.
  */
-export function DocumentsPanel({
-  agentId,
-  threadId,
-  documents,
-}: {
+type DocumentsPanelProps = {
   agentId: string;
   threadId: string;
   documents: Documents | undefined;
-}) {
+};
+
+export function DocumentsPanel(props: DocumentsPanelProps) {
+  return (
+    <ArtifactDraftProvider>
+      <DocumentsPanelView {...props} />
+    </ArtifactDraftProvider>
+  );
+}
+
+function DocumentsPanelView({ agentId, threadId, documents }: DocumentsPanelProps) {
   const side = useMediaQuery(DOCUMENTS_SIDE_QUERY);
   const [hidden, setHidden] = useState(false);
   const [drawer, setDrawer] = useState(false);

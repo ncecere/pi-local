@@ -3,6 +3,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { DocumentBranding } from '~/components/brand/document-branding';
+import { ArtifactDraftProvider } from '~/components/chat/artifact-drafts';
 import { AppToaster } from '~/components/layout/app-toaster';
 import { installExternalLinks } from '~/lib/external-links';
 import { installPrefFlush } from '~/lib/pref-writes';
@@ -30,7 +31,9 @@ createRoot(container).render(
       <ThemeProvider>
         <DocumentBranding router={router} />
         <AppearanceSync />
-        <RouterProvider router={router} />
+        <ArtifactDraftProvider>
+          <RouterProvider router={router} />
+        </ArtifactDraftProvider>
         <AppToaster router={router} />
       </ThemeProvider>
     </QueryClientProvider>
