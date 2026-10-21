@@ -1,4 +1,5 @@
 import type { ReplyMetadata } from '~/lib/chat-view';
+import { formatClock, formatExact } from '~/lib/dates';
 
 /** A token count as people read it: 840, 1.2k, 12k, 1.2M. */
 export function formatTokens(count: number): string {
@@ -22,22 +23,6 @@ export function formatDuration(ms: number): string {
   return `${hours}h ${String(Math.floor((totalSeconds % 3_600) / 60)).padStart(2, '0')}m`;
 }
 
-/** When a message was sent: the time today, the date and time otherwise. */
-export function formatClock(at: number, now: number = Date.now(), locale?: string): string {
-  const date = new Date(at);
-  const today = new Date(now);
-  const sameDay =
-    date.getFullYear() === today.getFullYear() &&
-    date.getMonth() === today.getMonth() &&
-    date.getDate() === today.getDate();
-  return date.toLocaleString(
-    locale,
-    sameDay
-      ? { hour: 'numeric', minute: '2-digit' }
-      : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
-  );
-}
-
 /** The small line beside a message's controls: when, and for a reply which model and how many tokens. */
 export function replyInfo(
   meta: ReplyMetadata | undefined,
@@ -48,8 +33,8 @@ export function replyInfo(
   const parts: string[] = [];
   const details: string[] = [];
   if (meta.at !== undefined) {
-    parts.push(formatClock(meta.at, now, locale));
-    details.push(new Date(meta.at).toLocaleString(locale));
+    parts.push(formatClock(meta.at, { now, locale }));
+    details.push(formatExact(meta.at, { locale }));
   }
   if (meta.model) {
     parts.push(meta.model);

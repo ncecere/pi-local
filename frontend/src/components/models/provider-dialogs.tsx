@@ -14,6 +14,7 @@ import {
 import { Spinner } from '~/components/ui/spinner';
 import { Switch } from '~/components/ui/switch';
 import { useCreateProvider, useDeleteProvider, useUpdateProvider } from '~/hooks/use-providers';
+import { useSecretsHome } from '~/hooks/use-session';
 import { type HeaderRow, headersFromRows } from '~/lib/models';
 import {
   ConfirmDialog,
@@ -128,6 +129,7 @@ export function AddProviderDialog({
   onCreated: (provider: Provider) => void;
 }) {
   const create = useCreateProvider();
+  const home = useSecretsHome();
   const id = useId();
   const [preset, setPreset] = useState<ProviderPreset | null>(null);
   const [name, setName] = useState('');
@@ -182,7 +184,7 @@ export function AddProviderDialog({
           </DialogTitle>
           <DialogDescription>
             {preset
-              ? 'Its key and header values are kept in the system keychain, never shown again.'
+              ? `Its key and header values are kept in ${home}, never shown again.`
               : 'Where your models come from: a model service, or a server on this computer or your network.'}
           </DialogDescription>
         </DialogHeader>

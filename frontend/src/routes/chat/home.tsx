@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { MessageSquare, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type Agent, ApiError, type RouteResult, type Team } from '~/api/client';
+import { type Agent, ApiError, type Attachment, type RouteResult, type Team } from '~/api/client';
 import { AgentAvatar, agentStatusLabel } from '~/components/agent/agent-avatar';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import {
@@ -31,6 +31,7 @@ import { useModelChoice } from '~/hooks/use-model-choice';
 import { ME_KEY, useCurrentUser } from '~/hooks/use-session';
 import { useTeams } from '~/hooks/use-teams';
 import { agentKindLabel } from '~/lib/agent-groups';
+import { titleFromFiles } from '~/lib/attachments';
 import { usePageTitle } from '~/lib/document-title';
 import { focusComposerOnArrival } from '~/lib/focus-after-navigation';
 import { greetingName } from '~/lib/greeting-name';
@@ -149,9 +150,14 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   );
 
   const start = useCallback(
-    async (text: string, target: Agent | null = agent, routed = false) => {
+    async (
+      text: string,
+      target: Agent | null = agent,
+      routed = false,
+      files: readonly Attachment[] = [],
+    ) => {
       const content = text.trim();
-      if (!content || !target || started.current) return;
+      if ((!content && files.length === 0) || !target || started.current) return;
       started.current = true;
       setSubmitting(true);
       const typing =
@@ -165,10 +171,11 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
         requestId: crypto.randomUUID(),
         focus: typing,
         ...(routed ? { routed: true } : {}),
+        ...(files.length > 0 ? { attachments: [...files] } : {}),
         ...modelChanges,
       });
       rememberAgent(target.id);
-      noteNewThread(queryClient, target.id, threadId, content);
+      noteNewThread(queryClient, target.id, threadId, content || titleFromFiles(files));
       await navigate({
         to: '/agents/$agentId/threads/$threadId',
         params: { agentId: target.id, threadId },
@@ -181,8 +188,8 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   const [routing, setRouting] = useState(false);
   const [question, setQuestion] = useState<RouteQuestion | null>(null);
   const send = useCallback(
-    async (text: string) => {
-      if (!auto) return start(text);
+    async (text: string, files: readonly Attachment[] = []) => {
+      if (!auto) return start(text, agent, false, files);
       const content = text.trim();
       if (!content || routing || started.current) return;
       setRouting(true);
@@ -200,7 +207,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
       if (decided) return start(content, decided, true);
       setQuestion({ text: content, options: routeOptions(agents, route), unavailable: !route });
     },
-    [auto, start, routing, agents, queryClient],
+    [auto, agent, start, routing, agents, queryClient],
   );
 
   const firstName = me && greetingName(me.user.name, null);
@@ -365,7 +372,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
         value={draft}
         onChange={setDraft}
         onSubmit={() => {
-          if (!attachments.busy) void send(attachments.compose(draft));
+          if (!attachments.busy) void send(draft, attachments.ready);
         }}
         submitting={submitting || routing}
         tray={
@@ -382,7 +389,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
           </>
         }
         attach={<AttachButton onFiles={attachments.add} disabled={!shown} />}
-        onPasteFiles={shown ? attachments.add : undefined}
+        onPasteFiles={shown ? attachments.paste : undefined}
         hasExtra={attachments.ready.length > 0}
         holdSend={attachments.busy ? 'Sending waits until the files are uploaded.' : null}
         disabled={!agent}

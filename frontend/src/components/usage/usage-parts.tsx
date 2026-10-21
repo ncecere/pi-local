@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { UsageTotals } from '~/api/client';
+import { formatDayKey } from '~/lib/dates';
 import { barHeights, cachedOf, costOf, tokensOf, USAGE_RANGES, type UsageRange } from '~/lib/usage';
 import { cn } from '~/lib/utils';
 
@@ -137,7 +138,7 @@ export function DailyBars({
         {days.map((day, index) => {
           const tokens = tokensOf(day);
           const height = heights[index] ?? 0;
-          const label = `${day.day}: ${whole.format(tokens)} tokens, ${whole.format(day.requests)} requests`;
+          const label = `${formatDayKey(day.day)}: ${whole.format(tokens)} tokens, ${whole.format(day.requests)} requests`;
           return (
             <div
               key={day.day}
@@ -160,8 +161,8 @@ export function DailyBars({
         })}
       </div>
       <div className="mt-1 flex justify-between text-xs text-[var(--text-muted)]">
-        <span>{from}</span>
-        <span>{to}</span>
+        <span>{formatDayKey(from)}</span>
+        <span>{formatDayKey(to)}</span>
       </div>
     </>
   );

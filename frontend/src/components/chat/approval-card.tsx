@@ -7,6 +7,7 @@ import { Spinner } from '~/components/ui/spinner';
 import { useDecideApproval } from '~/hooks/use-approvals';
 import { useNow } from '~/hooks/use-now';
 import { approvalOutcome, argumentsView, expiresIn } from '~/lib/approvals';
+import { formatExact } from '~/lib/dates';
 import { cn } from '~/lib/utils';
 
 /** A code-like block, readable in both themes. */
@@ -295,7 +296,7 @@ export function ApprovalCard({
           {typeof expires === 'number' && expires > 0 && (
             <span
               className="ml-auto inline-flex items-center gap-1 text-xs text-[var(--text-muted)]"
-              title={new Date(expires).toLocaleString()}
+              title={formatExact(expires)}
             >
               <Clock className="size-3" aria-hidden="true" />
               {expires - now <= 30_000

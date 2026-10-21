@@ -14,11 +14,10 @@ import {
 import { Spinner } from '~/components/ui/spinner';
 import { useDeleteThread } from '~/hooks/use-agents';
 import { useInbox, useInboxActions } from '~/hooks/use-inbox';
+import { formatDay } from '~/lib/dates';
 import { usePageTitle } from '~/lib/document-title';
 import type { InboxEntry } from '~/lib/inbox';
 import { nextPage, PAGE_SIZE } from '~/lib/paging';
-
-const when = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
 
 /**
  * Conversations put away (archived) or finished with (done): brought back, or
@@ -144,7 +143,7 @@ function Group({
                     <span className="block truncate text-xs text-[var(--text-muted)]">
                       {[
                         multipleAgents ? agentName(entry.agentId) : null,
-                        date ? when.format(date) : null,
+                        date ? formatDay(date) : null,
                       ]
                         .filter(Boolean)
                         .join(' · ')}

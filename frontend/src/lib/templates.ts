@@ -40,16 +40,18 @@ export function templateWeb(template: Pick<AgentTemplate, 'web'>): WebTools {
   return template.web ?? { search: true, fetch: true };
 }
 
-/** "weekdays 7:30", "daily 8:00", or the cron in words ("every Monday at 09:00"). */
-export function shortSchedule(cron: string): string {
-  const words = describeCron(cron);
+/**
+ * "weekdays 7:30 AM", "daily 8:00 AM", or the cron in words ("every Monday at
+ * 9:00 AM"); times in the system's hour style.
+ */
+export function shortSchedule(cron: string, locale?: string): string {
+  const words = describeCron(cron, locale);
   if (!words) return cron;
-  const time = (text: string) => text.replace(/\b0(\d):/g, '$1:');
   const weekdays = /^Every weekday at (.+)$/.exec(words);
-  if (weekdays) return `weekdays ${time(weekdays[1]!)}`;
+  if (weekdays) return `weekdays ${weekdays[1]!}`;
   const daily = /^Every day at (.+)$/.exec(words);
-  if (daily) return `daily ${time(daily[1]!)}`;
-  return time(words.charAt(0).toLowerCase() + words.slice(1));
+  if (daily) return `daily ${daily[1]!}`;
+  return words.charAt(0).toLowerCase() + words.slice(1);
 }
 
 /** Whether `tool` asks first under these approval names or patterns (`*` matches anything). */
@@ -63,7 +65,7 @@ function asksFirst(tool: string, patterns: readonly string[]): boolean {
 }
 
 /** What an agent made from the template gets, in a few words each. */
-export function templateChips(template: AgentTemplate): string[] {
+export function templateChips(template: AgentTemplate, locale?: string): string[] {
   const chips: string[] = [];
   const web = templateWeb(template);
   if (web.search || web.fetch) chips.push('Web');
@@ -76,7 +78,7 @@ export function templateChips(template: AgentTemplate): string[] {
         ? 'Runs commands (asks first)'
         : 'Runs commands',
     );
-  if (template.schedule) chips.push(`Schedule: ${shortSchedule(template.schedule.cron)}`);
+  if (template.schedule) chips.push(`Schedule: ${shortSchedule(template.schedule.cron, locale)}`);
   if (template.schedules?.agentMade) chips.push('Sets its own reminders');
   if ((template.mcp?.length ?? 0) > 0) chips.push('Uses your connected apps');
   return chips;

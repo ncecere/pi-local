@@ -14,6 +14,7 @@ import { Spinner } from '~/components/ui/spinner';
 import { Switch } from '~/components/ui/switch';
 import { type AgentCatalog, useAgentCatalog } from '~/hooks/use-agents';
 import {
+  useDefaultModelWatch,
   useDeleteModel,
   useDetectedServers,
   useProviders,
@@ -22,6 +23,7 @@ import {
   useSetupProvider,
   useUpdateProvider,
 } from '~/hooks/use-providers';
+import { useSecretsHome } from '~/hooks/use-session';
 import { usePageTitle } from '~/lib/document-title';
 import { formatPrice, formatTokens, groupModelsByProvider, kindName } from '~/lib/models';
 import { cn, plural } from '~/lib/utils';
@@ -155,6 +157,7 @@ function ModelRow({
   onRemove: () => void;
 }) {
   const put = usePutModel();
+  const watchDefault = useDefaultModelWatch();
   return (
     <li className="flex items-center gap-3 px-4 py-2.5">
       <span className="min-w-0 flex-1">
@@ -183,11 +186,13 @@ function ModelRow({
         checked={model.enabled}
         disabled={put.isPending || !provider.enabled}
         aria-label={`Let agents use ${model.name}`}
-        onCheckedChange={(enabled) =>
+        onCheckedChange={(enabled) => {
+          const saved = watchDefault();
           put.mutate(
             { provider: provider.id, modelId: model.modelId, enabled },
             {
               onSuccess: () => {
+                void saved();
                 if (!enabled && model.usedBy > 0)
                   toast(
                     `${model.name} is off. ${plural(model.usedBy, 'agent')} on it won't start until given another model.`,
@@ -195,8 +200,8 @@ function ModelRow({
               },
               onError: (error) => toast.error(errorMessage(error, 'Not changed.')),
             },
-          )
-        }
+          );
+        }}
       />
       <Button
         type="button"
@@ -245,6 +250,7 @@ function ProviderCard({
 }) {
   const id = useId();
   const update = useUpdateProvider();
+  const watchDefault = useDefaultModelWatch();
   const enabledModels = provider.models.filter((model) => model.enabled).length;
   return (
     <li>
@@ -295,12 +301,16 @@ function ProviderCard({
           checked={provider.enabled}
           disabled={update.isPending}
           aria-label={`Use ${provider.name}`}
-          onCheckedChange={(enabled) =>
+          onCheckedChange={(enabled) => {
+            const saved = watchDefault();
             update.mutate(
               { id: provider.id, enabled },
-              { onError: (error) => toast.error(errorMessage(error, 'Not changed.')) },
-            )
-          }
+              {
+                onSuccess: () => void saved(),
+                onError: (error) => toast.error(errorMessage(error, 'Not changed.')),
+              },
+            );
+          }}
         />
         <Button
           type="button"
@@ -374,9 +384,11 @@ type Open =
  */
 export function SettingsModelsPage() {
   usePageTitle('Models · Settings');
+  const home = useSecretsHome();
   const providers = useProviders();
   const catalog = useAgentCatalog();
   const removeModel = useDeleteModel();
+  const watchDefault = useDefaultModelWatch();
   const [open, setOpen] = useState<Open | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const close = () => setOpen(null);
@@ -421,7 +433,7 @@ export function SettingsModelsPage() {
       <SettingsSection title="Providers">
         <p className="-mt-2 text-sm text-[var(--text-muted)]">
           The services your agents' models come from: an account at OpenAI or Anthropic, or a model
-          server such as Ollama or LM Studio. Keys are kept in the system keychain.
+          server such as Ollama or LM Studio. Keys are kept in {home}.
         </p>
         {list.length > 0 ? (
           <ul className="divide-y divide-[var(--border-subtle)] rounded-xl border border-[var(--border-subtle)]">
@@ -512,8 +524,10 @@ export function SettingsModelsPage() {
               action="Remove"
               what={model.name}
               onConfirm={async () => {
+                const saved = watchDefault();
                 await removeModel.mutateAsync({ provider: current.id, modelId: model.modelId });
                 toast(`${model.name} removed.`);
+                void saved();
               }}
               onClose={close}
             />

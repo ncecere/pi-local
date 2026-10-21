@@ -5,7 +5,6 @@ import {
   applyScheduleEvent,
   applyScheduleRun,
   describeCron,
-  formatDateTime,
   isScheduledThreadId,
   lastRunLabel,
   madeByLabel,
@@ -68,29 +67,37 @@ const schedule = (extra: Partial<Schedule> = {}): Schedule => ({
 });
 
 describe('describeCron', () => {
+  // Times follow the system's locale: 12 h in the US, 24 h in much of Europe.
   it.each([
-    ['0 9 * * *', 'Every day at 09:00'],
-    ['0 9 * * 1-5', 'Every weekday at 09:00'],
-    ['30 8 * * MON-FRI', 'Every weekday at 08:30'],
-    ['0 9 * * 1', 'Every Monday at 09:00'],
-    ['0 9 * * 7', 'Every Sunday at 09:00'],
-    ['0 10 * * 0,6', 'Every Saturday and Sunday at 10:00'],
-    ['0 9 * * 1,3,5', 'Every Mon, Wed and Fri at 09:00'],
-    ['0 9,17 * * *', 'Every day at 09:00 and 17:00'],
+    ['0 9 * * *', 'Every day at 9:00 AM'],
+    ['0 9 * * 1-5', 'Every weekday at 9:00 AM'],
+    ['30 8 * * MON-FRI', 'Every weekday at 8:30 AM'],
+    ['0 9 * * 1', 'Every Monday at 9:00 AM'],
+    ['0 9 * * 7', 'Every Sunday at 9:00 AM'],
+    ['0 10 * * 0,6', 'Every Saturday and Sunday at 10:00 AM'],
+    ['0 9 * * 1,3,5', 'Every Mon, Wed and Fri at 9:00 AM'],
+    ['0 9,17 * * *', 'Every day at 9:00 AM and 5:00 PM'],
     ['0 * * * *', 'Every hour'],
     ['15 * * * *', 'Every hour at :15'],
     ['*/15 * * * *', 'Every 15 minutes'],
     ['* * * * *', 'Every minute'],
     ['0 */2 * * *', 'Every 2 hours'],
-    ['0 8 1 * *', 'On the 1st of every month at 08:00'],
-    ['0 8 1,15 * *', 'On the 1st and 15th of every month at 08:00'],
-    ['0 0 25 12 *', 'Every year on 25 December at 00:00'],
-    ['@daily', 'Every day at 00:00'],
-    ['@weekly', 'Every Sunday at 00:00'],
+    ['0 8 1 * *', 'On the 1st of every month at 8:00 AM'],
+    ['0 8 1,15 * *', 'On the 1st and 15th of every month at 8:00 AM'],
+    ['0 0 25 12 *', 'Every year on Dec 25 at 12:00 AM'],
+    ['@daily', 'Every day at 12:00 AM'],
+    ['@weekly', 'Every Sunday at 12:00 AM'],
     ['@hourly', 'Every hour'],
-    ['  0   9 * *  1-5 ', 'Every weekday at 09:00'],
+    ['  0   9 * *  1-5 ', 'Every weekday at 9:00 AM'],
   ])('%s → %s', (expr, words) => {
-    expect(describeCron(expr)).toBe(words);
+    expect(describeCron(expr, 'en-US')).toBe(words);
+  });
+
+  it('writes times in 24 h where the locale does', () => {
+    const british = describeCron('0 9,17 * * *', 'en-GB');
+    expect(british).toContain('17:00');
+    expect(british).not.toMatch(/AM|PM/);
+    expect(describeCron('0 9,17 * * *', 'en-US')).toContain('5:00 PM');
   });
 
   it('gives up on what it does not read, so the expression itself is shown', () => {
@@ -109,22 +116,22 @@ describe('describeCron', () => {
 describe('whenLabel', () => {
   it('says a one-time schedule with its date and time', () => {
     const at = Date.UTC(2026, 9, 21, 13, 0); // Wed 21 Oct 09:00 in New York
-    expect(whenLabel(schedule({ once: true, at, cron: null }), { timeZone: NY, now: NOW })).toBe(
-      'Once, Wed 21 Oct 09:00',
-    );
+    expect(
+      whenLabel(schedule({ once: true, at, cron: null }), {
+        timeZone: NY,
+        now: NOW,
+        locale: 'en-US',
+      }),
+    ).toBe('Once, Oct 21, 9:00 AM');
   });
 
   it('says a recurring one in words with its zone, or its expression', () => {
-    expect(whenLabel(schedule(), { timeZone: 'UTC', now: NOW })).toBe(
-      'Every weekday at 09:00 (America/New_York)',
+    expect(whenLabel(schedule(), { timeZone: 'UTC', now: NOW, locale: 'en-US' })).toBe(
+      'Every weekday at 9:00 AM (America/New_York)',
     );
     expect(whenLabel(schedule({ cron: '0 9 1-7 * 1' }), { now: NOW })).toBe(
       '0 9 1-7 * 1 (America/New_York)',
     );
-  });
-
-  it('adds the year to a date in another year', () => {
-    expect(formatDateTime(Date.UTC(2027, 0, 4, 9, 30), 'UTC', NOW)).toBe('Mon 4 Jan 2027 09:30');
   });
 });
 

@@ -7,6 +7,7 @@ import {
   type ElicitationContent,
   type McpElicitation,
 } from '~/api/client';
+import { noteElicitationAnswer } from '~/lib/elicitation-outcomes';
 import { applyElicitationEvent, elicitationsByThread, isElicitation } from '~/lib/elicitations';
 
 /**
@@ -66,6 +67,7 @@ export function applyElicitationData(
     void queryClient.invalidateQueries({ queryKey: ELICITATIONS_KEY });
     return null;
   }
+  noteElicitationAnswer(parsed);
   const list = queryClient.getQueryData<McpElicitation[]>(ELICITATIONS_KEY);
   const isNew =
     parsed.state === 'pending' && !list?.some((candidate) => candidate.id === parsed.id);
@@ -99,6 +101,7 @@ export function useAnswerElicitation() {
         action === 'accept' ? { action, content: content ?? {} } : { action },
       ),
     onSuccess: (answered, { id }) => {
+      if (answered && typeof answered === 'object') noteElicitationAnswer(answered);
       queryClient.setQueryData<McpElicitation[]>(ELICITATIONS_KEY, (list) =>
         answered && typeof answered === 'object'
           ? applyElicitationEvent(list, answered)

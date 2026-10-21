@@ -1,9 +1,10 @@
 import type { UIMessage } from 'ai';
-import { Clock, Zap } from 'lucide-react';
+import { Bot, Clock, Zap } from 'lucide-react';
 import { memo, useId, useState } from 'react';
-import type { Agent } from '~/api/client';
+import type { Agent, Author } from '~/api/client';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
 import { ApprovalCard } from '~/components/chat/approval-card';
+import { MessageAttachments } from '~/components/chat/attachments';
 import { MARKDOWN_PROSE, Markdown } from '~/components/chat/markdown';
 import { MessageActions } from '~/components/chat/message-actions';
 import {
@@ -20,6 +21,7 @@ import { RememberChip, rememberOf } from '~/components/chat/remember-chip';
 import { ReplyFailureNote } from '~/components/chat/reply-outcome-note';
 import { WorkBlock } from '~/components/chat/reply-work';
 import type { ToolPart } from '~/components/chat/tool-steps';
+import { useAgents } from '~/hooks/use-agents';
 import { approvalOf, type ReplyMetadata } from '~/lib/chat-view';
 import { messageExcerpt } from '~/lib/message-excerpt';
 import { replyInfo } from '~/lib/reply-meta';
@@ -87,8 +89,21 @@ export const MessageRow = memo(function MessageRow({
   const [branching, setBranching] = useState(false);
 
   if (message.role === 'user') {
-    const pending = (message.metadata as ReplyMetadata | undefined)?.pending;
-    const steer = (message.metadata as ReplyMetadata | undefined)?.steer === true;
+    const metadata = message.metadata as ReplyMetadata | undefined;
+    const pending = metadata?.pending;
+    const steer = metadata?.steer === true;
+    const attachments = metadata?.attachments ?? [];
+    // Another agent, a schedule or a service wrote it: it must not read as the person's.
+    if (metadata?.author)
+      return (
+        <SenderMessage
+          message={message}
+          author={metadata.author}
+          text={text}
+          excerpt={excerpt}
+          place={place}
+        />
+      );
     if (editing && onEdit)
       return (
         <article
@@ -119,7 +134,8 @@ export const MessageRow = memo(function MessageRow({
             pending && 'opacity-80',
           )}
         >
-          <FoldedText text={text} />
+          {text && <FoldedText text={text} />}
+          <MessageAttachments attachments={attachments} className={text ? 'mt-2.5' : undefined} />
         </div>
         {pending ? (
           <p
@@ -233,6 +249,86 @@ export const MessageRow = memo(function MessageRow({
     </article>
   );
 });
+
+const KIND_LABEL: Record<Author['kind'], string> = {
+  user: 'You',
+  agent: 'Agent',
+  trigger: 'Schedule',
+  service_account: 'Service',
+};
+
+/** Who is speaking, beside a message that isn't the person's: the agent's own avatar, or an icon. */
+function SenderAvatar({ author }: { author: Author }) {
+  if (author.kind === 'agent') return <AgentSenderAvatar author={author} />;
+  const Icon = author.kind === 'trigger' ? Clock : Bot;
+  return (
+    <span className="flex size-7 items-center justify-center rounded-full bg-[var(--bg-control-alt)] text-[var(--text-muted)]">
+      <Icon className="size-4" aria-hidden="true" />
+    </span>
+  );
+}
+
+function AgentSenderAvatar({ author }: { author: Author }) {
+  const agent = useAgents().data?.find((candidate) => candidate.id === author.id);
+  if (!agent)
+    return (
+      <span className="flex size-7 items-center justify-center rounded-full bg-[var(--bg-control-alt)] text-[var(--text-muted)]">
+        <Bot className="size-4" aria-hidden="true" />
+      </span>
+    );
+  return <AgentAvatar agent={agent} size={28} frozen />;
+}
+
+/**
+ * A message another agent asked, a schedule sent, or a service sent: on the
+ * left with its sender's avatar and name, as an agent's reply is, never as the
+ * person's. It can be copied, not edited (an edit would be the person's).
+ */
+function SenderMessage({
+  message,
+  author,
+  text,
+  excerpt,
+  place,
+}: {
+  message: UIMessage;
+  author: Author;
+  text: string;
+  excerpt?: string;
+  place?: string;
+}) {
+  const attachments = (message.metadata as ReplyMetadata | undefined)?.attachments ?? [];
+  return (
+    <article
+      className="group flex gap-3"
+      aria-label={`Message from ${author.name}`}
+      data-excerpt={excerpt}
+      data-position={place}
+      data-message-id={message.id}
+      data-message-role="user"
+      data-author-kind={author.kind}
+    >
+      <div className="mt-px shrink-0">
+        <SenderAvatar author={author} />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col items-start">
+        <p className="mb-1 flex items-center gap-1.5 text-xs">
+          <span className="font-medium text-[var(--text-primary)]">{author.name}</span>
+          <span className="text-[var(--text-muted)]">{KIND_LABEL[author.kind]}</span>
+        </p>
+        <div className="max-w-full rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-control)]/50 px-4 py-3 text-[0.9375rem] leading-relaxed text-[var(--text-primary)]">
+          {text && <FoldedText text={text} />}
+          <MessageAttachments attachments={attachments} className={text ? 'mt-2.5' : undefined} />
+        </div>
+        <MessageActions
+          text={text}
+          position={place}
+          info={replyInfo(message.metadata as ReplyMetadata | undefined)}
+        />
+      </div>
+    </article>
+  );
+}
 
 /**
  * A reply's work and text: one block with everything the agent did before

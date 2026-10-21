@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ReplyMetadata } from '~/lib/chat-view';
 
 /** Within this distance of the bottom, the view keeps following new content. */
 const FOLLOW_THRESHOLD_PX = 64;
@@ -57,6 +58,17 @@ function userMessageCount(messages: UIMessage[]): number {
 }
 
 /**
+ * Whether the transcript now holds a question that was just sent, given how
+ * many user messages it held before: one more, and not a steer (a message sent
+ * into the reply in progress, which is no new question to pin).
+ */
+export function sentQuestion(messages: UIMessage[], countBefore: number): boolean {
+  if (userMessageCount(messages) <= countBefore) return false;
+  const last = messages.findLast((message) => message.role === 'user');
+  return (last?.metadata as ReplyMetadata | undefined)?.steer !== true;
+}
+
+/**
  * Scroll behaviour for a conversation.
  *
  * - Opening a conversation shows its end.
@@ -66,6 +78,9 @@ function userMessageCount(messages: UIMessage[]): number {
  *   reply stays in sight once it fills the screen. The spacer shrinks as the
  *   reply grows, so the question stays put until the reply reaches the bottom.
  * - Scrolling up stops following; `jumpToLatest` resumes it.
+ * - Steering (a message sent into the reply in progress) is not a new
+ *   question: nothing is pinned and the view stays as it is, at the bottom if
+ *   it was there (so the reply keeps streaming in sight), where it was if not.
  *
  * - Opened at a message (conversation search), the view centres that message
  *   instead, highlights it briefly and moves focus to it. Everything else
@@ -194,7 +209,7 @@ export function useChatScroll(
       // question was just sent, so treat it like any other send.
       if (streaming && count > 0) pinnedIndex.current = count - 1;
       following.current = true;
-    } else if (count > userCount.current) {
+    } else if (sentQuestion(messages, userCount.current)) {
       pinnedIndex.current = count - 1;
       following.current = true;
       anchor.current = null;

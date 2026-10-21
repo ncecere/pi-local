@@ -41,6 +41,7 @@ import {
   useTestMcpServer,
   useUpdateMcpServer,
 } from '~/hooks/use-mcp';
+import { useSecretsHome } from '~/hooks/use-session';
 import {
   AGENT_DIR_VAR,
   envFromRows,
@@ -222,6 +223,7 @@ function ServerFields({
   server: McpServer | null;
 }) {
   const id = useId();
+  const home = useSecretsHome();
   const adding = server === null;
   const slugIssue = adding && form.slug ? slugProblem(form.slug) : null;
   return (
@@ -380,7 +382,7 @@ function ServerFields({
               edit={form.envEdit}
               onChange={(envEdit) => setForm({ envEdit })}
               reveal={(name) => revealMcpSecret(server.slug, 'env', name)}
-              hint="Values are kept in the system keychain. Type a new value to change one; the others stay as they are."
+              hint={`Values are kept in ${home}. Type a new value to change one; the others stay as they are.`}
             />
           ) : (
             <SecretsField
@@ -389,7 +391,7 @@ function ServerFields({
               namePlaceholder="API_TOKEN"
               rows={form.envRows}
               onChange={(envRows) => setForm({ envRows })}
-              hint="Such as an API token the server needs, or a setting. Values are kept in the system keychain."
+              hint={`Such as an API token the server needs, or a setting. Values are kept in ${home}.`}
             />
           )}
         </>
@@ -421,7 +423,7 @@ function ServerFields({
               edit={form.headerEdit}
               onChange={(headerEdit) => setForm({ headerEdit })}
               reveal={(name) => revealMcpSecret(server.slug, 'header', name)}
-              hint="Sent with every request. Values are kept in the system keychain. Type a new value to change one."
+              hint={`Sent with every request. Values are kept in ${home}. Type a new value to change one.`}
             />
           ) : (
             <SecretsField
@@ -430,7 +432,7 @@ function ServerFields({
               namePlaceholder="Authorization"
               rows={form.headerRows}
               onChange={(headerRows) => setForm({ headerRows })}
-              hint="Sent with every request, such as an API key. Values are kept in the system keychain."
+              hint={`Sent with every request, such as an API key. Values are kept in ${home}.`}
             />
           )}
           <div className="flex items-center justify-between gap-4">
@@ -440,7 +442,7 @@ function ServerFields({
               </span>
               <span id={`${id}-oauth-hint`} className="block text-xs text-[var(--text-muted)]">
                 For a server that asks you to sign in to your account in the browser. The sign-in is
-                kept in the system keychain.
+                kept in {home}.
               </span>
             </span>
             <Switch

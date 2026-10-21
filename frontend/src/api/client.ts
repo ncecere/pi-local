@@ -25,6 +25,7 @@ export type {
   ApprovalEvent,
   ApprovalStatus,
   Attachment,
+  Author,
   Basics,
   CallableAgent,
   CalledBy,
@@ -109,7 +110,8 @@ export type Role = 'admin' | 'user';
  * Optional features and whether each is on. Locally: `messageSearch` (Phase 7),
  * `folderDialog` (the native folder dialog, desktop app only) and `updates`
  * (this copy can install updates itself), `agentRouting` (fast judgments pick the agent for a new chat),
- * `modelPerConversation` (the composer's model and thinking picker).
+ * `modelPerConversation` (the composer's model and thinking picker), and
+ * `secretsInKeychain` (keys and secret values go to the system keychain; false: kept in memory, a development server).
  */
 export type FeatureId =
   | 'agentRouting'
@@ -119,7 +121,8 @@ export type FeatureId =
   | 'myUsage'
   | 'folderDialog'
   | 'updates'
-  | 'modelPerConversation';
+  | 'modelPerConversation'
+  | 'secretsInKeychain';
 
 /** `GET /api/me`: the one local user. */
 export interface Me {

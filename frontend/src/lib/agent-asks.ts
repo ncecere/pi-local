@@ -10,6 +10,21 @@ import { toolDetailsOf, toolOutputText } from '~/lib/chat-view';
 export const ASK_AGENT_TOOL = 'ask_agent';
 export const LIST_AGENTS_TOOL = 'list_agents';
 
+/**
+ * The tools an agent gets when it may ask another (runtime/src/lib/agent-calls.ts),
+ * each with one line of what it does, for the agent's "Can ask" tab.
+ */
+export const ASK_TOOLS: readonly { name: string; does: string }[] = [
+  {
+    name: LIST_AGENTS_TOOL,
+    does: 'Lists the agents it may ask: their IDs, names and what they do.',
+  },
+  {
+    name: ASK_AGENT_TOOL,
+    does: 'Sends one of them a message and waits for the reply, in a conversation of that agent’s own: a new one, or the one it started before.',
+  },
+];
+
 /** Where an ask went: `details` of an `ask_agent` call. */
 export interface AskTarget {
   agentId: string;

@@ -183,7 +183,8 @@ describe('new agent dialog: the templates gallery', () => {
     await openDialog();
     await click(radio('Daily briefing'));
 
-    expect(chips()).toEqual(['Web', 'Schedule: weekdays 7:30']);
+    // The time is in the system's hour style: "7:30 AM" or "07:30".
+    expect(chips()).toEqual(['Web', expect.stringMatching(/^Schedule: weekdays 0?7:30/)]);
     expect(text()).toContain('Works best with web search: set it up in Settings → Models.');
     // An unnamed agent gets a friendly random name, shown as the placeholder.
     const suggested = fieldByLabel('Name')?.getAttribute('placeholder') ?? '';
@@ -267,8 +268,9 @@ describe('new agent dialog: the templates gallery', () => {
       'Runs commands',
     ]);
     expect(templateChips({ ...MINE, web: { search: false, fetch: false } })).toEqual([]);
-    expect(shortSchedule('0 8 * * *')).toBe('daily 8:00');
-    expect(shortSchedule('0 9 * * 1')).toBe('every Monday at 9:00');
+    expect(shortSchedule('0 8 * * *', 'en-US')).toBe('daily 8:00 AM');
+    expect(shortSchedule('0 9 * * 1', 'en-US')).toBe('every Monday at 9:00 AM');
+    expect(shortSchedule('0 8 * * *', 'en-GB')).toMatch(/^daily 0?8:00$/);
   });
 });
 

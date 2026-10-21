@@ -17,12 +17,11 @@ import {
   useUpdateNote,
   useYou,
 } from '~/hooks/use-memory';
+import { formatDay } from '~/lib/dates';
 import { DEFAULT_SHAREABLE } from '~/lib/memory';
 import { cn } from '~/lib/utils';
 
 const clip = (text: string, max = 60) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
-
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
 
 const LINK = 'text-[var(--accent-bright)] underline-offset-4 hover:underline';
 
@@ -234,7 +233,7 @@ function NoteRow({ agentId, note }: { agentId: string; note: MemoryNote }) {
       <div className="min-w-0 flex-1">
         <p className="text-sm text-[var(--text-primary)]">{note.text}</p>
         <p className="mt-1 text-xs text-[var(--text-muted)]">
-          {dateFormat.format(new Date(note.updatedAt))}
+          {formatDay(note.updatedAt)}
           {note.thread && (
             <>
               {' · '}

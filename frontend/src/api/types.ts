@@ -840,6 +840,8 @@ export interface ScheduleInput {
   threadId?: string;
   missedPolicy?: 'skip' | 'run_once';
   paused?: boolean;
+  /** `PATCH` only: moves the schedule to another agent. Its runs then start new conversations there. */
+  agentId?: string;
 }
 
 /** `GET /api/events` `schedule` event. */
@@ -912,7 +914,10 @@ export interface DesktopSettings {
 
 // ── The runtime's chat view (runtime/src/lib/view.ts) ─────────────────────────────────────────
 
-/** Who sent a user message: a person, a service account, or a trigger (an unattended run). */
+/**
+ * Who sent a user message: a person, a service account, a trigger (an unattended
+ * run: a schedule or webhook) or another agent asking for help.
+ */
 export type Author = {
   kind: 'user' | 'service_account' | 'trigger' | 'agent';
   id: string;
@@ -995,6 +1000,8 @@ export type ChatUserMessage = {
   at?: number;
   /** The request ID it was sent with: a client matches what it sent by it (never by text). */
   requestId?: string;
+  /** The files sent with it (v0.2); `text` is then the person's words alone. Absent before v0.2: see lib/attachments.ts. */
+  attachments?: Attachment[];
 };
 
 export type ChatAssistantMessage = {

@@ -1,7 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   ApiError,
+  type Attachment,
   api,
   type ChatAssistantMessage,
   type ChatMessage,
@@ -13,6 +14,7 @@ import { transport } from '~/api/transport';
 import type { AgentLive } from '~/components/agent/avatar/agent-live';
 import { markThreadBusy, noteNewThread, threadsKey } from '~/hooks/use-agents';
 import { useInboxActions } from '~/hooks/use-inbox';
+import { titleFromFiles } from '~/lib/attachments';
 import {
   type AgentUIMessage,
   type PendingMessage,
@@ -29,6 +31,11 @@ import {
   followDelta,
   parseDeltaEvent,
 } from '~/lib/delta';
+import {
+  elicitationOutcomesOf,
+  elicitationOutcomesVersion,
+  subscribeToElicitationOutcomes,
+} from '~/lib/elicitation-outcomes';
 import { replyFinished, threadKey } from '~/lib/inbox';
 import { isFinal } from '~/lib/sse';
 import {
@@ -80,6 +87,8 @@ export interface Handover {
   existing?: boolean;
   /** Fast judgments picked the agent (Auto in the new-chat picker): the conversation says so. */
   routed?: boolean;
+  /** The files sent with the first message (saved in the agent's workspace already). */
+  attachments?: Attachment[];
   /**
    * The model and thinking level the person changed in the new chat's picker,
    * sent with the first message. Left out: nothing was chosen.
@@ -167,6 +176,8 @@ const noDeltaFormat = (error: unknown) =>
 export interface SendOptions {
   /** Join the reply in progress after its current step (`whenBusy: "steer"`). */
   steer?: boolean;
+  /** Files sent with the message (the uploads' answers). The text may then be empty. */
+  attachments?: Attachment[];
   /**
    * The model and thinking level the person changed since the last message
    * (docs/api.md "Model per conversation"). Left out: the conversation keeps what it had.
@@ -447,15 +458,10 @@ export function useAgentThread({
 
   // ---- Sending ----------------------------------------------------------
   const submit = useCallback(
-    async (
-      text: string,
-      requestId: string = crypto.randomUUID(),
-      /** What goes back in the message box if it fails: the text as typed, without the files' block. */
-      typed: string = text,
-      options: SendOptions = {},
-    ) => {
+    async (text: string, requestId: string = crypto.randomUUID(), options: SendOptions = {}) => {
       const content = text.trim();
-      if (!content) return false;
+      const files = options.attachments ?? [];
+      if (!content && files.length === 0) return false;
       const steer = options.steer === true;
       setSendError(null);
       const shown = withEarlier(viewRef.current, earlierRef.current);
@@ -470,6 +476,7 @@ export function useAgentThread({
                 state: 'sending',
                 baseline: userMessagesWithText(shown, content),
                 ...(steer ? { steer: true } : {}),
+                ...(files.length > 0 ? { attachments: files } : {}),
               },
             ],
       );
@@ -477,6 +484,7 @@ export function useAgentThread({
         await api.post(threadPath(agentId, threadId, '/messages'), {
           text: content,
           requestId,
+          ...(files.length > 0 ? { attachments: files } : {}),
           ...(steer ? { whenBusy: 'steer' } : {}),
           ...(options.modelId !== undefined ? { modelId: options.modelId } : {}),
           ...(options.thinking !== undefined ? { thinking: options.thinking } : {}),
@@ -489,7 +497,7 @@ export function useAgentThread({
           ),
         );
         if (!exists) {
-          noteNewThread(queryClient, agentId, threadId, content);
+          noteNewThread(queryClient, agentId, threadId, content || titleFromFiles(files));
           setExists(true);
         }
         clearHandover(threadId);
@@ -512,7 +520,7 @@ export function useAgentThread({
           ),
         );
         // Back into the composer, unless something new was typed meanwhile.
-        setDraft((current) => (current.trim() ? current : typed.trim()));
+        setDraft((current) => (current.trim() ? current : content));
         setSendError(
           `Your message wasn't sent, so it's back in the message box. ${errorMessage(error, '')}`.trim(),
         );
@@ -524,17 +532,17 @@ export function useAgentThread({
   );
 
   /**
-   * Sends the draft. `compose` makes the message from it (adding the attached
-   * files' block); true once the agent accepted it. `steer`: into the reply
-   * in progress rather than after it.
+   * Sends the draft, with `options.attachments` (files attached in the
+   * composer); true once the agent accepted it. `steer`: into the reply in
+   * progress rather than after it.
    */
   const send = useCallback(
-    async (compose?: (text: string) => string, options?: SendOptions) => {
-      const typed = draft;
-      const text = compose ? compose(typed) : typed;
-      if (!text.trim() || text.trim().length > AGENT_MESSAGE_MAX_LENGTH) return false;
+    async (options?: SendOptions) => {
+      const text = draft.trim();
+      if (text.length > AGENT_MESSAGE_MAX_LENGTH) return false;
+      if (!text && !options?.attachments?.length) return false;
       setDraft('');
-      return submit(text, undefined, typed, options);
+      return submit(text, undefined, options);
     },
     [draft, submit],
   );
@@ -544,7 +552,8 @@ export function useAgentThread({
   useEffect(() => {
     if (!handover || handedOver.current) return;
     handedOver.current = true;
-    void submit(handover.text, handover.requestId, undefined, {
+    void submit(handover.text, handover.requestId, {
+      ...(handover.attachments?.length ? { attachments: handover.attachments } : {}),
       ...(handover.modelId !== undefined ? { modelId: handover.modelId } : {}),
       ...(handover.thinking !== undefined ? { thinking: handover.thinking } : {}),
     });
@@ -562,11 +571,14 @@ export function useAgentThread({
 
   // ---- What the page shows ----------------------------------------------
   const previous = useRef<AgentUIMessage[]>([]);
+  // Questions from MCP servers the person declined: a call that waited for one reads "Declined".
+  useSyncExternalStore(subscribeToElicitationOutcomes, elicitationOutcomesVersion);
+  const declined = elicitationOutcomesOf(agentId, threadId);
   const messages = useMemo(() => {
-    const next = reuseUnchanged(previous.current, viewToMessages(shownView, pending));
+    const next = reuseUnchanged(previous.current, viewToMessages(shownView, pending, declined));
     previous.current = next;
     return next;
-  }, [shownView, pending]);
+  }, [shownView, pending, declined]);
 
   /**
    * The messages after the earlier pages: what the scroll treats as the

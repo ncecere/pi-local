@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatClock, formatDuration, formatTokens, replyInfo } from '../../src/lib/reply-meta';
+import { formatDuration, formatTokens, replyInfo } from '../../src/lib/reply-meta';
 
 describe('formatTokens', () => {
   it('reads as people say it', () => {
@@ -28,16 +28,6 @@ describe('formatDuration', () => {
       '59m 59s',
       '1h 02m',
     ]);
-  });
-});
-
-describe('formatClock', () => {
-  const now = new Date(2026, 9, 18, 16, 0).getTime();
-  it('is the time today, and the date with it on another day', () => {
-    expect(formatClock(new Date(2026, 9, 18, 9, 5).getTime(), now, 'en-US')).toBe('9:05 AM');
-    expect(formatClock(new Date(2026, 9, 17, 21, 30).getTime(), now, 'en-US')).toBe(
-      'Oct 17, 9:30 PM',
-    );
   });
 });
 

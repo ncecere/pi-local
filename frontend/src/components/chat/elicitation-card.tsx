@@ -11,6 +11,7 @@ import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { useAnswerElicitation } from '~/hooks/use-elicitations';
 import { useNow } from '~/hooks/use-now';
+import { formatExact } from '~/lib/dates';
 import {
   choiceField,
   confirmField,
@@ -439,7 +440,7 @@ export function ElicitationCard({
               {elicitation.expiresAt > 0 && (
                 <span
                   className="ml-auto inline-flex items-center gap-1 text-xs text-[var(--text-muted)]"
-                  title={new Date(elicitation.expiresAt).toLocaleString()}
+                  title={formatExact(elicitation.expiresAt)}
                 >
                   <Clock className="size-3" aria-hidden="true" />
                   {expiresLabel(elicitation.expiresAt, now)}

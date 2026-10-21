@@ -14,6 +14,7 @@ import {
   useSaveJudgments,
   useTestJudgments,
 } from '~/hooks/use-judgments';
+import { useSecretsHome } from '~/hooks/use-session';
 import { cn } from '~/lib/utils';
 
 /** What each use does; the ones without `ready` aren't built yet. */
@@ -45,11 +46,12 @@ const textOfUse = (use: string) =>
  */
 export function JudgmentsSection() {
   const info = useJudgments();
+  const home = useSecretsHome();
   return (
     <SettingsSection title="Fast judgments">
       <p className="-mt-2 text-sm text-[var(--text-muted)]">
         Optional. Quick decisions by a System One model (TypeSafe Jev). The text being judged is
-        sent to the service below. The key is kept in the system keychain.
+        sent to the service below. The key is kept in {home}.
       </p>
       {info.isError ? (
         <div className="flex flex-col items-start gap-3">

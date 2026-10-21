@@ -5,6 +5,7 @@ import type {
   ScheduleRunEvent,
   ScheduleRunStatus,
 } from '~/api/types';
+import { formatDayTime, formatMonthDay, formatTimeOfDay } from '~/lib/dates';
 
 /**
  * Schedules (docs/api.md, "Always on"): saying when one fires, the "when" form
@@ -112,25 +113,25 @@ function daysPhrase(days: number[]): string {
   return joinWords(days.map((day) => DAY_SHORT[day]!));
 }
 
+/** What `@daily` and the like mean, as a cron expression. */
 const MACROS: Record<string, string> = {
-  '@yearly': 'Every year on 1 January at 00:00',
-  '@annually': 'Every year on 1 January at 00:00',
-  '@monthly': 'On the 1st of every month at 00:00',
-  '@weekly': 'Every Sunday at 00:00',
-  '@daily': 'Every day at 00:00',
-  '@midnight': 'Every day at 00:00',
-  '@hourly': 'Every hour',
+  '@yearly': '0 0 1 1 *',
+  '@annually': '0 0 1 1 *',
+  '@monthly': '0 0 1 * *',
+  '@weekly': '0 0 * * 0',
+  '@daily': '0 0 * * *',
+  '@midnight': '0 0 * * *',
+  '@hourly': '0 * * * *',
 };
 
 /**
  * A cron expression in words, for the common patterns: "Every weekday at
- * 09:00", "Every hour at :15", "Every 15 minutes", "On the 1st of every month
- * at 08:30". Null when it is something else (show the expression itself).
+ * 9:00 AM", "Every hour at :15", "Every 15 minutes", "On the 1st of every
+ * month at 8:30 AM" (times in the system's hour style). Null when it is
+ * something else (show the expression itself).
  */
-export function describeCron(expression: string): string | null {
-  const expr = expression.trim().replace(/\s+/g, ' ');
-  const macro = MACROS[expr.toLowerCase()];
-  if (macro) return macro;
+export function describeCron(expression: string, locale?: string): string | null {
+  const expr = MACROS[expression.trim().toLowerCase()] ?? expression.trim().replace(/\s+/g, ' ');
   const fields = expr.split(' ');
   if (fields.length !== 5) return null;
   const [minuteField, hourField, domField, monthField, dowField] = fields as [
@@ -166,7 +167,7 @@ export function describeCron(expression: string): string | null {
   }
   const hours = listIn(hourField, 0, 23);
   if (!hours || hours.length > 6) return null;
-  const times = joinWords(hours.map((hour) => `${pad(hour)}:${pad(minute)}`));
+  const times = joinWords(hours.map((hour) => formatTimeOfDay(hour, minute, locale)));
 
   if (domField === '*' && monthField === '*') {
     if (dowField === '*' || dowField === '?') return `Every day at ${times}`;
@@ -181,7 +182,7 @@ export function describeCron(expression: string): string | null {
     return `On the ${joinWords(dates.map(ordinal))} of every month at ${times}`;
   const months = listIn(monthField, 1, 12, MONTH_ALIASES);
   if (months?.length !== 1 || dates.length !== 1) return null;
-  return `Every year on ${dates[0]} ${MONTH_NAMES[months[0]! - 1]} at ${times}`;
+  return `Every year on ${formatMonthDay(months[0]!, dates[0]!, locale)} at ${times}`;
 }
 
 // ── Time zones and wall clocks ───────────────────────────────────────────────────────────────
@@ -218,7 +219,10 @@ interface WallClock {
 }
 
 const clockFormats = new Map<string, Intl.DateTimeFormat>();
-/** The date and time an instant is on the clocks of `timeZone`. */
+/**
+ * The date and time an instant is on the clocks of `timeZone`, as numbers to
+ * compute with (never shown: lib/dates.ts writes dates and times for people).
+ */
 export function wallClockOf(ms: number, timeZone: string): WallClock {
   let format = clockFormats.get(timeZone);
   if (!format) {
@@ -265,13 +269,6 @@ export function zonedTimeToMs(date: string, time: string, timeZone: string): num
   return guess;
 }
 
-/** "Tue 21 Oct 09:00" (with the year when it isn't this year's), on the clocks of `timeZone`. */
-export function formatDateTime(ms: number, timeZone: string, now = Date.now()): string {
-  const clock = wallClockOf(ms, timeZone);
-  const year = clock.year !== wallClockOf(now, timeZone).year ? ` ${clock.year}` : '';
-  return `${DAY_SHORT[clock.weekday]} ${clock.day} ${MONTH_SHORT[clock.month - 1]}${year} ${pad(clock.hour)}:${pad(clock.minute)}`;
-}
-
 const relativeFormat = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 /** "in 5 minutes", "tomorrow", "3 hours ago". */
 export function relativeTime(ms: number, now = Date.now()): string {
@@ -288,19 +285,25 @@ export function relativeTime(ms: number, now = Date.now()): string {
 }
 
 /**
- * When a schedule fires, in words: "Once, Tue 21 Oct 09:00" (on this
- * computer's clock), or "Every weekday at 09:00 (America/New_York)" (the
+ * When a schedule fires, in words: "Once, Oct 21, 9:00 AM" (on this
+ * computer's clock), or "Every weekday at 9:00 AM (America/New_York)" (the
  * expression itself when it isn't a common pattern).
  */
 export function whenLabel(
   schedule: Pick<Schedule, 'once' | 'at' | 'cron' | 'timezone'>,
-  { timeZone = browserTimeZone(), now = Date.now() }: { timeZone?: string; now?: number } = {},
+  {
+    timeZone = browserTimeZone(),
+    now = Date.now(),
+    locale,
+  }: { timeZone?: string; now?: number; locale?: string } = {},
 ): string {
   if (schedule.once || (schedule.at !== null && !schedule.cron)) {
-    return schedule.at === null ? 'Once' : `Once, ${formatDateTime(schedule.at, timeZone, now)}`;
+    return schedule.at === null
+      ? 'Once'
+      : `Once, ${formatDayTime(schedule.at, { timeZone, now, locale })}`;
   }
   const cron = schedule.cron ?? '';
-  return `${describeCron(cron) ?? cron} (${schedule.timezone})`;
+  return `${describeCron(cron, locale) ?? cron} (${schedule.timezone})`;
 }
 
 // ── The "when" form ──────────────────────────────────────────────────────────────────────────
@@ -506,8 +509,22 @@ export function scheduleChanges(before: ScheduleForm, after: ScheduleForm): Sche
     if (b.threadId !== undefined) out.threadId = b.threadId;
   }
   if (a.missedPolicy !== b.missedPolicy) out.missedPolicy = b.missedPolicy;
+  // Moved to another agent (PATCH agentId): its runs start new conversations there.
+  if (before.agentId !== after.agentId) {
+    out.agentId = after.agentId;
+    out.threadMode = 'new';
+    delete out.threadId;
+  }
   return out;
 }
+
+/** What moving a schedule to another agent means for it. */
+export const movedNotice = (agentName: string) =>
+  `Runs will start new conversations with ${agentName}.`;
+
+/** A one-time schedule that has fired: nothing left to pause or resume. */
+export const isDone = (schedule: Pick<Schedule, 'once' | 'nextFireAt'>) =>
+  schedule.once && schedule.nextFireAt === null;
 
 // ── Status ───────────────────────────────────────────────────────────────────────────────────
 

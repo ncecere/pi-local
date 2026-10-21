@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { type AuthConfig, api, type FeatureId, type Me } from '~/api/client';
+import { secretsHome } from '~/lib/secrets';
 
 /**
  * Pi Local has one local user: no sign-in, no session. `GET /api/me` names
@@ -57,6 +58,15 @@ export function useCurrentUser(): Me {
  */
 export function useFeature(id: FeatureId): boolean {
   return useCurrentUser().features?.[id] ?? false;
+}
+
+/**
+ * Where keys and secret values are kept, for copy: "the system keychain", or
+ * "memory for this session (development server)" when the server says it keeps
+ * them in memory. The keychain until it says otherwise.
+ */
+export function useSecretsHome(): string {
+  return secretsHome(useCurrentUser().features?.secretsInKeychain !== false);
 }
 
 /** The instance's name and default look; Pi Local's own until the server answers. */

@@ -15,6 +15,7 @@ import {
 } from '~/components/ui/dialog';
 import { Spinner } from '~/components/ui/spinner';
 import { useImportMcpServers, useMcpImportList } from '~/hooks/use-mcp';
+import { useSecretsHome } from '~/hooks/use-session';
 import { commandLine, IMPORT_PLACES, importKey, importRequests, importSourceName } from '~/lib/mcp';
 import { cn, plural } from '~/lib/utils';
 
@@ -28,6 +29,7 @@ function ImportRow({
   onChange: (checked: boolean) => void;
 }) {
   const id = useId();
+  const home = useSecretsHome();
   const blocked = server.exists || Boolean(server.unsupported);
   const what =
     server.transport === 'http'
@@ -73,7 +75,7 @@ function ImportRow({
           <p className="mt-1 text-xs text-[var(--text-muted)]">
             {server.transport === 'http' ? 'Headers' : 'Environment'}:{' '}
             <span className="font-mono">{server.envNames.join(', ')}</span> (values are imported
-            into the keychain)
+            into {home})
           </p>
         )}
       </div>
@@ -131,6 +133,7 @@ function ImportResultView({ result }: { result: McpImportResult }) {
  * names), to pick from. Servers already here can't be picked again.
  */
 export function ImportDialog({ onClose }: { onClose: () => void }) {
+  const home = useSecretsHome();
   const list = useMcpImportList(true);
   const importer = useImportMcpServers();
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
@@ -250,7 +253,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           <DialogDescription>
             {result
               ? 'Choose which agents use them on each agent’s MCP tab.'
-              : 'From the settings of other apps on this computer. Their variable and header values come along, into the system keychain.'}
+              : `From the settings of other apps on this computer. Their variable and header values come along, into ${home}.`}
           </DialogDescription>
         </DialogHeader>
         {body}

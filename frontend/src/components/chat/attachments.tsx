@@ -1,11 +1,48 @@
 import { Link } from '@tanstack/react-router';
-import { CircleAlert, FileText, Paperclip, Upload, X } from 'lucide-react';
+import {
+  CircleAlert,
+  File,
+  FileImage,
+  FileSpreadsheet,
+  FileText,
+  FileType,
+  type LucideIcon,
+  Paperclip,
+  Presentation,
+  Upload,
+  X,
+} from 'lucide-react';
 import { type DragEvent, useCallback, useRef, useState } from 'react';
+import type { Attachment } from '~/api/client';
 import { FOCUS_RING } from '~/components/ui/focus-ring';
 import { Spinner } from '~/components/ui/spinner';
 import type { Attachments, PendingAttachment } from '~/hooks/use-attachments';
-import { dragHasFiles, filesOf, formatBytes, MAX_ATTACHMENT_BYTES } from '~/lib/attachments';
+import {
+  dragHasFiles,
+  type FileKind,
+  fileKindOf,
+  filesOf,
+  formatBytes,
+  MAX_ATTACHMENT_BYTES,
+} from '~/lib/attachments';
 import { cn } from '~/lib/utils';
+
+const KIND_ICON: Record<FileKind, LucideIcon> = {
+  image: FileImage,
+  pdf: FileText,
+  doc: FileType,
+  sheet: FileSpreadsheet,
+  slides: Presentation,
+  file: File,
+};
+
+/** The icon for a kind of file: image, PDF, document, spreadsheet, slides, or any other. */
+export function FileKindIcon({ kind, className }: { kind: FileKind; className?: string }) {
+  const Icon = KIND_ICON[kind];
+  return (
+    <Icon className={cn('size-3.5 shrink-0', className)} aria-hidden="true" data-kind={kind} />
+  );
+}
 
 /** The paperclip left of the agent picker: choose files to attach. */
 export function AttachButton({
@@ -48,18 +85,35 @@ export function AttachButton({
   );
 }
 
-const STATE_LABEL: Record<PendingAttachment['state'], string> = {
+const STATE_LABEL: Record<Exclude<PendingAttachment['state'], 'done'>, string> = {
   reading: 'Reading…',
   uploading: 'Uploading…',
-  done: 'Attached',
   error: 'Not attached',
 };
+
+/** A small picture of an image about to be sent; the file icon when the browser can't draw it. */
+function Thumbnail({ url, kind }: { url: string; kind: FileKind }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) return <FileKindIcon kind={kind} className="text-[var(--text-muted)]" />;
+  return (
+    <img
+      src={url}
+      alt=""
+      aria-hidden="true"
+      onError={() => setBroken(true)}
+      className="size-8 shrink-0 rounded-md border border-[var(--border-subtle)] object-cover"
+    />
+  );
+}
 
 function Chip({ item, onRemove }: { item: PendingAttachment; onRemove: () => void }) {
   const working = item.state === 'reading' || item.state === 'uploading';
   const failed = item.state === 'error';
+  const kind = fileKindOf({ name: item.name, mediaType: item.mediaType });
+  const size = formatBytes(item.size);
   return (
     <li
+      data-attachment={item.state}
       className={cn(
         'relative flex max-w-full min-w-0 items-center gap-2 overflow-hidden rounded-lg border py-1.5 pr-1 pl-2.5 text-xs',
         failed
@@ -72,8 +126,10 @@ function Chip({ item, onRemove }: { item: PendingAttachment; onRemove: () => voi
         <Spinner className="size-3.5 shrink-0" />
       ) : failed ? (
         <CircleAlert className="size-3.5 shrink-0 text-[var(--danger)]" aria-hidden="true" />
+      ) : item.previewUrl ? (
+        <Thumbnail url={item.previewUrl} kind={kind} />
       ) : (
-        <FileText className="size-3.5 shrink-0 text-[var(--text-muted)]" aria-hidden="true" />
+        <FileKindIcon kind={kind} className="text-[var(--text-muted)]" />
       )}
       <span className="flex min-w-0 flex-col">
         <span className="max-w-[14rem] truncate font-medium text-[var(--text-primary)]">
@@ -87,7 +143,9 @@ function Chip({ item, onRemove }: { item: PendingAttachment; onRemove: () => voi
         >
           {failed
             ? (item.error ?? STATE_LABEL.error)
-            : `${formatBytes(item.size)} · ${STATE_LABEL[item.state]}`}
+            : item.state === 'done'
+              ? size
+              : `${size} · ${STATE_LABEL[item.state]}`}
         </span>
       </span>
       <button
@@ -112,6 +170,43 @@ function Chip({ item, onRemove }: { item: PendingAttachment; onRemove: () => voi
         </span>
       )}
     </li>
+  );
+}
+
+/**
+ * The files a message was sent with, as chips under its text: an icon for the
+ * kind of file, its name and its size.
+ */
+export function MessageAttachments({
+  attachments,
+  className,
+}: {
+  attachments: readonly Pick<Attachment, 'name' | 'size' | 'path' | 'mediaType'>[];
+  className?: string;
+}) {
+  if (attachments.length === 0) return null;
+  return (
+    <ul
+      aria-label="Files sent with this message"
+      className={cn('flex flex-wrap gap-1.5', className)}
+    >
+      {attachments.map((file) => (
+        <li
+          key={file.path}
+          data-message-attachment=""
+          title={file.path}
+          className="flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-control-alt)] py-1.5 pr-2.5 pl-2.5 text-xs"
+        >
+          <FileKindIcon kind={fileKindOf(file)} className="text-[var(--text-muted)]" />
+          <span className="max-w-[14rem] min-w-0 truncate font-medium text-[var(--text-primary)]">
+            {file.name}
+          </span>
+          {file.size > 0 && (
+            <span className="shrink-0 text-[var(--text-muted)]">{formatBytes(file.size)}</span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -166,7 +261,7 @@ export function AttachmentTray({
         </div>
       )}
       {items.length > 0 && (
-        <ul aria-label="Attached files" className="flex flex-wrap gap-1.5">
+        <ul aria-label="Files to send" className="flex flex-wrap gap-1.5">
           {items.map((item) => (
             <Chip key={item.key} item={item} onRemove={() => attachments.remove(item.key)} />
           ))}
@@ -176,7 +271,7 @@ export function AttachmentTray({
         {uploading.length > 0
           ? `Uploading ${uploading.length} ${uploading.length === 1 ? 'file' : 'files'}…`
           : items.length > 0
-            ? `${items.filter((item) => item.state === 'done').length} attached`
+            ? `${items.filter((item) => item.state === 'done').length} ready to send`
             : ''}
       </span>
     </div>

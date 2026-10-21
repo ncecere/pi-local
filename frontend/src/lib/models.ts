@@ -1,8 +1,32 @@
 import { ApiError } from '~/api/errors';
-import type { AgentRef, CatalogModel, DiscoveredModel, ProviderKind } from '~/api/types';
+import type {
+  AgentRef,
+  CatalogModel,
+  DiscoveredModel,
+  ProviderKind,
+  ProvidersResponse,
+} from '~/api/types';
 
 /** The demo model: always there, needs nothing. */
 export const DEMO_MODEL_ID = 'demo/demo-1';
+
+/**
+ * What to tell the person when a change to the providers or models moved the
+ * default model (it was turned off or removed): "The default model is now X.",
+ * or null when it stayed. `before` is the default ID before the change; none
+ * means the demo model.
+ */
+export function defaultModelNotice(
+  before: string | null | undefined,
+  after: Pick<ProvidersResponse, 'defaultModelId' | 'providers'>,
+): string | null {
+  const was = before || DEMO_MODEL_ID;
+  const now = after.defaultModelId || DEMO_MODEL_ID;
+  if (was === now) return null;
+  if (now === DEMO_MODEL_ID) return 'The default model is now the demo model.';
+  const model = after.providers.flatMap((provider) => provider.models).find((m) => m.id === now);
+  return `The default model is now ${model?.name ?? now}.`;
+}
 
 /** `/api/providers/{p}…`, the provider ID encoded. */
 export const providerPath = (providerId: string, rest = '') =>

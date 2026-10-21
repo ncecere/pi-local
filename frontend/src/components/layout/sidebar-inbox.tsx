@@ -53,6 +53,7 @@ import { type InboxActions, useInbox, useInboxActions } from '~/hooks/use-inbox'
 import { searchable, useMessageSearch } from '~/hooks/use-message-search';
 import { calledByLabel } from '~/lib/agent-asks';
 import { approvalHeadline } from '~/lib/approvals';
+import { formatWeekdayTime } from '~/lib/dates';
 import { elicitationHeadline } from '~/lib/elicitations';
 import { keepFocusWhenRemoved } from '~/lib/focus-return';
 import {
@@ -699,8 +700,7 @@ function StatusBadge({
   );
 }
 
-const whenLabel = (until: number) =>
-  new Date(until).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+const whenLabel = (until: number) => formatWeekdayTime(until);
 
 /** Names a conversation: the platform's title is the start of its first message. */
 function RenameDialog({

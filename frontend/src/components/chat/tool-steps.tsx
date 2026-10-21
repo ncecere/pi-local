@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import type { UIMessage } from 'ai';
 import {
   ArrowUpRight,
+  Ban,
   Brain,
   Check,
   ChevronDown,
@@ -222,6 +223,8 @@ function ToolOutput({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
         .
       </p>
     );
+  if (step.state === 'declined' && !raw)
+    return <p className="text-[var(--text-muted)]">You declined the question it asked.</p>;
   if (raw === null || raw === '')
     return (
       <p className="text-[var(--text-muted)]">
@@ -282,7 +285,11 @@ function StepIcon({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
       />
     );
   const Icon =
-    step.state === 'error' ? CircleAlert : toolIconOf(String(part.toolName ?? step.label));
+    step.state === 'error'
+      ? CircleAlert
+      : step.state === 'declined'
+        ? Ban
+        : toolIconOf(String(part.toolName ?? step.label));
   return (
     <Icon
       className={cn('size-4 shrink-0', step.state === 'error' && 'text-[var(--danger-on-tint)]')}
@@ -347,7 +354,7 @@ function AskLine({
           {formatDuration(took)}
         </span>
       )}
-      {step.state === 'denied' && <span className="shrink-0">not run</span>}
+      {step.state === 'denied' && <span className="shrink-0">Denied</span>}
     </>
   );
 }
@@ -457,10 +464,11 @@ function StepLine({ part, step }: { part: ToolPart; step: ToolStepSummary }) {
           {formatDuration(took)}
         </span>
       )}
+      {step.state === 'declined' && <span className="shrink-0">Declined</span>}
       {approval ? (
         <ApprovalOutcome approval={approval} className="shrink-0 max-w-[50%]" />
       ) : (
-        step.state === 'denied' && <span className="shrink-0">not run</span>
+        step.state === 'denied' && <span className="shrink-0">Denied</span>
       )}
     </>
   );

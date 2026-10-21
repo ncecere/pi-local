@@ -10,6 +10,8 @@ export type ToolStepState =
   | 'approved'
   | 'done'
   | 'error'
+  /** The person declined (or dismissed) a question the tool asked: not a failure. */
+  | 'declined'
   | 'denied';
 
 export interface ToolStepSummary {
@@ -54,7 +56,10 @@ function stepState(part: PartLike): ToolStepState {
     case 'output-available':
       return 'done';
     case 'output-error':
-      return 'error';
+      return (part.toolMetadata as { elicitation?: unknown } | undefined)?.elicitation ===
+        'declined'
+        ? 'declined'
+        : 'error';
     case 'output-denied':
       return 'denied';
     default:
@@ -74,11 +79,13 @@ export function summarizeToolPart(part: PartLike): ToolStepSummary {
       ? `Used ${label}`
       : state === 'error'
         ? `${label} failed`
-        : state === 'denied'
-          ? `${label} was not run`
-          : state === 'awaiting-approval'
-            ? `${label} is waiting for your approval`
-            : `Using ${label}`;
+        : state === 'declined'
+          ? `${label} was declined`
+          : state === 'denied'
+            ? `${label} was denied`
+            : state === 'awaiting-approval'
+              ? `${label} is waiting for your approval`
+              : `Using ${label}`;
   if (state === 'denied' && reason) summary = `${summary} (${reason})`;
   return {
     toolCallId: String(part.toolCallId),

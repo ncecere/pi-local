@@ -7,6 +7,7 @@ import { ExternalAnchor } from '~/components/onboarding/get-started';
 import { SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
+import { useSecretsHome } from '~/hooks/use-session';
 import {
   useSaveWebSettings,
   useTestWebSearch,
@@ -22,6 +23,7 @@ type Choice = WebSettings['provider'];
  * uses (Brave suggested), its key and address, and a test search.
  */
 export function WebSearchSection() {
+  const home = useSecretsHome();
   const settings = useWebSettings();
   const save = useSaveWebSettings();
   const test = useTestWebSearch();
@@ -29,7 +31,7 @@ export function WebSearchSection() {
     <SettingsSection title="Web search">
       <p className="-mt-2 text-sm text-[var(--text-muted)]">
         The service agents search the web with. Each agent's Tools tab says whether it may search.
-        The key is kept in the system keychain.
+        The key is kept in {home}.
       </p>
       {settings.isError ? (
         <div className="flex flex-col items-start gap-3">

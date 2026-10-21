@@ -11,7 +11,7 @@ import {
 } from 'react';
 import { FILLED_FOCUS_RING, FOCUS_RING } from '~/components/ui/focus-ring';
 import { AGENT_MESSAGE_MAX_LENGTH } from '~/hooks/use-agent-thread';
-import { filesOf } from '~/lib/attachments';
+import { pastedFilesOf } from '~/lib/attachments';
 import { isApplePlatform } from '~/lib/keyboard-shortcuts';
 import {
   isSendKey,
@@ -113,7 +113,7 @@ export const Composer = memo(function Composer({
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (!onPasteFiles) return;
-    const files = filesOf(event.clipboardData);
+    const files = pastedFilesOf(event.clipboardData);
     if (files.length === 0) return;
     event.preventDefault();
     onPasteFiles(files);

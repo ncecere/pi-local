@@ -14,7 +14,7 @@ import {
 } from '~/components/ui/dialog';
 import { Spinner } from '~/components/ui/spinner';
 import { isLoginRunning, useCancelMcpLogin, useMcpLogin, useStartMcpLogin } from '~/hooks/use-mcp';
-import { commandLine, linkParts, visibleTools } from '~/lib/mcp';
+import { linkParts, visibleTools } from '~/lib/mcp';
 import { plural } from '~/lib/utils';
 
 /** The command's output, its web addresses clickable; it follows the end unless scrolled up. */
@@ -124,6 +124,34 @@ function LoginState({ status, server }: { status: McpLoginStatus; server: McpSer
 }
 
 /**
+ * The command that will run, as it is run: the program, then one row per
+ * argument, as they are (no shell quoting to read through).
+ */
+function CommandRows({ command, args }: { command: string | null; args: readonly string[] }) {
+  return (
+    <dl
+      aria-label="Sign-in command"
+      className="divide-y divide-[var(--border-subtle)] rounded-lg border border-[var(--border-subtle)] font-mono text-xs"
+    >
+      <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-3 px-3 py-1.5">
+        <dt className="font-sans text-[var(--text-muted)]">Program</dt>
+        <dd className="break-all text-[var(--text-primary)]">{command}</dd>
+      </div>
+      {args.map((arg, index) => (
+        // The same text can be an argument twice: the position is its identity.
+        // biome-ignore lint/suspicious/noArrayIndexKey: arguments have no other identity
+        <div key={index} className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-3 px-3 py-1.5">
+          <dt className="font-sans text-[var(--text-muted)]">Argument {index + 1}</dt>
+          <dd className="whitespace-pre-wrap break-all text-[var(--text-primary)]">
+            {arg === '' ? <span className="font-sans text-[var(--text-muted)]">(empty)</span> : arg}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
  * Signing in to a local server with its own command (`loginArgs`): it starts
  * the command when it opens, then shows its output as it comes (`mcp-login`
  * live events), with its links clickable, and how it ended. One already
@@ -162,9 +190,7 @@ export function McpLoginDialog({ server, onClose }: { server: McpServer; onClose
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
-          <p className="break-all font-mono text-xs text-[var(--text-muted)]">
-            {commandLine(server.command, server.loginArgs)}
-          </p>
+          <CommandRows command={server.command} args={server.loginArgs} />
           <div role="status" aria-live="polite">
             {startError ? null : status ? (
               <LoginState status={status} server={server} />

@@ -17,7 +17,7 @@ ported frontend changes as little as possible.
 
 | Route | Answer |
 |---|---|
-| `GET /api/me` | `{user: {id: "local", name, email: "", role: "admin"}, csrfToken: "", features: {messageSearch, folderDialog, updates, agentRouting, modelPerConversation}, platform: {mode: "local", account: null}}`. `name` is the OS user's full name. `features.folderDialog`: `POST /api/choose-folder` opens a native dialog (the desktop app only). `features.updates`: this copy can install updates itself (`canInstall`, see [Updates](#updates)). |
+| `GET /api/me` | `{user: {id: "local", name, email: "", role: "admin"}, csrfToken: "", features: {messageSearch, folderDialog, updates, agentRouting, modelPerConversation, secretsInKeychain}, platform: {mode: "local", account: null}}`. `name` is the OS user's full name. `features.folderDialog`: `POST /api/choose-folder` opens a native dialog (the desktop app only). `features.updates`: this copy can install updates itself (`canInstall`, see [Updates](#updates)). `features.secretsInKeychain`: keys and secret values go to the system keychain; false: they are kept in memory for the session (a development server started with `-secrets memory`), and the app says so. |
 | `GET /api/auth/config` | `{oidcEnabled: false, devAuthEnabled: false, devAccounts: [], instance: {name: "Pi Local", logoUrl: null, colorTheme: "neutral", defaultTheme: "system", orgName: "", supportUrl: null}}` |
 | `GET /api/me/prefs` | `Record<key, object>`: every saved preference. |
 | `PUT /api/me/prefs/{key}` | Body `{value: object}`. Keys: `inbox` (≤ 512 KiB), `appearance` (≤ 16 KiB), `onboarding` (≤ 4 KiB); any other key is `404 unknown_pref`. Answers `{ok: true}`. |
@@ -503,7 +503,7 @@ type Run = { id: string; scheduleId: string; threadId: string; firedAt: number;
 | `GET /api/schedules` | `Schedule[]` of every agent, next to fire first. |
 | `GET /api/agents/{a}/schedules` | One agent's. |
 | `POST /api/agents/{a}/schedules` | Body `{name?, at? (ISO 8601; without an offset it is in timezone), cron?, timezone?, message, threadMode?, threadId?, missedPolicy?}`. `201 Schedule`. Errors: `invalid_when`, `invalid_time`, `invalid_cron`, `invalid_timezone`, `invalid_message`, `invalid_thread_mode`. |
-| `PATCH /api/schedules/{id}` | The same fields and `paused`. Resuming resets the failure count. |
+| `PATCH /api/schedules/{id}` | The same fields and `paused`. Resuming resets the failure count. `agentId` moves the schedule to another agent (`invalid_agent` for one that doesn't exist): its runs then start new conversations there, so `threadMode` becomes `new` (a `this` is ignored). |
 | `DELETE /api/schedules/{id}` | `{ok: true}` |
 | `POST /api/schedules/{id}/run` | Runs it now (its next time doesn't change): `Run`. |
 | `GET /api/schedules/{id}/runs?limit=` | `Run[]`, newest first. |

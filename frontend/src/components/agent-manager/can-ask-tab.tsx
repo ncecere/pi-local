@@ -5,6 +5,7 @@ import { AgentAvatar } from '~/components/agent/agent-avatar';
 import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
 import { ErrorNotice } from '~/components/models/fields';
 import { useUpdateAgent } from '~/hooks/use-agents';
+import { ASK_TOOLS } from '~/lib/agent-asks';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { cn } from '~/lib/utils';
 
@@ -56,6 +57,25 @@ export function CanAskTab({ agent, agents }: { agent: Agent; agents: Agent[] }) 
             ))}
           </ul>
         )}
+      </Panel>
+      <Panel
+        title="Tools it gets"
+        description={
+          (agent.callable ?? []).length > 0
+            ? `${agent.name} uses these to ask other agents.`
+            : `${agent.name} gets these tools once it may ask someone.`
+        }
+      >
+        <ul aria-label="Tools for asking other agents" className="flex flex-col gap-2.5">
+          {ASK_TOOLS.map((tool) => (
+            <li key={tool.name} className="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
+              <code className="shrink-0 font-mono text-sm text-[var(--text-primary)] sm:w-28">
+                {tool.name}
+              </code>
+              <span className="text-sm text-[var(--text-secondary)]">{tool.does}</span>
+            </li>
+          ))}
+        </ul>
       </Panel>
     </div>
   );

@@ -13,7 +13,8 @@ import { useAgentPower, useReveal } from '~/hooks/use-agent-manager';
 import { type AgentCatalog, useUpdateAgent } from '~/hooks/use-agents';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { agentFieldText } from '~/lib/agent-text';
-import { cn, formatDateTime, formatRelativeTime } from '~/lib/utils';
+import { formatDayTime } from '~/lib/dates';
+import { cn, formatRelativeTime } from '~/lib/utils';
 
 /**
  * An agent's name, description, model and instructions (saved together), and
@@ -253,7 +254,7 @@ function RuntimePanel({ agent }: { agent: Agent }) {
         </Fact>
         <Fact label="Last used">
           {agent.lastUsedAt ? (
-            <time dateTime={agent.lastUsedAt} title={formatDateTime(agent.lastUsedAt)}>
+            <time dateTime={agent.lastUsedAt} title={formatDayTime(agent.lastUsedAt)}>
               {formatRelativeTime(agent.lastUsedAt)}
             </time>
           ) : (
@@ -261,7 +262,7 @@ function RuntimePanel({ agent }: { agent: Agent }) {
           )}
         </Fact>
         <Fact label="Created">
-          <time dateTime={agent.createdAt}>{formatDateTime(agent.createdAt)}</time>
+          <time dateTime={agent.createdAt}>{formatDayTime(agent.createdAt)}</time>
         </Fact>
         <Fact label="Folder">
           {agent.dir ? (

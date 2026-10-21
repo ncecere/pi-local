@@ -33,7 +33,7 @@ import { useAttachments } from '~/hooks/use-attachments';
 import { type ChatScrollTarget, useChatScroll } from '~/hooks/use-chat-scroll';
 import { useElicitationsByThread } from '~/hooks/use-elicitations';
 import { useModelChoice } from '~/hooks/use-model-choice';
-import { isPendingMessage } from '~/lib/chat-view';
+import { isPendingMessage, type ReplyMetadata } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
 import {
   branchPointOf,
@@ -182,7 +182,8 @@ function ThreadConversation({
     if (attachments.busy) return;
     // Only what the person changed since the last message goes with this one.
     const { changes } = modelChoice;
-    void session.send(attachments.compose, { steer, ...changes }).then((sent) => {
+    const files = attachments.ready;
+    void session.send({ steer, attachments: files, ...changes }).then((sent) => {
       if (!sent) return;
       attachments.clear();
       commitModelChoice(changes);
@@ -222,6 +223,9 @@ function ThreadConversation({
       const { session, fork, navigate } = forkState.current;
       const beforeMessageId = transcriptIdOf(messageId, session.pending);
       if (!beforeMessageId) return 'This message is still being sent. Try again in a moment.';
+      // Its files go with the edited words.
+      const sent = session.messages.find((message) => message.id === messageId);
+      const files = (sent?.metadata as ReplyMetadata | undefined)?.attachments;
       try {
         const created = await fork.mutateAsync({ agentId, threadId, beforeMessageId });
         // The new conversation sends the edited text as soon as it opens (with a request ID).
@@ -232,6 +236,7 @@ function ThreadConversation({
           requestId: crypto.randomUUID(),
           focus: false,
           existing: true,
+          ...(files?.length ? { attachments: files } : {}),
         });
         await navigate({
           to: '/agents/$agentId/threads/$threadId',
@@ -504,7 +509,7 @@ function ThreadConversation({
               </>
             }
             attach={<AttachButton onFiles={attachments.add} disabled={!agent?.enabled} />}
-            onPasteFiles={agent?.enabled ? attachments.add : undefined}
+            onPasteFiles={agent?.enabled ? attachments.paste : undefined}
             hasExtra={attachments.ready.length > 0}
             holdSend={attachments.busy ? 'Sending waits until the files are uploaded.' : null}
             working={busy}

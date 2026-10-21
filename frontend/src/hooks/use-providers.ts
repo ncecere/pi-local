@@ -1,4 +1,6 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback } from 'react';
+import { toast } from 'sonner';
 import {
   api,
   type DetectedServer,
@@ -9,8 +11,8 @@ import {
   type ProviderSetupResult,
   type ProvidersResponse,
 } from '~/api/client';
-import { AGENTS_KEY, CATALOG_KEY } from '~/hooks/use-agents';
-import { modelPath, providerPath } from '~/lib/models';
+import { AGENTS_KEY, type AgentCatalog, CATALOG_KEY } from '~/hooks/use-agents';
+import { defaultModelNotice, modelPath, providerPath } from '~/lib/models';
 
 export const PROVIDERS_KEY = ['providers'] as const;
 
@@ -143,3 +145,32 @@ export const useSetDefaultModel = () =>
   useModelsMutation((modelId: string) =>
     api.put<{ defaultModelId: string }>('/api/settings/default-model', { modelId }),
   );
+
+/**
+ * Turning off (or removing) the default model, or the provider it comes from,
+ * moves the default silently. Call the result before such a change: it notes
+ * the default, and the function it returns, called once the change is saved,
+ * says so with a toast when the default is another model now.
+ */
+export function useDefaultModelWatch() {
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    const before =
+      queryClient.getQueryData<ProvidersResponse>(PROVIDERS_KEY)?.defaultModelId ??
+      queryClient.getQueryData<AgentCatalog>(CATALOG_KEY)?.defaultModelId ??
+      null;
+    return async () => {
+      try {
+        const after = await queryClient.fetchQuery({
+          queryKey: PROVIDERS_KEY,
+          queryFn: () => api.get<ProvidersResponse>('/api/providers'),
+          staleTime: 0,
+        });
+        const notice = defaultModelNotice(before, after);
+        if (notice) toast(notice);
+      } catch {
+        // Nothing to say if the page can't be read again.
+      }
+    };
+  }, [queryClient]);
+}

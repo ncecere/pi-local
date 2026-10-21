@@ -33,6 +33,7 @@ import {
   useTestMcpServer,
   useUpdateMcpServer,
 } from '~/hooks/use-mcp';
+import { useSecretsHome } from '~/hooks/use-session';
 import { usePageTitle } from '~/lib/document-title';
 import {
   commandLine,
@@ -428,6 +429,7 @@ type Open =
  */
 export function SettingsMcpPage() {
   usePageTitle('MCP · Settings');
+  const home = useSecretsHome();
   const servers = useMcpServers();
   const startSignIn = useSignInMcpServer();
   const [open, setOpen] = useState<Open | null>(null);
@@ -528,8 +530,8 @@ export function SettingsMcpPage() {
       <SettingsSection title="MCP servers" first>
         <p className="-mt-2 text-sm text-[var(--text-muted)]">
           Tools for your agents from MCP servers: programs on this computer, or remote servers. Each
-          agent chooses which it uses on its MCP tab (Settings → Agents). Secrets are kept in the
-          system keychain.
+          agent chooses which it uses on its MCP tab (Settings → Agents). Secrets are kept in {home}
+          .
         </p>
         {list.length > 0 ? (
           <ul className="divide-y divide-[var(--border-subtle)] rounded-xl border border-[var(--border-subtle)]">

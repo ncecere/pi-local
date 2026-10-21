@@ -12,12 +12,13 @@ import {
   DialogTitle,
 } from '~/components/ui/dialog';
 import { Spinner } from '~/components/ui/spinner';
-import { useAgentThreads } from '~/hooks/use-agents';
+import { useAgents, useAgentThreads } from '~/hooks/use-agents';
 import { useCreateSchedule, useUpdateSchedule } from '~/hooks/use-schedules';
 import {
   browserTimeZone,
   DAY_NAMES,
   describeCron,
+  movedNotice,
   presetCron,
   type RepeatPreset,
   SCHEDULE_NAME_MAX,
@@ -264,7 +265,18 @@ export function ScheduleDialog({
   const problem = scheduleFormProblem(form);
   const busy = create.isPending || update.isPending;
   const error = create.error ?? update.error;
-  const pickAgent = !schedule && !agentId;
+  // Changing one: any enabled agent may take it over (the page's own list may be just one).
+  const allAgents = useAgents().data;
+  const choices = useMemo(
+    () =>
+      schedule
+        ? (allAgents?.filter((agent) => agent.enabled || agent.id === schedule.agentId) ?? agents)
+        : agents,
+    [schedule, allAgents, agents],
+  );
+  const pickAgent = schedule ? choices.length > 1 : !agentId;
+  const moved = schedule !== null && form.agentId !== initial.agentId;
+  const newAgent = choices.find((agent) => agent.id === form.agentId);
   const threads = useAgentThreads(form.agentId || undefined);
   const set = (change: Partial<ScheduleForm>) => setForm((current) => ({ ...current, ...change }));
 
@@ -309,15 +321,33 @@ export function ScheduleDialog({
               <select
                 id={`${id}-agent`}
                 value={form.agentId}
-                onChange={(event) => set({ agentId: event.target.value, threadId: '' })}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  // Another agent doesn't have the conversation: runs start new ones. Back to
+                  // the first agent, it is as it was.
+                  set(
+                    next === initial.agentId
+                      ? {
+                          agentId: next,
+                          threadMode: initial.threadMode,
+                          threadId: initial.threadId,
+                        }
+                      : { agentId: next, threadMode: 'new', threadId: '' },
+                  );
+                }}
                 className={FIELD}
               >
-                {agents.map((agent) => (
+                {choices.map((agent) => (
                   <option key={agent.id} value={agent.id}>
                     {agent.name}
                   </option>
                 ))}
               </select>
+              {moved && newAgent && (
+                <p role="note" className="mt-1.5 text-xs text-[var(--text-muted)]">
+                  {movedNotice(newAgent.name)}
+                </p>
+              )}
             </Field>
           )}
           <Field
@@ -352,17 +382,19 @@ export function ScheduleDialog({
 
           <WhenFields when={form.when} onChange={(when) => set({ when })} />
 
-          <Choices
-            legend="Where it runs"
-            name={`${id}-thread-mode`}
-            value={form.threadMode}
-            options={[
-              { id: 'new', label: 'A new conversation each time' },
-              { id: 'this', label: 'Always the same conversation' },
-            ]}
-            onChange={(threadMode) => set({ threadMode })}
-          />
-          {form.threadMode === 'this' && (
+          {!moved && (
+            <Choices
+              legend="Where it runs"
+              name={`${id}-thread-mode`}
+              value={form.threadMode}
+              options={[
+                { id: 'new', label: 'A new conversation each time' },
+                { id: 'this', label: 'Always the same conversation' },
+              ]}
+              onChange={(threadMode) => set({ threadMode })}
+            />
+          )}
+          {!moved && form.threadMode === 'this' && (
             <Field id={`${id}-thread`} label="Conversation">
               <select
                 id={`${id}-thread`}

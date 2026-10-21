@@ -32,8 +32,9 @@ import {
   useScheduleRuns,
   useUpdateSchedule,
 } from '~/hooks/use-schedules';
+import { formatDayTime, formatExact } from '~/lib/dates';
 import {
-  formatDateTime,
+  isDone,
   lastRunLabel,
   madeByLabel,
   nextFireLabel,
@@ -110,9 +111,9 @@ function RunHistory({ schedule }: { schedule: Schedule }) {
             </span>
             <span
               className="tabular-nums text-[var(--text-secondary)]"
-              title={new Date(run.firedAt).toLocaleString()}
+              title={formatExact(run.firedAt)}
             >
-              {formatDateTime(run.firedAt, Intl.DateTimeFormat().resolvedOptions().timeZone, now)}
+              {formatDayTime(run.firedAt, { now })}
             </span>
             {took !== null && (
               <span className="text-xs text-[var(--text-muted)]">
@@ -222,9 +223,7 @@ function ScheduleRow({
             <dt>Next</dt>
             <dd
               className="truncate"
-              title={
-                schedule.nextFireAt ? new Date(schedule.nextFireAt).toLocaleString() : undefined
-              }
+              title={schedule.nextFireAt ? formatExact(schedule.nextFireAt) : undefined}
             >
               {nextFireLabel(schedule, now)}
             </dd>
@@ -281,16 +280,26 @@ function ScheduleRow({
           >
             {run.isPending ? <Spinner className="size-4" /> : <Zap />}
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`${schedule.paused ? 'Resume' : 'Pause'} ${schedule.name}`}
-            title={schedule.paused ? 'Resume' : 'Pause'}
-            disabled={update.isPending}
-            onClick={togglePause}
-          >
-            {schedule.paused ? <Play /> : <Pause />}
-          </Button>
+          {isDone(schedule) ? (
+            // A one-time schedule that has fired: nothing to pause or resume.
+            <span
+              className="px-2 text-xs font-medium text-[var(--text-muted)]"
+              title="It has run, and won't run again."
+            >
+              Done
+            </span>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`${schedule.paused ? 'Resume' : 'Pause'} ${schedule.name}`}
+              title={schedule.paused ? 'Resume' : 'Pause'}
+              disabled={update.isPending}
+              onClick={togglePause}
+            >
+              {schedule.paused ? <Play /> : <Pause />}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon-sm"

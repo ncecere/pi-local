@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { formatDay } from '~/lib/dates';
 
 /** "1 day", "30 days", "1,000 messages": the noun singular only for one (#263, #286). */
 export function plural(count: number, noun: string): string {
@@ -56,7 +57,7 @@ export function formatRelativeTime(value: string | Date | null, now: number = Da
   const days = Math.round(hours / 24);
   if (days < 30) return `${days}d ago`;
 
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatDay(date, { now });
 }
 
 /** The future half of formatRelativeTime: "in 20m", "in 3h", "in 30d". */
@@ -67,37 +68,7 @@ function formatAhead(date: Date, minutes: number): string {
   const days = Math.round(hours / 24);
   // A monthly schedule is 30 days out, so keep counting days a little past a month.
   if (days <= 31) return `in ${days}d`;
-  return `on ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
-}
-
-/**
- * The time of day as `timeStyle: 'short'` writes it ("6:30 AM", "18:30"), for
- * formats that also name the zone, which `timeStyle` cannot be combined with.
- * One hour style everywhere: the read-only notices' "07:30 AM" sat beside the
- * admin lists' "6:30 AM" (#305).
- */
-export const TIME_OF_DAY = { hour: 'numeric', minute: '2-digit' } as const;
-
-const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-});
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
-
-/**
- * A moment as admin pages show it, "Oct 5, 2026, 6:27 PM" in the reader's
- * locale. One format everywhere: connectors, webhooks and legal holds used
- * the browser default ("10/5/2026, 6:51:07 PM") beside this one (#177).
- */
-export function formatDateTime(value: string | Date): string {
-  const date = typeof value === 'string' ? new Date(value) : value;
-  return Number.isNaN(date.getTime()) ? String(value) : dateTimeFormat.format(date);
-}
-
-/** A day as admin pages show it, "Oct 5, 2026" (#177). */
-export function formatDate(value: string | Date): string {
-  const date = typeof value === 'string' ? new Date(value) : value;
-  return Number.isNaN(date.getTime()) ? String(value) : dateFormat.format(date);
+  return `on ${formatDay(date)}`;
 }
 
 export function formatBytes(bytes: number): string {

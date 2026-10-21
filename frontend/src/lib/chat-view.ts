@@ -1,11 +1,16 @@
 import type { DynamicToolUIPart, UIMessage } from 'ai';
 import type {
+  Attachment,
+  Author,
   ChatApproval,
   ChatAssistantMessage,
   ChatMessage,
   ChatToolMessage,
   ChatView,
 } from '~/api/client';
+import { splitAttachmentBlock } from '~/lib/attachments';
+import { stripHarness } from '~/lib/diagnostics';
+import { type ElicitationOutcome, waitedForDeclined } from '~/lib/elicitation-outcomes';
 
 /**
  * Turns the platform's ChatView (pi's transcript plus the reply in progress)
@@ -49,6 +54,8 @@ export interface PendingMessage {
   baseline: number;
   /** Sent to steer the reply in progress (`whenBusy: "steer"`) rather than queued after it. */
   steer?: boolean;
+  /** The files sent with it. */
+  attachments?: Attachment[];
   /** The transcript's id for it, once `confirmed`. */
   matchedId?: string;
 }
@@ -66,6 +73,10 @@ export interface ReplyMetadata {
   pending?: Exclude<PendingMessage['state'], 'failed' | 'confirmed'>;
   /** For a user message from this tab: sent to steer the reply in progress. */
   steer?: boolean;
+  /** For a user message: the files sent with it. */
+  attachments?: Attachment[];
+  /** For a user message that isn't a person's (another agent, a schedule, a service): who sent it. */
+  author?: Author;
   /** When the message was sent, or the reply began (Unix ms), as the platform records it. */
   at?: number;
   /** For a reply: the model that wrote it (its last step's). */
@@ -183,9 +194,14 @@ function withDetails(
 /** A tool result's text, or the live output while it runs. */
 export function toolOutputText(part: Record<string, unknown>): string | null {
   const output = part.output as Partial<ToolOutput> | undefined;
-  if (typeof output?.text === 'string') return output.text;
-  if (typeof part.errorText === 'string') return part.errorText;
-  return liveOutputOf(part as { toolMetadata?: unknown });
+  const text =
+    typeof output?.text === 'string'
+      ? output.text
+      : typeof part.errorText === 'string'
+        ? part.errorText
+        : liveOutputOf(part as { toolMetadata?: unknown });
+  // The harness's wrapper around diagnostics is for the model, not for people.
+  return text === null ? null : stripHarness(text);
 }
 
 interface Reply {
@@ -195,9 +211,15 @@ interface Reply {
   recorded: Pick<ReplyMetadata, 'at' | 'model' | 'usage' | 'stopReason'>;
 }
 
+/**
+ * `outcomes`: the questions from MCP servers the person declined in this
+ * conversation (lib/elicitation-outcomes.ts): a call that waited for one and
+ * failed is marked, so its step reads "Declined" rather than "failed".
+ */
 export function viewToMessages(
   view: ChatView | null,
   pending: readonly PendingMessage[] = [],
+  outcomes: readonly ElicitationOutcome[] = [],
 ): AgentUIMessage[] {
   const messages: AgentUIMessage[] = [];
   const replies: Reply[] = [];
@@ -230,11 +252,18 @@ export function viewToMessages(
     if (message.role === 'user') {
       reply = null;
       question = alias.get(message.id) ?? message.id;
+      const { text, attachments } = userContentOf(message);
+      const metadata: ReplyMetadata = {
+        ...(typeof message.at === 'number' ? { at: message.at } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
+        // A person's own messages carry no author line; the others say who wrote them.
+        ...(message.author && message.author.kind !== 'user' ? { author: message.author } : {}),
+      };
       messages.push({
         id: question,
         role: 'user',
-        parts: [{ type: 'text', text: message.text ?? '' }],
-        ...(typeof message.at === 'number' ? { metadata: { at: message.at } } : {}),
+        parts: [{ type: 'text', text }],
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
       });
     } else if (message.role === 'assistant') {
       addAssistantStep(currentReply(), message);
@@ -300,17 +329,46 @@ export function viewToMessages(
     last.message.metadata = { ...(last.message.metadata ?? {}), approvals: orphans };
   }
 
+  if (outcomes.length > 0)
+    for (const owner of replies)
+      for (const part of [...owner.tools.values()]) {
+        if (part.state !== 'output-error') continue;
+        if (!waitedForDeclined(part.toolName, part.toolMetadata, outcomes)) continue;
+        replacePart(owner, part, {
+          ...part,
+          toolMetadata: { ...(part.toolMetadata ?? {}), elicitation: 'declined' },
+        });
+      }
+
   for (const message of pending) {
     if (message.state === 'failed' || message.state === 'confirmed') continue;
     messages.push({
       id: pendingIdOf(message),
       role: 'user',
       parts: [{ type: 'text', text: message.text }],
-      metadata: { pending: message.state, ...(message.steer ? { steer: true } : {}) },
+      metadata: {
+        pending: message.state,
+        ...(message.steer ? { steer: true } : {}),
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+      },
     });
   }
 
   return messages;
+}
+
+/**
+ * A user message's words and files. From v0.2 they come apart (`text`,
+ * `attachments`); before, the files were a block at the end of the text.
+ */
+function userContentOf(message: Extract<ChatMessage, { role: 'user' }>): {
+  text: string;
+  attachments: Attachment[];
+} {
+  const text = message.text ?? '';
+  if (message.attachments && message.attachments.length > 0)
+    return { text, attachments: message.attachments };
+  return splitAttachmentBlock(text);
 }
 
 const isInterrupted = (message: ChatMessage): message is ChatAssistantMessage =>

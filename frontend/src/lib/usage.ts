@@ -1,4 +1,5 @@
 import type { UsageTotals } from '~/api/types';
+import { dayFromKey } from '~/lib/dates';
 
 /** The periods usage can be read for. */
 export const USAGE_RANGES = [7, 30, 90] as const;
@@ -47,11 +48,6 @@ function dayKey(date: Date): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-function parseDay(day: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
-  return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
-}
-
 /**
  * Every day from `from` to `to`, in order, each with its usage or zeros. The
  * API already lists every day; this keeps the chart right if one is missing.
@@ -62,8 +58,8 @@ export function fillDays<T extends UsageTotals & { day: string }>(
   from: string,
   to: string,
 ): (UsageTotals & { day: string })[] {
-  const start = parseDay(from);
-  const end = parseDay(to);
+  const start = dayFromKey(from);
+  const end = dayFromKey(to);
   if (!start || !end || start > end) return [...byDay].sort((a, b) => a.day.localeCompare(b.day));
   const known = new Map(byDay.map((entry) => [entry.day, entry]));
   const days: (UsageTotals & { day: string })[] = [];

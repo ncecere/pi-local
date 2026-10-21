@@ -254,3 +254,53 @@ describe('The sign-in dialog', () => {
     expect(buttonByText('Try again')).toBeDefined();
   });
 });
+
+describe('The sign-in dialog: the command', () => {
+  async function open(loginArgs: string[], command: string | null = 'node') {
+    fakeBackend({
+      [`POST ${LOGIN}`]: () => login({ output: '' }),
+      [`GET ${LOGIN}`]: () => login(),
+    });
+    view = await renderWithQuery(
+      <McpLoginDialog server={server({ command, loginArgs })} onClose={() => {}} />,
+    );
+    await settle();
+    return [...document.querySelectorAll('[aria-label="Sign-in command"] > div')].map((row) => ({
+      label: row.querySelector('dt')?.textContent,
+      value: row.querySelector('dd')?.textContent,
+    }));
+  }
+
+  it('shows the program, then one row per argument', async () => {
+    expect(await open(['/opt/m365-mcp.mjs', 'login'])).toEqual([
+      { label: 'Program', value: 'node' },
+      { label: 'Argument 1', value: '/opt/m365-mcp.mjs' },
+      { label: 'Argument 2', value: 'login' },
+    ]);
+  });
+
+  it('shows arguments as they are, with no shell quoting', async () => {
+    const rows = await open(['--name', "Ada's laptop", 'a "b" c', '--note=x y']);
+    expect(rows.map((row) => row.value)).toEqual([
+      'node',
+      '--name',
+      "Ada's laptop",
+      'a "b" c',
+      '--note=x y',
+    ]);
+    // Monospace, one `dd` each.
+    const cells = document.querySelectorAll('[aria-label="Sign-in command"]');
+    expect(cells[0]?.className).toContain('font-mono');
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("'\\''");
+  });
+
+  it('says so for an empty argument, and lists no rows for none', async () => {
+    expect((await open(['login', ''])).map((row) => row.value)).toEqual([
+      'node',
+      'login',
+      '(empty)',
+    ]);
+    view?.unmount();
+    expect(await open([])).toEqual([{ label: 'Program', value: 'node' }]);
+  });
+});

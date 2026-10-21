@@ -12,7 +12,7 @@
  *
  * A kind is one activity: searching the web, creating artifacts, updating an
  * artifact, saving or removing memories, using one named tool, a failed step,
- * a step that was not run. Counts read "twice" and "3 times" for repeats of
+ * a step that was denied or declined. Counts read "twice" and "3 times" for repeats of
  * one action, and "2 artifacts" where each made something new.
  */
 
@@ -21,7 +21,15 @@ export interface WorkStep {
   /** The tool's label, for example "Service Desk lookup". */
   label: string;
   /** `stopped`: still running when the reply ended, so it never finished. */
-  state: 'running' | 'awaiting-approval' | 'approved' | 'done' | 'error' | 'denied' | 'stopped';
+  state:
+    | 'running'
+    | 'awaiting-approval'
+    | 'approved'
+    | 'done'
+    | 'error'
+    | 'declined'
+    | 'denied'
+    | 'stopped';
   /** What the step acted on, when known (the artifact an update revised). */
   target?: string | null;
   /** The search made before the reply, not a tool call (v0.11). */
@@ -32,32 +40,34 @@ const times = (count: number) => (count === 1 ? '' : count === 2 ? ' twice' : ` 
 const counted = (count: number, one: string, many: string) =>
   count === 1 ? one : `${count} ${many}`;
 
+const NAMED_TOOLS = new Set([
+  'web_search',
+  'create_artifact',
+  'update_artifact',
+  'remember',
+  'forget',
+  'ask_agent',
+  'list_agents',
+]);
+
+/** The activity a step counts as. */
+function kindOf(step: WorkStep): string {
+  // A failed search says so, whether made before the reply or by the model
+  // as a tool call: "a step failed" hid what failed (#143).
+  if (step.state === 'error')
+    return step.presearch || step.toolId === 'web_search' ? 'search_failed' : 'failed';
+  if (step.state === 'awaiting-approval') return 'awaiting';
+  if (step.state === 'denied') return 'denied';
+  if (step.state === 'declined') return 'declined';
+  if (step.state === 'stopped') return 'stopped';
+  return NAMED_TOOLS.has(step.toolId) ? step.toolId : `tool:${step.label}`;
+}
+
 /** "searched the web twice": one phrase per kind of step, in the order first seen. */
 function activityPhrases(steps: readonly WorkStep[]): string[] {
   const kinds = new Map<string, WorkStep[]>();
   for (const step of steps) {
-    // A failed search says so, whether made before the reply or by the model
-    // as a tool call: "a step failed" hid what failed (#143).
-    const kind =
-      step.state === 'error' && (step.presearch || step.toolId === 'web_search')
-        ? 'search_failed'
-        : step.state === 'error'
-          ? 'failed'
-          : step.state === 'awaiting-approval'
-            ? 'awaiting'
-            : step.state === 'denied'
-              ? 'denied'
-              : step.state === 'stopped'
-                ? 'stopped'
-                : step.toolId === 'web_search' ||
-                    step.toolId === 'create_artifact' ||
-                    step.toolId === 'update_artifact' ||
-                    step.toolId === 'remember' ||
-                    step.toolId === 'forget' ||
-                    step.toolId === 'ask_agent' ||
-                    step.toolId === 'list_agents'
-                  ? step.toolId
-                  : `tool:${step.label}`;
+    const kind = kindOf(step);
     kinds.set(kind, [...(kinds.get(kind) ?? []), step]);
   }
   return [...kinds].map(([kind, group]) => {
@@ -72,7 +82,9 @@ function activityPhrases(steps: readonly WorkStep[]): string[] {
           ? 'waiting for your approval'
           : `${count} steps waiting for your approval`;
       case 'denied':
-        return count === 1 ? 'a step was not run' : `${count} steps were not run`;
+        return count === 1 ? 'denied' : `${count} steps denied`;
+      case 'declined':
+        return count === 1 ? 'declined' : `${count} steps declined`;
       case 'stopped':
         // Not "created an artifact": a call stopped mid-way made nothing.
         return count === 1 ? 'a step was stopped' : `${count} steps were stopped`;
