@@ -1,7 +1,7 @@
 import type { RequestListener } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
-import { AgentDoc, type Conversation, createRegistry, type Extension, Harness, type HarnessSettings, type ModelRef, type Storage, type ToolRegistration } from "@earendil-works/pi-durable";
+import { AgentDoc, type Conversation, type ConversationId, createRegistry, type Extension, Harness, type HarnessSettings, type ModelRef, type Storage, type ToolRegistration } from "@earendil-works/pi-durable";
 import { ActivityReporter, ToolAudit } from "./audit.ts";
 import { Approvals, parseApprovalPolicy } from "./approvals.ts";
 import { redactArguments } from "./redact.ts";
@@ -38,6 +38,7 @@ import type { ChatAttachment } from "./view.ts";
 import { ModelChoices } from "./model-choices.ts";
 import { personExtension, TodoDoc } from "./person.ts";
 import { parseSkillSources, skillsExtension } from "./skills.ts";
+import { ARTIFACT_DOCUMENT_BYTES, ArtifactError, ArtifactsDoc, artifactExtension, updateArtifact, validateArtifactWrite } from "./artifacts.ts";
 import { parseWebTools, webExtension } from "./web.ts";
 import { createWorkspaceEnv, parseKnowledgeFolders, parseSandboxEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
 
@@ -175,6 +176,8 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		const remove = (current?.remove ?? []).map((n) => byName.get(n)).filter((t): t is ToolRegistration => t !== undefined);
 		await conversation.configure({ modelTools: { add, ...(remove.length ? { remove } : {}) } }, ctx);
 	};
+	// Artifacts need no gateway: their content stays in this runtime's SQLite.
+	const artifactsEnabled = config.modelEnv.PERSON_TOOLS === "on";
 	// Working with the person (PERSON_TOOLS=on): ask_person, notify_person, todo.
 	const person =
 		config.modelEnv.PERSON_TOOLS === "on" && config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
@@ -223,6 +226,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		...(memory ? [memory] : []),
 		...(knowledge ? [knowledge] : []),
 		...(person ? [person] : []),
+		...(artifactsEnabled ? [artifactExtension()] : []),
 		...(calling
 			? [
 					agentCallsExtension({
@@ -251,7 +255,10 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	// Made with each conversation: the definition's documents. The checklist isn't: the todo tool makes it when first
 	// written, so a conversation lists it (and the app shows it) only once there is one.
 	const documents = definition.documents ?? [];
-	const exposed = exposedDocuments(withPerson);
+	const withArtifacts = artifactsEnabled && !(withPerson.documents ?? []).some((d) => d.definition.kind === ArtifactsDoc.definition.kind)
+		? { ...withPerson, documents: [...(withPerson.documents ?? []), ArtifactsDoc], expose: [...(withPerson.expose ?? []), { document: ArtifactsDoc, maxBytes: ARTIFACT_DOCUMENT_BYTES }] }
+		: withPerson;
+	const exposed = exposedDocuments(withArtifacts);
 
 	const personWaits = new Set([...PLATFORM_PERSON_WAIT_KINDS, ...(definition.waitsForPerson ?? [])]);
 
@@ -467,6 +474,27 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		} : undefined,
 		afterMessage: status ? (threadId, submissionId) => status.watch(threadId, submissionId) : undefined,
 		documents: exposed,
+		artifacts: artifactsEnabled ? {
+			read: async (conversationId, id) => (await harness.snapshot(ArtifactsDoc, conversationId, ctx))?.artifacts.find((a) => a.id === id),
+			edit: async (conversationId, id, input) => {
+				const write = validateArtifactWrite({ ...(input && typeof input === "object" ? input : {}), id });
+				if (write.expectedRevision === undefined) throw new ArtifactError(400, "invalid_revision", "expectedRevision is required.");
+				return harness.commit(async (tx) => {
+					const doc = await tx.doc(ArtifactsDoc, conversationId);
+					const result = updateArtifact(doc, write, id, Date.now());
+					doc.artifacts = result.document.artifacts;
+					return result.artifact;
+				}, ctx);
+			},
+			...(workspaceEnv && workspaceTools.includes("write") ? { save: async (conversationId: ConversationId, id: string, path: string, expectedRevision: number) => {
+				if (!path || path.length > 500 || path.startsWith("/") || path.includes("\\") || path.includes("\0") || path.split("/").some((p) => p === ".." || p === "." || !p)) throw new ArtifactError(400, "invalid_path", "Choose a relative file path inside the workspace.");
+				const artifact = (await harness.snapshot(ArtifactsDoc, conversationId, ctx))?.artifacts.find((a) => a.id === id);
+				if (!artifact) throw new ArtifactError(404, "artifact_not_found", "This conversation has no such artifact.");
+				if (artifact.revision !== expectedRevision) throw new ArtifactError(409, "revision_conflict", "The artifact changed. Read it again before saving to the workspace.");
+				const result = await workspaceEnv.writeFile(path, artifact.content, ctx);
+				if (!result.ok) throw new ArtifactError(400, "workspace_write_failed", result.error.message);
+			} } : {}),
+		} : undefined,
 		waitsForPerson: (kind) => personWaits.has(kind),
 	});
 	// A reply that just ended is recent work: the reaper waits a full idle period after it.

@@ -1659,6 +1659,62 @@ the runtime reads each round's result entries in the generation task's `afterToo
 blocked, refused or never run as well. Reporting is best effort: the runtime retries a failed batch five times (1 s, then
 doubling), keeps at most 2,000 waiting calls, and a call still queued when its process dies is not in the log.
 
+## Artifacts / canvas (v0.4)
+
+`artifact` creates named work products beside a conversation. Content stays in that agent's `state.sqlite`, not
+app.db or host files. Agent export **with conversations**, backups and conversation forks carry it along. A fork
+copies the current document (even when branching at an older message); subsequent edits are independent. Editing
+before the first message creates a fresh, empty conversation, as with other conversation documents.
+
+The exposed document `artifacts` (kind `artifacts`, version 1, conversation scope) is `{artifacts: Artifact[]}`. It
+appears in `ChatView.documents` only after the first successful write. Changes use the existing `document.updated`
+events. `GET …/documents/artifacts` returns the standard `{kind, version, revision, value}` envelope; its exposure
+bound is 750 KiB (below pi-durable's 1 MiB document limit).
+
+```ts
+type ArtifactVersion = {
+  title: string; type: "markdown" | "code" | "html" | "csv"; language?: string;
+  content: string; revision: number; updatedAt: number; // Unix milliseconds
+};
+type Artifact = ArtifactVersion & { id: string; versions: ArtifactVersion[] };
+```
+
+- At most **10 artifacts** per conversation, **64 KiB UTF-8 content per revision**, **3 historical versions** per
+  artifact (oldest first), and **750 KiB of serialized JSON** for the entire document, including history and escaping.
+  Content is never silently truncated. Exceeding a bound refuses the whole write with a clear message.
+- IDs are stable, 1–64 of `[A-Za-z0-9_-]` (generated as `art_<uuid>`). Titles are one line, 1–200 characters; optional
+  language identifiers are 1–40 of `[A-Za-z0-9_+#.-]`.
+- Tool arguments: `{action?: "write" | "read" | "list", id?, title?, type?, language?, content?, expectedRevision?}`.
+  Default `write` requires title/type/content. Omit ID to create a new title; existing titles update the same ID.
+  Updates require `expectedRevision` from a fresh read. `read` requires ID and returns current content; `list` returns
+  references. Writes return only a short acknowledgment and details `{id, reference: "artifacts/<id>", title,
+  revision}`, never a second full copy of the content. The model's prompt lists current references/revisions, so it
+  knows when a person edited an artifact; `read` sees those edits.
+
+All routes below are scoped to `/api/agents/{a}/threads/{t}/artifacts/{id}` and use the existing agent/thread checks.
+The Go API relays only these fixed paths to that agent's runtime; JSON bodies retain the 256 KiB API limit.
+
+| Route suffix | Answer |
+|---|---|
+| `GET` | `Artifact`, including current content and retained versions. `404 artifact_not_found` if absent in this conversation. |
+| `GET /history` | `ArtifactVersion[]`, oldest first, excluding current. |
+| `PUT` | Body `{title, type, language?, content, expectedRevision}`. Atomic edit through `harness.commit`; returns `Artifact`. `409 revision_conflict` leaves the document unchanged; clients must keep the draft. `400 invalid_revision` when missing. |
+| `POST /workspace` | Body `{path, expectedRevision}`. Requires the agent's **write** tool (`403 no_write_tool` otherwise). Writes current content with the same guarded ExecutionEnv as workspace tools. Only relative workspace paths; traversal, absolute paths and escaping symlinks are refused. Replaces the chosen file; never executes it. Returns `{path}`. |
+| `GET /download` | Current content as an attachment (`application/octet-stream`, `nosniff`), filename `<id>.md`, `.html`, `.csv` or `.txt` for code. No upload is involved. |
+| `POST /download` | Desktop SaveDialog, then writes the same content to the selected location. Returns `{path}` or `{cancelled: true}`. `501 not_supported` in a browser; use GET instead. No caller-supplied host path. |
+
+Validation errors include `400 invalid_artifact`, `invalid_artifact_id`, `invalid_revision`, `invalid_path`;
+`422 artifact_too_large`, `artifact_limit`, `artifacts_too_large`. Unknown threads remain `404 thread_not_found`.
+
+The canvas shares the conversation documents' single side panel/drawer (not a competing activity panel). Markdown
+uses the safe chat renderer with raw HTML disabled; code is highlighted, CSV cells are literal text (not formulas).
+HTML is reduced to passive formatting tags and inline styles: links/URL attributes, handlers, forms, frames,
+SVG, scripts, base tags and meta refresh are removed. The preview iframe has an **empty sandbox**, no script,
+same-origin, navigation or download permissions, and a first-in-head CSP `default-src 'none'` with inline style as
+its only allowance. External styles, images, fonts, fetches and all other network resources are blocked; no iframe
+link goes through the host's external-link opener. These restrictions apply to previews; downloaded files contain
+the original source, which should be reviewed before opening elsewhere. See [Using the canvas](artifacts.md).
+
 ## Not yet (later phases)
 
 Signing, notarizing and bundling Node into the app (Phase 8).

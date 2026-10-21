@@ -8,6 +8,7 @@ import type { ThreadStore } from "./threads.ts";
 import { DELTA_VERSION, DeltaStream } from "./delta.ts";
 import { EXPOSED_KIND } from "./define.ts";
 import { afterCursor, type FactCandidate, lastCursor, validCursor } from "./memory-extract.ts";
+import { ARTIFACT_ID, ArtifactError, type Artifact } from "./artifacts.ts";
 import { CONTRACT_VERSION, PI_DURABLE_VERSION } from "./version.ts";
 import {
 	AUTHOR_KINDS,
@@ -61,6 +62,12 @@ export type RuntimeOptions = {
 	afterMessage?: (threadId: string, submissionId: number) => void;
 	/** The conversation documents apps may read (none by default). */
 	documents?: ExposedDocuments;
+	/** Bound by the agent to its conversation-scoped SQLite document; absent: no artifact API. */
+	artifacts?: {
+		read: (conversationId: ConversationId, id: string) => Promise<Artifact | undefined>;
+		edit: (conversationId: ConversationId, id: string, input: unknown) => Promise<Artifact>;
+		save?: (conversationId: ConversationId, id: string, path: string, expectedRevision: number) => Promise<void>;
+	};
 	/**
 	 * Whether a task of this kind stands for a wait on a person's answer (an approval, a question): such a task, and the
 	 * work only waiting on it, keeps the agent awake neither as a busy thread nor as background work. Default: none.
@@ -316,6 +323,26 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			await approvals?.reconcile(threadId).catch(() => {});
 			return json(response, 202, { ok: true });
 		}
+		if (action === "artifacts" && options.artifacts && parts.length >= 4 && parts.length <= 5) {
+			const id = parts[3]!;
+			if (!ARTIFACT_ID.test(id)) return fail(response, 400, "invalid_artifact_id", "Invalid artifact ID");
+			const conversation = await threads.get(threadId);
+			if (!conversation) return fail(response, 404, "thread_not_found", "Thread not found");
+			touch();
+			if (method === "GET" && (parts.length === 4 || parts[4] === "history")) {
+				const artifact = await options.artifacts.read(conversation.id, id);
+				if (!artifact) return fail(response, 404, "artifact_not_found", "This conversation has no such artifact");
+				return json(response, 200, parts[4] === "history" ? artifact.versions : artifact);
+			}
+			if (method === "PUT" && parts.length === 4) return json(response, 200, await options.artifacts.edit(conversation.id, id, await readJson(request)));
+			if (method === "POST" && parts[4] === "workspace") {
+				if (!options.artifacts.save) return fail(response, 403, "no_write_tool", "This agent has no workspace write capability");
+				const body = await readJson(request) as { path?: unknown; expectedRevision?: unknown };
+				if (!body || typeof body !== "object" || typeof body.path !== "string" || !Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number) < 1) return fail(response, 400, "invalid_request", "path and a positive expectedRevision are required");
+				await options.artifacts.save(conversation.id, id, body.path, body.expectedRevision as number);
+				return json(response, 200, { path: body.path });
+			}
+		}
 		if (method === "GET" && action === "documents" && parts[3] !== undefined && parts.length === 4) {
 			touch();
 			return readDocument(threadId, parts[3], response);
@@ -499,9 +526,9 @@ export function createRuntimeServer(options: RuntimeOptions): {
 
 	const handler: RequestListener = (request, response) => {
 		route(request, response).catch((error: unknown) => {
-			const status = error instanceof RequestError ? error.status : 500;
+			const status = error instanceof RequestError || error instanceof ArtifactError ? error.status : 500;
 			if (status === 500) console.error("[runtime] request failed", error);
-			if (!response.headersSent) fail(response, status, status === 500 ? "internal" : "invalid_request", status === 500 ? "Internal error" : (error as Error).message);
+			if (!response.headersSent) fail(response, status, error instanceof ArtifactError ? error.code : status === 500 ? "internal" : "invalid_request", status === 500 ? "Internal error" : (error as Error).message);
 			else response.end();
 		});
 	};
@@ -647,13 +674,14 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 		response.writeHead(204).end();
 		return;
 	}
-	response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ data: body }));
+	// Serialization can throw; let the handler send a JSON error before committing success headers.
+	const text = JSON.stringify({ data: body });
+	response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(text);
 }
 
 function fail(response: ServerResponse, status: number, code: string, message: string): void {
-	response
-		.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" })
-		.end(JSON.stringify({ error: { code, message } }));
+	const text = JSON.stringify({ error: { code, message } });
+	response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(text);
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
