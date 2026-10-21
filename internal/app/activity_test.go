@@ -102,7 +102,7 @@ func TestTheActivityLogRecordsMessagesToolCallsAndApprovals(t *testing.T) {
 		ran.field("approval.status") != "approved" || ran.AgentName != "Worker" || ran.Actor != "Worker" || ran.DurationMs == nil {
 		t.Fatalf("the approved command: %+v %s", ran, ran.Detail)
 	}
-	if denied.Title != "bash" || denied.Outcome != "denied" || denied.field("approval.status") != "denied" || !strings.Contains(denied.field("error").(string), "not today") || denied.DurationMs != nil {
+	if denied.Title != "bash" || denied.Outcome != "denied" || denied.field("approval.status") != "denied" || denied.field("approval.reason") != "not today" || !strings.Contains(denied.field("error").(string), "not today") || denied.DurationMs != nil {
 		t.Fatalf("the denied command: %+v %s", denied, denied.Detail)
 	}
 	if wrote.Title != "write" || wrote.Outcome != "ok" || wrote.field("approval") != nil {

@@ -1076,7 +1076,7 @@ interface ActivityEntry {
 
 | Kind | Recorded when | `actor` | `outcome` | `detail` |
 |---|---|---|---|---|
-| `tool` | a tool call ended, reported by the agent's runtime | the agent | `ok`; `error` (it failed, or never ran: unavailable, invalid arguments, interrupted); `denied` (a rule, or a person, refused it); `declined` (it asked, and nobody decided: the request timed out or was cancelled) | `{callId, arguments, error?, approval?: {status: approved \| denied \| timed_out \| cancelled, by?, source?: builtin \| rule \| profile \| tools \| judge \| author, waitedMs?}}`. `error` is what the model was told when the call failed or was refused. `durationMs` is how long the tool ran, and absent when it never ran; the time waiting for a decision is `approval.waitedMs`. |
+| `tool` | a tool call ended, reported by the agent's runtime | the agent | `ok`; `error` (it failed, or never ran: unavailable, invalid arguments, interrupted); `denied` (a rule, or a person, refused it); `declined` (it asked, and nobody decided: the request timed out or was cancelled) | `{callId, arguments, error?, approval?: {status: approved \| denied \| timed_out \| cancelled, by?, source?: builtin \| rule \| profile \| tools \| judge \| author, waitedMs?, reason?}}`. `error` is what the model was told when the call failed or was refused. `durationMs` is how long the tool ran, and absent when it never ran; the time waiting for a decision is `approval.waitedMs`. |
 | `message` | the person sent a message (the API accepted it) | the person | `ok` | `{preview, chars, attachments?, model?}`: `preview` is the first 120 characters on one line, anything that looks like a credential removed; `chars` the message's length. Messages from a schedule or another agent are recorded as `schedule` and `ask`. |
 | `schedule` | a schedule's run ended (its reply finished, or it failed to start) | `Schedule: <name>` | `ok`, `error` | `{scheduleId, runId, error?}`; `at` is when it fired, `durationMs` how long the run took; `threadId` is the run's conversation |
 | `ask` | an agent's ask to another ended | the asking agent | `ok`, `error` | `{askId, targetAgentId, targetAgent, targetThread, preview, error?}`; the entry is the asking agent's, in its conversation (`threadId`); `targetThread` is the conversation that answered |
@@ -1115,7 +1115,7 @@ request).
     outcome: "ok" | "error" | "denied" | "declined",
     durationMs?: number,
     endedAt: number,        // Unix ms
-    approval?: { status, by?, source?, waitedMs? },
+    approval?: { status, by?, source?, waitedMs?, reason? },
     error?: string          // at most 300 characters
 }] }
 // answer

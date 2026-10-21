@@ -520,6 +520,8 @@ type ToolApproval struct {
 	Source string `json:"source,omitempty"`
 	// WaitedMs: from the request to the decision.
 	WaitedMs *int64 `json:"waitedMs,omitempty"`
+	// Reason: what the person said when they decided.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ToolItem is one tool call as a runtime reports it when it ends (POST /activity).
@@ -574,6 +576,9 @@ func (s *Store) RecordTools(agentID string, items []ToolItem) int {
 			}
 			if a.WaitedMs != nil && *a.WaitedMs >= 0 {
 				ap["waitedMs"] = *a.WaitedMs
+			}
+			if a.Reason != "" {
+				ap["reason"] = clip(agents.RedactText(oneLine(a.Reason)), 200)
 			}
 			detail["approval"] = ap
 		}

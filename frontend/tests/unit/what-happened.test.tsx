@@ -114,6 +114,7 @@ const messages: ChatMessage[] = [
           requestedAt: T0 + 4000,
           decidedAt: T0 + 16_000,
           decidedBy: { kind: 'user', name: 'Ann' },
+          reason: 'not today',
         },
       },
     ],
@@ -146,7 +147,7 @@ const log: ActivityEntry[] = [
       callId: 'c2',
       arguments: { path: 'notes.md' },
       error: 'Tool call blocked: denied by Ann',
-      approval: { status: 'denied', by: 'Ann', waitedMs: 12_000 },
+      approval: { status: 'denied', by: 'Ann', waitedMs: 12_000, reason: 'not today' },
     },
   }),
   logged({
@@ -189,7 +190,7 @@ describe('the timeline of a conversation', () => {
     expect(ran!.note).toBeUndefined();
     expect(refused).toMatchObject({ at: T0 + 4000, outcome: 'denied' });
     expect(refused!.durationMs).toBeUndefined();
-    expect(refused!.note).toBe('Denied by Ann after 12 s · Tool call blocked: denied by Ann');
+    expect(refused!.note).toBe('Denied by Ann after 12 s: not today');
     expect(reply).toMatchObject({ at: T0 + 17_000, line: 'I left the notes as they were.' });
     expect(ask).toMatchObject({
       outcome: 'ok',
@@ -205,7 +206,7 @@ describe('the timeline of a conversation', () => {
     const steps = buildTimeline(messages, []);
     expect(steps.map((step) => step.outcome)).toEqual([undefined, 'ok', 'denied', undefined]);
     expect(steps[1]).toMatchObject({ durationMs: 2500 });
-    expect(steps[2]!.note).toBe('Denied by Ann after 12 s');
+    expect(steps[2]!.note).toBe('Denied by Ann after 12 s: not today');
 
     const waiting = buildTimeline(
       [

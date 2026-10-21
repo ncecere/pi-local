@@ -135,15 +135,21 @@ export function entryProblem(entry: ActivityEntry): string {
 export function approvalNote(detail: Record<string, unknown> | undefined): string {
   const approval = detail?.approval;
   if (typeof approval !== 'object' || approval === null) return '';
-  const { status, by, waitedMs } = approval as { status?: string; by?: string; waitedMs?: number };
+  const { status, by, waitedMs, reason } = approval as {
+    status?: string;
+    by?: string;
+    waitedMs?: number;
+    reason?: string;
+  };
   const who = by ? ` by ${by}` : '';
   const after =
     typeof waitedMs === 'number' && waitedMs >= 1000 ? ` after ${formatDuration(waitedMs)}` : '';
+  const why = reason ? `: ${clip(reason, 120)}` : '';
   switch (status) {
     case 'approved':
       return `Approved${who}${after}`;
     case 'denied':
-      return `Denied${who}${after}`;
+      return `Denied${who}${after}${why}`;
     case 'timed_out':
       return `Nobody decided${after}`;
     case 'cancelled':

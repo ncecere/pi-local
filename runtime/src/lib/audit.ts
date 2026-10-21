@@ -35,7 +35,7 @@ export type ToolActivity = {
 	durationMs?: number;
 	/** When it ended (Unix ms). */
 	endedAt: number;
-	approval?: { status: ApprovalRecord["status"]; by?: string; source?: string; waitedMs?: number };
+	approval?: { status: ApprovalRecord["status"]; by?: string; source?: string; waitedMs?: number; reason?: string };
 	/** What the model was told when the call failed or was refused (short). */
 	error?: string;
 };
@@ -195,8 +195,8 @@ export class ToolAudit {
 		if (message?.role !== "toolResult") return undefined;
 		const call = calls.get(message.toolCallId);
 		const approval = this.sources.approvalFor(conversationId, message.toolCallId);
-		const diagnostics = ((entry.data as { diagnostics?: { code?: string }[] } | undefined)?.diagnostics ?? []).map((d) => d.code);
-		const blocked = diagnostics.includes("blocked");
+		const diagnostics = (entry.data as { diagnostics?: { severity?: string; code?: string; message?: string }[] } | undefined)?.diagnostics ?? [];
+		const blocked = diagnostics.some((d) => d.code === "blocked");
 		const outcome: ToolOutcome = blocked
 			? approval !== undefined && (approval.status === "timed_out" || approval.status === "cancelled")
 				? "declined"
@@ -204,10 +204,12 @@ export class ToolAudit {
 			: message.isError
 				? "error"
 				: "ok";
-		const text = message.content
-			.map((part) => (part.type === "text" ? part.text : ""))
-			.join(" ")
-			.replace(/<harness>|<\/harness>/g, " ")
+		// What went wrong: the harness's own error diagnostics ("Tool call blocked: denied by Bo"), else what the tool said.
+		const said = diagnostics
+			.filter((d) => d.severity === "error" && typeof d.message === "string")
+			.map((d) => d.message)
+			.join(" ");
+		const text = (said !== "" ? said : message.content.map((part) => (part.type === "text" ? part.text : "")).join(" ").replace(/<harness>|<\/harness>/g, " "))
 			.replace(/\s+/g, " ")
 			.trim();
 		const item: ToolActivity = {
@@ -227,6 +229,7 @@ export class ToolAudit {
 				status: approval.status,
 				...(approval.decidedBy === undefined ? {} : { by: approval.decidedBy.name }),
 				...(approval.source === undefined ? {} : { source: approval.source }),
+				...(approval.reason === undefined ? {} : { reason: approval.reason }),
 				...(approval.decidedAt === undefined ? {} : { waitedMs: Math.max(0, approval.decidedAt - approval.requestedAt) }),
 			};
 		}

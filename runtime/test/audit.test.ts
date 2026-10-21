@@ -155,8 +155,8 @@ describe("tool calls in the audit log", () => {
 
 		const calls = await gw.calls(3);
 		const by = (id: string) => calls.find((c) => c.callId === id)!;
-		expect(by("c1")).toMatchObject({ outcome: "denied", threadId: "t1", approval: { status: "denied", by: "Bo", source: "rule" } });
-		expect(by("c1").error).toContain("denied by Bo: Not today");
+		expect(by("c1")).toMatchObject({ outcome: "denied", threadId: "t1", approval: { status: "denied", by: "Bo", source: "rule", reason: "Not today" } });
+		expect(by("c1").error).toBe("Tool call blocked: denied by Bo: Not today");
 		expect(by("c1").approval!.waitedMs).toBeGreaterThanOrEqual(0);
 		expect(by("c2")).toMatchObject({ outcome: "declined", threadId: "t2", approval: { status: "timed_out" } });
 		expect(by("c3")).toMatchObject({ outcome: "denied", threadId: "t3" });

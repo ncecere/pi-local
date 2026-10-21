@@ -48,7 +48,9 @@ function approvalFromView(call: ChatToolCall): string {
     approval.decidedAt !== undefined
       ? Math.max(0, approval.decidedAt - approval.requestedAt)
       : undefined;
-  return approvalNote({ approval: { status: approval.status, by, waitedMs: waited } });
+  return approvalNote({
+    approval: { status: approval.status, by, waitedMs: waited, reason: approval.reason },
+  });
 }
 
 /** The steps of a conversation, oldest first. `hasEarlier`: the view holds only its latest messages. */
@@ -109,8 +111,9 @@ export function buildTimeline(
             : undefined;
         const durationMs = entry?.durationMs ?? (entry ? undefined : spanned);
         const note = (entry ? approvalNote(entry.detail) : '') || approvalFromView(call);
+        // A call that asked says how it was decided (and why); what it was told is only added where that says less.
         const problem =
-          outcome === 'error' || outcome === 'denied' ? text(entry?.detail?.error) : '';
+          (outcome === 'error' || outcome === 'denied') && !note ? text(entry?.detail?.error) : '';
         add({
           id: `call:${call.id}:${message.id}`,
           at: call.startedAt ?? (entry ? entry.at - (entry.durationMs ?? 0) : (message.at ?? 0)),
