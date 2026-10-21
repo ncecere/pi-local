@@ -25,6 +25,7 @@ import (
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/mcp"
+	"github.com/ncecere/pi-local/internal/memory"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/search"
@@ -65,6 +66,9 @@ type API struct {
 	Desktop   Desktop
 	Updater   *update.Updater
 	Templates *templates.Store
+	// Memory: what agents know about the person, and their own notes; MemoryDefaults fills the About me card.
+	Memory         *memory.Store
+	MemoryDefaults func() memory.Basics
 	// Web: the search service's settings (and a test search).
 	Web *web.Service
 	// Elicitations: MCP servers' questions to the person.
@@ -129,6 +133,7 @@ func (a *API) Handler() http.Handler {
 	a.toolRoutes(m)
 	a.mcpRoutes(m)
 	a.templateRoutes(m)
+	a.memoryRoutes(m)
 	a.alwaysRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
@@ -366,6 +371,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"piDurableVersion": nullIfEmpty(ag.PiDurableVersion),
 		"workspace":        map[string]any{"tools": nonNil(ag.Config.Workspace.Tools), "folder": ag.Config.Workspace.Folder, "dir": ag.WorkspaceDir()},
 		"web":              ag.Config.Web,
+		"memory":           map[string]any{"off": ag.Config.Memory.Off, "share": nonNil(ag.Config.Memory.Share)},
 		"approvals":        map[string]any{"tools": nonNil(ag.Config.Approvals.Tools), "timeoutSeconds": ag.Config.Approvals.Timeout()},
 		"pendingApprovals": a.pendingApprovals(ag.ID),
 		"mcp":              mcpChoices(ag.Config.MCP),
@@ -470,6 +476,7 @@ type agentInput struct {
 	MCP          *[]agents.MCPChoice    `json:"mcp"`
 	Schedules    *agents.AgentSchedules `json:"schedules"`
 	Web          *agents.WebTools       `json:"web"`
+	Memory       *agents.MemorySettings `json:"memory"`
 }
 
 func (in agentInput) apply(c *agents.Config) error {
@@ -499,6 +506,9 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.Web != nil {
 		c.Web = *in.Web
+	}
+	if in.Memory != nil {
+		c.Memory = *in.Memory
 	}
 	if in.MCP != nil {
 		c.MCP = *in.MCP

@@ -70,6 +70,25 @@ type OAuth interface {
 	SaveOAuthState(slug string, state json.RawMessage) error
 }
 
+// Memory is an agent's memory tools and the section it sees each turn.
+type Memory interface {
+	Context(ctx context.Context, agentID string) (aboutYou, notes string, err error)
+	Remember(ctx context.Context, agentID string, in RememberInput) (map[string]any, error)
+	Recall(ctx context.Context, agentID, query string, limit int) (map[string]any, error)
+	Forget(ctx context.Context, agentID, id string, present bool) error
+}
+
+// RememberInput is the remember tool's call, with what the runtime knows about the run (present: the person started
+// it; a schedule or another agent didn't).
+type RememberInput struct {
+	About    string `json:"about"` // you | myself
+	Text     string `json:"text"`
+	Category string `json:"category"`
+	Source   string `json:"source"` // person | inferred | outside
+	Present  bool   `json:"present"`
+	ThreadID string `json:"threadId"`
+}
+
 // Web is web search and page reading, for agents allowed each tool.
 type Web interface {
 	Allowed(agentID, tool string) bool
@@ -88,6 +107,8 @@ type Handler struct {
 	Schedules *schedules.Store
 	// Web: search and page reading for agents (nil: not offered).
 	Web Web
+	// Memory: what an agent knows about the person and itself (nil: not offered).
+	Memory Memory
 	// Elicitations: MCP servers' questions to the person, relayed by the runtime (nil: not offered).
 	Elicitations *elicitations.Store
 	// AppKey authenticates the app's own MCP probe, for /mcp/oauth only.
@@ -212,6 +233,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveSchedules(w, r, agentID)
 	case h.OAuth != nil && strings.HasPrefix(r.URL.Path, "/mcp/oauth/"):
 		h.serveOAuth(w, r, agentID)
+	case h.Memory != nil && strings.HasPrefix(r.URL.Path, "/memory/"):
+		h.serveMemory(w, r, agentID)
 	case h.Web != nil && r.Method == http.MethodPost && (r.URL.Path == "/web/search" || r.URL.Path == "/web/fetch"):
 		h.serveWeb(w, r, agentID)
 	case h.Elicitations != nil && (r.URL.Path == "/mcp/elicitations" || strings.HasPrefix(r.URL.Path, "/mcp/elicitations/")):
@@ -284,6 +307,68 @@ func (h *Handler) serveAsks(w http.ResponseWriter, r *http.Request, caller strin
 		}
 	default:
 		fail(w, http.StatusNotFound, "not_found", "not offered")
+	}
+}
+
+// serveMemory: GET /memory/context → {aboutYou, notes}; POST /memory/remember, /memory/recall, /memory/forget.
+func (h *Handler) serveMemory(w http.ResponseWriter, r *http.Request, agentID string) {
+	failWith := func(err error) {
+		var me interface{ HTTPStatus() (int, string, string) }
+		if errors.As(err, &me) {
+			status, code, msg := me.HTTPStatus()
+			fail(w, status, code, msg)
+			return
+		}
+		fail(w, http.StatusInternalServerError, "internal", err.Error())
+	}
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/memory/context":
+		about, notes, err := h.Memory.Context(r.Context(), agentID)
+		if err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, map[string]string{"aboutYou": about, "notes": notes})
+	case r.Method == http.MethodPost && r.URL.Path == "/memory/remember":
+		var in RememberInput
+		if !decode(w, r, &in) {
+			return
+		}
+		res, err := h.Memory.Remember(r.Context(), agentID, in)
+		if err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, res)
+	case r.Method == http.MethodPost && r.URL.Path == "/memory/recall":
+		var in struct {
+			Query string `json:"query"`
+			Limit int    `json:"limit"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		res, err := h.Memory.Recall(r.Context(), agentID, in.Query, in.Limit)
+		if err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, res)
+	case r.Method == http.MethodPost && r.URL.Path == "/memory/forget":
+		var in struct {
+			ID      string `json:"id"`
+			Present bool   `json:"present"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if err := h.Memory.Forget(r.Context(), agentID, in.ID, in.Present); err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, map[string]bool{"ok": true})
+	default:
+		fail(w, http.StatusNotFound, "not_found", "no such route")
 	}
 }
 

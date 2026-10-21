@@ -24,6 +24,7 @@ import { createRuntimeServer } from "./server.ts";
 import { AgentOwnedElsewhereError, openSqliteAgentStorage } from "./storage/sqlite.ts";
 import { gatewayCall, gatewayPost, ThreadStatusReporter } from "./thread-status.ts";
 import { ThreadStore } from "./threads.ts";
+import { memoryExtension } from "./memory.ts";
 import { parseWebTools, webExtension } from "./web.ts";
 import { createWorkspaceEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
 
@@ -115,6 +116,15 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const workspaceTools = parseWorkspaceTools(config.modelEnv.WORKSPACE_TOOLS);
 	if (workspaceTools.length > 0 && !workspaceDir) throw new AgentDefinitionError("WORKSPACE_TOOLS needs WORKSPACE_DIR");
 	const workspace = workspaceExtension(workspaceTools);
+	// Memory (MEMORY=on): the person's profile and the agent's own notes every turn, and the memory tools.
+	const memory =
+		config.modelEnv.MEMORY === "on" && config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
+			? memoryExtension({
+					gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL,
+					key: config.modelEnv.PLATFORM_KEY,
+					threadOf: async (conversationId) => threadStore?.threadOf(conversationId),
+				})
+			: undefined;
 	// Web search and reading (WEB_TOOLS), through the gateway.
 	const web =
 		config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
@@ -126,6 +136,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		...resolveExtensions(definition, context),
 		...(workspace ? [workspace] : []),
 		...(web ? [web] : []),
+		...(memory ? [memory] : []),
 		...(calling
 			? [
 					agentCallsExtension({

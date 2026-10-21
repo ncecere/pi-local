@@ -5,6 +5,7 @@ import { AssistantEntry, type ConversationHandle, type ConversationId, type Entr
 
 type ConversationHandleSubmit = ConversationHandle["submit"];
 import { configure, defineExtension, defineTask, defineTool, type Extension, type ModelRef, type ToolExecutionApi, Type } from "./facade.ts";
+import { MEMORY_EXTENSION } from "./memory.ts";
 import { SCHEDULE_EXTENSION } from "./schedule.ts";
 
 export type SubagentOptions = {
@@ -68,7 +69,7 @@ export function defineSubagent(options: SubagentOptions): Extension {
 	// { add, remove } edit would start from the host default instead and could drop what the caller had.
 	const selectionOf = async (api: ToolExecutionApi, context: Context) => {
 		const parent = (await api.agent(context)).extensions.filter(
-			(extension) => extension.name !== own && extension.name !== SCHEDULE_EXTENSION,
+			(extension) => extension.name !== own && extension.name !== SCHEDULE_EXTENSION && extension.name !== MEMORY_EXTENSION,
 		);
 		return options.extensions ? options.extensions(parent) : parent;
 	};

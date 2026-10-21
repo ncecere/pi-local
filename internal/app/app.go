@@ -34,6 +34,7 @@ import (
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
 	"github.com/ncecere/pi-local/internal/mcp"
+	"github.com/ncecere/pi-local/internal/memory"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/search"
@@ -78,6 +79,8 @@ type App struct {
 	Schedules *schedules.Store
 	Search    *search.Store
 	Updater   *update.Updater
+	// Memory is what agents know about the person, and each agent's own notes.
+	Memory *memory.Store
 	// Templates are the New agent gallery's starting points, built-in and the person's.
 	Templates *templates.Store
 	// Web is web search and page reading for agents.
@@ -197,6 +200,8 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	a.MCP.OnChange = a.mcpChanged
 	a.MCP.OnLogin = func(st mcp.LoginStatus) { a.Hub.Publish("mcp-login", st) }
 	a.Web = web.New(db, cfg.Secrets)
+	a.Memory = memory.New(db)
+	a.Memory.OnChange = func(agentID string) { a.Hub.Publish("memory", map[string]string{"agentId": agentID}) }
 	if a.Templates, err = templates.New(filepath.Join(cfg.DataDir, "templates")); err != nil {
 		return nil, fmt.Errorf("templates: %w", err)
 	}
@@ -276,14 +281,14 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
@@ -420,6 +425,10 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	}
 	if len(webTools) > 0 {
 		env["WEB_TOOLS"] = strings.Join(webTools, ",")
+	}
+	// Memory: the "about you" and "your notes" sections and the remember / recall / forget tools (on unless off).
+	if !ag.Config.Memory.Off {
+		env["MEMORY"] = "on"
 	}
 	// Its own schedules (the schedule tools), when its agent.yaml allows them.
 	if ag.Config.Schedules.AgentMade {

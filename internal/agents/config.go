@@ -90,6 +90,8 @@ type Config struct {
 	Schedules AgentSchedules `yaml:"schedules,omitempty"`
 	// Web: searching the web (through the search service in Settings) and reading pages.
 	Web WebTools `yaml:"web,omitempty"`
+	// Memory: what it knows about the person (the basics, and the categories it shares) and its own notes.
+	Memory MemorySettings `yaml:"memory,omitempty"`
 }
 
 // WebTools are an agent's web tools (read-only: they change nothing).
@@ -97,6 +99,15 @@ type WebTools struct {
 	Search bool `yaml:"search,omitempty" json:"search"`
 	Fetch  bool `yaml:"fetch,omitempty" json:"fetch"`
 }
+
+// MemorySettings: memory is on unless Off; the agent sees the person's basics and preferences, plus Share's categories.
+type MemorySettings struct {
+	Off   bool     `yaml:"off,omitempty" json:"off"`
+	Share []string `yaml:"share,omitempty" json:"share"`
+}
+
+// ShareableMemory are the categories of the person's memory an agent sees only when shared with it.
+var ShareableMemory = []string{"people", "projects", "work", "health", "family", "finances", "home", "interests"}
 
 // AgentSchedules is what an agent may do with schedules.
 type AgentSchedules struct {
@@ -207,6 +218,16 @@ func (c *Config) Validate() error {
 		}
 	}
 	c.Workspace.Tools = tools
+	var share []string
+	for _, cat := range c.Memory.Share {
+		if !slices.Contains(ShareableMemory, cat) {
+			return invalid("invalid_memory", "Unknown memory category %q: use %s.", cat, strings.Join(ShareableMemory, ", "))
+		}
+		if !slices.Contains(share, cat) {
+			share = append(share, cat)
+		}
+	}
+	c.Memory.Share = share
 	if err := c.Workspace.checkFolder(); err != nil {
 		return err
 	}
