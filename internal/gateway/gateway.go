@@ -110,6 +110,8 @@ type Handler struct {
 	Web Web
 	// Memory: what an agent knows about the person and itself (nil: not offered).
 	Memory Memory
+	// Notify sends the person a notification from an agent (notify_person); false when rate-limited.
+	Notify func(agentID, threadID, title, message string) bool
 	// PickTools: fast-judgment tool preselection (nil: not offered; it answers none when off).
 	PickTools func(ctx context.Context, message string, tools []judge.Tool, limit int) ([]string, error)
 	// Elicitations: MCP servers' questions to the person, relayed by the runtime (nil: not offered).
@@ -236,6 +238,41 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveSchedules(w, r, agentID)
 	case h.OAuth != nil && strings.HasPrefix(r.URL.Path, "/mcp/oauth/"):
 		h.serveOAuth(w, r, agentID)
+	case h.Elicitations != nil && r.Method == http.MethodPost && r.URL.Path == "/person/ask":
+		// ask_person: the agent's own question, as a card like an MCP server's (answered through /mcp/elicitations).
+		var body struct {
+			Message  string          `json:"message"`
+			Schema   json.RawMessage `json:"requestedSchema"`
+			ThreadID string          `json:"threadId"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		e, err := h.Elicitations.Create(agentID, elicitations.Request{Server: "agent", Tool: "ask_person", ThreadID: body.ThreadID, Message: body.Message, Schema: body.Schema})
+		if err != nil {
+			var ee *elicitations.Error
+			if errors.As(err, &ee) {
+				fail(w, ee.Status, ee.Code, ee.Message)
+				return
+			}
+			fail(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		ok(w, map[string]any{"id": e.ID, "expiresAt": e.ExpiresAt})
+	case h.Notify != nil && r.Method == http.MethodPost && r.URL.Path == "/person/notify":
+		var body struct {
+			Title    string `json:"title"`
+			Message  string `json:"message"`
+			ThreadID string `json:"threadId"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if !h.Notify(agentID, body.ThreadID, body.Title, body.Message) {
+			fail(w, http.StatusTooManyRequests, "rate_limited", "Not sent: you notified the person very recently. Put it in your reply instead.")
+			return
+		}
+		ok(w, map[string]bool{"sent": true})
 	case h.PickTools != nil && r.Method == http.MethodPost && r.URL.Path == "/judge/tools":
 		var body struct {
 			Message string       `json:"message"`

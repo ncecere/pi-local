@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -65,21 +66,23 @@ type Config struct {
 
 // App is a running Pi Local.
 type App struct {
-	cfg       Config
-	Agents    *agents.Store
-	Threads   *threads.Index
-	Hub       *events.Hub
-	Sup       *supervisor.Supervisor
-	API       *api.API
-	Catalog   *models.Catalog
-	Usage     *usage.Store
-	Teams     *teams.Store
-	Asks      *asks.Broker
-	Approvals *approvals.Store
-	MCP       *mcp.Catalog
-	Schedules *schedules.Store
-	Search    *search.Store
-	Updater   *update.Updater
+	cfg        Config
+	Agents     *agents.Store
+	Threads    *threads.Index
+	Hub        *events.Hub
+	Sup        *supervisor.Supervisor
+	API        *api.API
+	Catalog    *models.Catalog
+	Usage      *usage.Store
+	Teams      *teams.Store
+	Asks       *asks.Broker
+	Approvals  *approvals.Store
+	MCP        *mcp.Catalog
+	Schedules  *schedules.Store
+	Search     *search.Store
+	Updater    *update.Updater
+	notifyMu   sync.Mutex
+	lastNotify map[string]time.Time
 	// Judge is the optional fast-judgments layer.
 	Judge *judge.Service
 	// Memory is what agents know about the person, and each agent's own notes.
@@ -205,6 +208,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	a.Web = web.New(db, cfg.Secrets)
 	a.Memory = memory.New(db)
 	a.Judge = judge.New(db, cfg.Secrets)
+	a.lastNotify = map[string]time.Time{}
 	a.Memory.OnChange = func(agentID string) { a.Hub.Publish("memory", map[string]string{"agentId": agentID}) }
 	if a.Templates, err = templates.New(filepath.Join(cfg.DataDir, "templates")); err != nil {
 		return nil, fmt.Errorf("templates: %w", err)
@@ -285,7 +289,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, Notify: a.notifyPerson}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
@@ -430,6 +434,8 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	if len(webTools) > 0 {
 		env["WEB_TOOLS"] = strings.Join(webTools, ",")
 	}
+	// ask_person, notify_person and todo.
+	env["PERSON_TOOLS"] = "on"
 	// Memory: the "about you" and "your notes" sections and the remember / recall / forget tools (on unless off).
 	if !ag.Config.Memory.Off {
 		env["MEMORY"] = "on"
@@ -801,4 +807,28 @@ func (g webGateway) Search(ctx context.Context, query string, count int) ([]web.
 
 func (g webGateway) Fetch(ctx context.Context, url string, offset, maxChars int) (*web.Page, error) {
 	return g.a.Web.Fetch(ctx, url, offset, maxChars)
+}
+
+// notifyPerson relays an agent's notify_person (at most one every 20 seconds per agent): the desktop app shows it as
+// a system notification, a browser as a toast.
+func (a *App) notifyPerson(agentID, threadID, title, message string) bool {
+	a.notifyMu.Lock()
+	if last, ok := a.lastNotify[agentID]; ok && time.Since(last) < 20*time.Second {
+		a.notifyMu.Unlock()
+		return false
+	}
+	a.lastNotify[agentID] = time.Now()
+	a.notifyMu.Unlock()
+	clip := func(s string, n int) string {
+		s = strings.Join(strings.Fields(s), " ")
+		if r := []rune(s); len(r) > n {
+			return string(r[:n-1]) + "…"
+		}
+		return s
+	}
+	a.Hub.Publish("notification", map[string]string{
+		"agentId": agentID, "agentName": a.Agents.NameOf(agentID), "threadId": threadID,
+		"title": clip(title, 80), "message": clip(message, 300),
+	})
+	return true
 }

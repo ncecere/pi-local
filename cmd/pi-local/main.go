@@ -174,6 +174,7 @@ func main() {
 			}
 		}()
 		go core.Updater.AutoChecks(ctx, 30*time.Second, 12*time.Hour)
+		note.registerActions(core, show)
 		watch(core, window, note, func(working, needsYou int) {
 			workingItem.SetLabel(plural(working, "agent working", "agents working", "Nothing working"))
 			needsItem.SetLabel(plural(needsYou, "request needs you", "requests need you", "Nothing needs you"))

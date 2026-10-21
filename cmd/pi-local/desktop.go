@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
@@ -27,6 +29,64 @@ func bundled() bool {
 // notifier shows a notification: natively from a bundled app, through osascript otherwise (development).
 type notifier struct {
 	native *notifications.NotificationService
+}
+
+// Notification categories with buttons (macOS shows them on the notification).
+const (
+	approvalCategory = "pi-approval"
+	confirmCategory  = "pi-confirm"
+)
+
+// registerActions sets up the notification buttons, and what a click does: approve or deny a tool call, answer a
+// yes/no question, or open the app (a click on the notification itself).
+func (n *notifier) registerActions(core *app.App, show func()) {
+	if n.native == nil {
+		return
+	}
+	n.native.RegisterNotificationCategory(notifications.NotificationCategory{ID: approvalCategory, Actions: []notifications.NotificationAction{
+		{ID: "approve", Title: "Approve"}, {ID: "deny", Title: "Deny", Destructive: true},
+	}})
+	n.native.RegisterNotificationCategory(notifications.NotificationCategory{ID: confirmCategory, Actions: []notifications.NotificationAction{
+		{ID: "yes", Title: "Yes, go ahead"}, {ID: "decline", Title: "Decline", Destructive: true},
+	}})
+	n.native.OnNotificationResponse(func(result notifications.NotificationResult) {
+		if result.Error != nil {
+			return
+		}
+		r := result.Response
+		data := r.UserInfo
+		str := func(k string) string { s, _ := data[k].(string); return s }
+		ctx := context.Background()
+		switch r.ActionIdentifier {
+		case "approve", "deny":
+			if _, err := core.Approvals.Decide(ctx, str("agentId"), str("id"), r.ActionIdentifier == "approve", ""); err != nil {
+				slog.Warn("answering an approval from a notification", "err", err)
+				show()
+			}
+		case "yes", "decline":
+			action, content := "decline", map[string]any(nil)
+			if r.ActionIdentifier == "yes" {
+				action, content = "accept", map[string]any{str("field"): true}
+			}
+			if _, err := core.Elicitations.Answer(str("id"), action, content); err != nil {
+				slog.Warn("answering a question from a notification", "err", err)
+				show()
+			}
+		default:
+			show()
+		}
+	})
+}
+
+// sendWithButtons shows a notification with a category's buttons (natively; osascript has no buttons).
+func (n *notifier) sendWithButtons(id, title, body, category string, data map[string]any) {
+	if n.native != nil {
+		opts := notifications.NotificationOptions{ID: id, Title: title, Body: body, CategoryID: category, Data: data}
+		if err := n.native.SendNotificationWithActions(opts); err == nil {
+			return
+		}
+	}
+	n.send(id, title, body)
 }
 
 func (n *notifier) send(id, title, body string) {
@@ -80,21 +140,44 @@ func watch(core *app.App, window *application.WebviewWindow, n *notifier, status
 			case "approval":
 				var e struct {
 					Approval struct {
-						ID, AgentName, Tool, Status string
+						ID, AgentID, AgentName, Tool, Status string
 					} `json:"approval"`
 				}
 				if json.Unmarshal(ev.Data, &e) == nil && e.Approval.Status == "pending" && away {
-					n.send("approval-"+e.Approval.ID, e.Approval.AgentName+" asks first", "It wants to run "+e.Approval.Tool+". Open Pi Local to approve or deny it.")
+					n.sendWithButtons("approval-"+e.Approval.ID, e.Approval.AgentName+" asks first", "It wants to run "+e.Approval.Tool+".", approvalCategory,
+						map[string]any{"id": e.Approval.ID, "agentId": e.Approval.AgentID})
 				}
 				refresh()
 			case "elicitation":
 				var e struct {
-					ID, AgentName, ServerName, State string
+					ID, AgentName, ServerName, State, Message string
+					Schema                                    struct {
+						Properties map[string]struct{ Type string }
+					} `json:"requestedSchema"`
 				}
 				if json.Unmarshal(ev.Data, &e) == nil && e.State == "pending" && away {
-					n.send("elicitation-"+e.ID, e.ServerName+" asks you", e.AgentName+" is waiting for your answer. Open Pi Local to see the question.")
+					// A lone yes/no field (a confirmation) can be answered on the notification; anything else opens the app.
+					confirmField := ""
+					if len(e.Schema.Properties) == 1 {
+						for field, p := range e.Schema.Properties {
+							if p.Type == "boolean" {
+								confirmField = field
+							}
+						}
+					}
+					if confirmField != "" {
+						n.sendWithButtons("elicitation-"+e.ID, e.ServerName+" asks you", e.Message, confirmCategory, map[string]any{"id": e.ID, "field": confirmField})
+					} else {
+						n.send("elicitation-"+e.ID, e.ServerName+" asks you", e.AgentName+" is waiting for your answer. Open Pi Local to see the question.")
+					}
 				}
 				refresh()
+			case "notification":
+				// An agent's notify_person: a system notification when the window isn't in front (the UI toasts).
+				var e struct{ AgentID, AgentName, ThreadID, Title, Message string }
+				if json.Unmarshal(ev.Data, &e) == nil && away {
+					n.send("notify-"+e.AgentID+"-"+strconv.FormatInt(time.Now().UnixMilli(), 10), e.AgentName+": "+e.Title, e.Message)
+				}
 			case "schedule_run":
 				var e struct {
 					Name string `json:"name"`

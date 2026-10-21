@@ -179,6 +179,9 @@ func (s *Store) Create(agentID string, req Request) (Elicitation, error) {
 	}
 	rawSchema, _ := json.Marshal(sc)
 	now := time.Now()
+	if req.Server == "agent" && req.ServerName == "" {
+		req.ServerName = s.AgentName(agentID) // the agent's own question (ask_person)
+	}
 	e := Elicitation{
 		ID: newID(), AgentID: agentID, AgentName: s.AgentName(agentID), Server: req.Server, ServerName: req.ServerName,
 		Message: msg, Schema: rawSchema, State: "pending", CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(s.ttl).UnixMilli(),

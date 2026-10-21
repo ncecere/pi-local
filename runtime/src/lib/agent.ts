@@ -25,6 +25,7 @@ import { AgentOwnedElsewhereError, openSqliteAgentStorage } from "./storage/sqli
 import { gatewayCall, gatewayPost, ThreadStatusReporter } from "./thread-status.ts";
 import { ThreadStore } from "./threads.ts";
 import { memoryExtension } from "./memory.ts";
+import { personExtension, TodoDoc } from "./person.ts";
 import { parseWebTools, webExtension } from "./web.ts";
 import { createWorkspaceEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
 
@@ -150,6 +151,15 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		const remove = (current?.remove ?? []).map((n) => byName.get(n)).filter((t): t is ToolRegistration => t !== undefined);
 		await conversation.configure({ modelTools: { add, ...(remove.length ? { remove } : {}) } }, ctx);
 	};
+	// Working with the person (PERSON_TOOLS=on): ask_person, notify_person, todo.
+	const person =
+		config.modelEnv.PERSON_TOOLS === "on" && config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
+			? personExtension({
+					gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL,
+					key: config.modelEnv.PLATFORM_KEY,
+					threadOf: async (conversationId) => threadStore?.threadOf(conversationId),
+				})
+			: undefined;
 	// Memory (MEMORY=on): the person's profile and the agent's own notes every turn, and the memory tools.
 	const memory =
 		config.modelEnv.MEMORY === "on" && config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
@@ -171,6 +181,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		...(workspace ? [workspace] : []),
 		...(web ? [web] : []),
 		...(memory ? [memory] : []),
+		...(person ? [person] : []),
 		...(calling
 			? [
 					agentCallsExtension({
@@ -192,8 +203,12 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 			: []),
 	];
 	const settings = resolveSettings(definition, context);
-	const documents = definition.documents ?? [];
-	const exposed = exposedDocuments(definition);
+	// The person tools' checklist is every agent's (when they're on), exposed beside the conversation.
+	const withPerson = person && !(definition.documents ?? []).some((d) => d.definition.kind === TodoDoc.definition.kind)
+		? { ...definition, documents: [...(definition.documents ?? []), TodoDoc], expose: [...(definition.expose ?? []), TodoDoc] }
+		: definition;
+	const documents = withPerson.documents ?? [];
+	const exposed = exposedDocuments(withPerson);
 
 	const personWaits = new Set([...PLATFORM_PERSON_WAIT_KINDS, ...(definition.waitsForPerson ?? [])]);
 
