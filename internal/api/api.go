@@ -24,6 +24,7 @@ import (
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
+	"github.com/ncecere/pi-local/internal/judge"
 	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/memory"
 	"github.com/ncecere/pi-local/internal/models"
@@ -67,7 +68,9 @@ type API struct {
 	Updater   *update.Updater
 	Templates *templates.Store
 	// Memory: what agents know about the person, and their own notes; MemoryDefaults fills the About me card.
-	Memory         *memory.Store
+	Memory *memory.Store
+	// Judge: optional fast judgments (agent routing, tool preselection).
+	Judge          *judge.Service
 	MemoryDefaults func() memory.Basics
 	// Web: the search service's settings (and a test search).
 	Web *web.Service
@@ -134,6 +137,7 @@ func (a *API) Handler() http.Handler {
 	a.mcpRoutes(m)
 	a.templateRoutes(m)
 	a.memoryRoutes(m)
+	a.judgeRoutes(m)
 	a.alwaysRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
@@ -270,7 +274,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{
 		"user":      map[string]string{"id": "local", "name": localName(), "email": "", "role": "admin"},
 		"csrfToken": "",
-		"features":  map[string]bool{"messageSearch": a.Search != nil, "folderDialog": a.FolderDialog != nil, "updates": a.Updater != nil && a.Updater.Status().CanInstall},
+		"features":  map[string]bool{"agentRouting": a.Judge != nil && a.Judge.On("agentRouting"), "messageSearch": a.Search != nil, "folderDialog": a.FolderDialog != nil, "updates": a.Updater != nil && a.Updater.Status().CanInstall},
 		"platform":  map[string]any{"mode": "local", "account": nil},
 	})
 }

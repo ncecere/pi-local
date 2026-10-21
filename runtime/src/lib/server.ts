@@ -42,7 +42,7 @@ export type RuntimeOptions = {
 	token: string;
 	info: { agentId: string; name: string; model: string };
 	/** Prepares a thread before a message (its MCP servers), after it exists. */
-	beforeMessage?: (threadId: string, conversation: Conversation) => Promise<void>;
+	beforeMessage?: (threadId: string, conversation: Conversation, text: string) => Promise<void>;
 	/** A message was submitted to the thread (its reply's end is reported to the platform). */
 	afterMessage?: (threadId: string, submissionId: number) => void;
 	/** The conversation documents apps may read (none by default). */
@@ -215,7 +215,7 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			// The platform (the only caller) says who sent the message, and whether the model is told (shared threads).
 			const author = parseAuthor(body.author);
 			const conversation = await threads.ensure(threadId, text);
-			await options.beforeMessage?.(threadId, conversation);
+			await options.beforeMessage?.(threadId, conversation, text);
 			const data: UserEntryData = { text, at: Date.now(), ...(author === undefined ? {} : { author }), ...(requestId === undefined ? {} : { requestId }) };
 			const content = author !== undefined && body.announceAuthor === true ? `${speakerLine(author)}\n${text}` : text;
 			const submission = await conversation.submit(

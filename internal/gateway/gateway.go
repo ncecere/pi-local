@@ -17,6 +17,7 @@ import (
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/elicitations"
+	"github.com/ncecere/pi-local/internal/judge"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
@@ -109,6 +110,8 @@ type Handler struct {
 	Web Web
 	// Memory: what an agent knows about the person and itself (nil: not offered).
 	Memory Memory
+	// PickTools: fast-judgment tool preselection (nil: not offered; it answers none when off).
+	PickTools func(ctx context.Context, message string, tools []judge.Tool, limit int) ([]string, error)
 	// Elicitations: MCP servers' questions to the person, relayed by the runtime (nil: not offered).
 	Elicitations *elicitations.Store
 	// AppKey authenticates the app's own MCP probe, for /mcp/oauth only.
@@ -233,6 +236,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveSchedules(w, r, agentID)
 	case h.OAuth != nil && strings.HasPrefix(r.URL.Path, "/mcp/oauth/"):
 		h.serveOAuth(w, r, agentID)
+	case h.PickTools != nil && r.Method == http.MethodPost && r.URL.Path == "/judge/tools":
+		var body struct {
+			Message string       `json:"message"`
+			Tools   []judge.Tool `json:"tools"`
+			Limit   int          `json:"limit"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if body.Limit <= 0 || body.Limit > 12 {
+			body.Limit = 8
+		}
+		names, err := h.PickTools(r.Context(), body.Message, body.Tools, body.Limit)
+		if err != nil {
+			// A failed judgment is no judgment: the model still has tool_search.
+			names = []string{}
+		}
+		ok(w, map[string]any{"tools": names})
 	case h.Memory != nil && strings.HasPrefix(r.URL.Path, "/memory/"):
 		h.serveMemory(w, r, agentID)
 	case h.Web != nil && r.Method == http.MethodPost && (r.URL.Path == "/web/search" || r.URL.Path == "/web/fetch"):

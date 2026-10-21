@@ -1,7 +1,7 @@
 import type { RequestListener } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
-import { AgentDoc, type Conversation, createRegistry, type Extension, Harness, type HarnessSettings, type ModelRef, type Storage } from "@earendil-works/pi-durable";
+import { AgentDoc, type Conversation, createRegistry, type Extension, Harness, type HarnessSettings, type ModelRef, type Storage, type ToolRegistration } from "@earendil-works/pi-durable";
 import { Approvals, parseApprovalPolicy } from "./approvals.ts";
 import { assistantAgent } from "./assistant.ts";
 import { PLATFORM_PERSON_WAIT_KINDS } from "./background.ts";
@@ -116,6 +116,40 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const workspaceTools = parseWorkspaceTools(config.modelEnv.WORKSPACE_TOOLS);
 	if (workspaceTools.length > 0 && !workspaceDir) throw new AgentDefinitionError("WORKSPACE_TOOLS needs WORKSPACE_DIR");
 	const workspace = workspaceExtension(workspaceTools);
+	// Tool preselection (fast judgments): with deferred tools (many MCP tools), the app may judge which ones a message
+	// needs, and they are loaded before the model runs, as tool_search would (small models often skip tool_search).
+	const pickTools =
+		config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
+			? async (message: string, tools: { name: string; description: string }[]): Promise<string[]> => {
+					const res = await fetch(`${config.modelEnv.PLATFORM_GATEWAY_URL!.replace(/\/$/, "")}/judge/tools`, {
+						method: "POST",
+						headers: { authorization: `Bearer ${config.modelEnv.PLATFORM_KEY}`, "content-type": "application/json" },
+						body: JSON.stringify({ message, tools, limit: 8 }),
+						signal: AbortSignal.timeout(6_000),
+					});
+					if (!res.ok) return [];
+					return ((await res.json()) as { data?: { tools?: string[] } }).data?.tools ?? [];
+				}
+			: undefined;
+	const preselect = async (conversation: Conversation, selection: readonly Extension[], message: string) => {
+		const deferred = selection.flatMap((e) => (e.tools ?? []) as ToolRegistration[]).filter((t) => (t as { deferred?: boolean }).deferred === true);
+		if (deferred.length === 0 || !pickTools) return;
+		const stored = (await harness.snapshot(AgentDoc, conversation.id, ctx)) as { modelTools?: string[] | { add?: string[]; remove?: string[] } } | undefined;
+		const current = stored?.modelTools;
+		if (Array.isArray(current)) return; // an exact selection: not ours to change
+		const loaded = new Set(current?.add ?? []);
+		const candidates = deferred.filter((t) => !loaded.has(t.name));
+		if (candidates.length === 0) return;
+		const picked = await pickTools(
+			message,
+			candidates.map((t) => ({ name: t.name, description: (t.description ?? "").slice(0, 400) })),
+		);
+		if (picked.length === 0) return;
+		const byName = new Map(deferred.map((t) => [t.name, t]));
+		const add = [...loaded, ...picked].map((n) => byName.get(n)).filter((t): t is ToolRegistration => t !== undefined);
+		const remove = (current?.remove ?? []).map((n) => byName.get(n)).filter((t): t is ToolRegistration => t !== undefined);
+		await conversation.configure({ modelTools: { add, ...(remove.length ? { remove } : {}) } }, ctx);
+	};
 	// Memory (MEMORY=on): the person's profile and the agent's own notes every turn, and the memory tools.
 	const memory =
 		config.modelEnv.MEMORY === "on" && config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
@@ -265,12 +299,14 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		threads,
 		token: config.token,
 		info: { agentId: config.agentId, name: config.name, model: `${model.provider}/${model.modelId}` },
-		beforeMessage: async (threadId, conversation) => {
+		beforeMessage: async (threadId, conversation, text) => {
 			const servers = await mcp.forThread(threadId).catch((error: unknown) => {
 				logError(`MCP servers of thread ${threadId}:`, (error as Error).message);
 				return mcp.extensions;
 			});
-			await align(conversation, [...extensions, ...servers, ...asking]);
+			const selection = [...extensions, ...servers, ...asking];
+			await align(conversation, selection);
+			if (pickTools) await preselect(conversation, selection, text).catch((error: unknown) => logError("tool preselection:", (error as Error).message));
 		},
 		approvals,
 		afterMessage: status ? (threadId, submissionId) => status.watch(threadId, submissionId) : undefined,
