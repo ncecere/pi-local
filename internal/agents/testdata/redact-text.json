@@ -1,0 +1,167 @@
+[
+ {
+  "name": "authorization header",
+  "text": "Authorization: Bearer abcdefghij12345",
+  "want": "Authorization: <R>"
+ },
+ {
+  "name": "basic header in a curl",
+  "text": "curl -H \"Authorization: Basic dXNlcjpwYXNz\" https://x",
+  "want": "curl -H \"Authorization: <R>\" https://x"
+ },
+ {
+  "name": "env assignment with a prefixed key",
+  "text": "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz stuff",
+  "want": "OPENAI_API_KEY=<R> stuff"
+ },
+ {
+  "name": "json credential keys",
+  "text": "{\"apiKey\":\"hunter2\",\"name\":\"x\"}",
+  "want": "{\"apiKey\":\"<R>\",\"name\":\"x\"}"
+ },
+ {
+  "name": "password line",
+  "text": "password: s3cret!",
+  "want": "password: <R>"
+ },
+ {
+  "name": "url password and query key",
+  "text": "GET https://user:pa55w0rd@host.example/path?api_key=abc123&x=1 200",
+  "want": "GET https://user:<R>@host.example/path?api_key=<R>&x=1 200"
+ },
+ {
+  "name": "a github token in a sentence",
+  "text": "token ghp_abcdefghijklmnopqrstuvwxyz0123456789 end",
+  "want": "token <R> end"
+ },
+ {
+  "name": "a github token before a period",
+  "text": "the token is ghp_abcdefghijklmnopqrstuvwxyz0123456789.",
+  "want": "the token is <R>."
+ },
+ {
+  "name": "a github token in a url query",
+  "text": "https://example.com/cb?state=1&code=ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+  "want": "https://example.com/cb?state=1&code=<R>"
+ },
+ {
+  "name": "a private key block",
+  "text": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\nafter",
+  "want": "<R>\nafter"
+ },
+ {
+  "name": "a random-looking string",
+  "text": "random aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fG3hJ5kL7 here",
+  "want": "random <R> here"
+ },
+ {
+  "name": "a jwt",
+  "text": "id eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk done",
+  "want": "id <R> done"
+ },
+ {
+  "name": "an aws key id",
+  "text": "key AKIAABCDEFGHIJKLMNOP in the file",
+  "want": "key <R> in the file"
+ },
+ {
+  "name": "a slack token in json",
+  "text": "{\"text\":\"xox\u0062-123456789012-abcdefghijklmnop\"}",
+  "want": "{\"text\":\"<R>\"}"
+ },
+ {
+  "name": "bearer in prose is left alone",
+  "text": "A basic understanding of bearer authentication helps.",
+  "want": "A basic understanding of bearer authentication helps."
+ },
+ {
+  "name": "a flag under a credential's name",
+  "text": "token: true and password: false, secret=null",
+  "want": "token: true and password: false, secret=null"
+ },
+ {
+  "name": "a placeholder under a credential's name",
+  "text": "api_key=$API_KEY token: <your token> secret=****",
+  "want": "api_key=$API_KEY token: <your token> secret=****"
+ },
+ {
+  "name": "a count under a credential's name",
+  "text": "\"token\": 5, \"password\": \"\"",
+  "want": "\"token\": 5, \"password\": \"\""
+ },
+ {
+  "name": "prose",
+  "text": "the agent woke up and answered in 2.4s",
+  "want": "the agent woke up and answered in 2.4s"
+ },
+ {
+  "name": "a long path with digits",
+  "text": "/Users/Ann1/Library/Application Support/Pi Local/agents/ag_abcdefghijklmnop/workspace/Notes2024",
+  "want": "/Users/Ann1/Library/Application Support/Pi Local/agents/ag_abcdefghijklmnop/workspace/Notes2024"
+ },
+ {
+  "name": "an agent id",
+  "text": "agent ag_abcdefghijklmnop revision 4 started",
+  "want": "agent ag_abcdefghijklmnop revision 4 started"
+ },
+ {
+  "name": "a uuid",
+  "text": "request 123e4567-e89b-12d3-a456-426614174000 ok",
+  "want": "request 123e4567-e89b-12d3-a456-426614174000 ok"
+ },
+ {
+  "name": "a one-case hash",
+  "text": "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 ok",
+  "want": "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 ok"
+ },
+ {
+  "name": "a git sha",
+  "text": "commit 676b1d2e4a5c8f9d0b3a7e6c1f2d4b5a6c7e8f90 on main",
+  "want": "commit 676b1d2e4a5c8f9d0b3a7e6c1f2d4b5a6c7e8f90 on main"
+ },
+ {
+  "name": "an already redacted value",
+  "text": "apiKey: [redacted, 12 characters]",
+  "want": "apiKey: <R>"
+ },
+ {
+  "name": "a pagination token",
+  "text": "pageToken=abc123 nextPageToken=abc123def456",
+  "want": "pageToken=abc123 nextPageToken=abc123def456"
+ },
+ {
+  "name": "a path with a long mixed-case folder",
+  "text": "/Users/ann/Documents/ProjectAlphaBetaGammaDelta2024QuarterlyReport/final.pdf",
+  "want": "/Users/ann/Documents/ProjectAlphaBetaGammaDelta2024QuarterlyReport/final.pdf"
+ },
+ {
+  "name": "a camel-case identifier",
+  "text": "call getUserAccountSettingsByOrganizationId now",
+  "want": "call getUserAccountSettingsByOrganizationId now"
+ },
+ {
+  "name": "a url with a long mixed-case path",
+  "text": "https://example.com/docs/ReleaseNotesForVersionTwoPointFiveBuild1234/index.html",
+  "want": "https://example.com/docs/ReleaseNotesForVersionTwoPointFiveBuild1234/index.html"
+ },
+ {
+  "name": "a cookie header",
+  "text": "Cookie: session=abcdef123456; theme=dark",
+  "want": "Cookie: <R>"
+ },
+ {
+  "name": "secrets in a command",
+  "text": "curl -H 'X-Api-Key: abcdef123456' https://api.example.com/v1/items",
+  "want": "curl -H 'X-Api-Key: <R>' https://api.example.com/v1/items"
+ },
+ {
+  "name": "empty brackets and a shell template under a credential's name",
+  "text": "token=[] key=[$X] secret=[abc123] password=()",
+  "want": "token=[] key=[$X] secret=[abc123] password=()"
+ },
+ {
+  "name": "a hash assigned to a name",
+  "text": "SHA=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 BUILD=aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fG3hJ5kL7 done",
+  "want": "SHA=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 BUILD=<R> done"
+ }
+]

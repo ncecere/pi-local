@@ -1,6 +1,9 @@
 package agents
 
 import (
+	"encoding/json"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -98,5 +101,35 @@ func TestRedactText(t *testing.T) {
 		if got := RedactText(in); got != in {
 			t.Errorf("RedactText(%q) = %q", in, got)
 		}
+	}
+}
+
+// The cases every implementation of the text rules shares (runtime/test/scrub.test.ts reads the same file): what a
+// mark is doesn't matter here, only what is hidden and what is left alone.
+func TestRedactTextSharedCases(t *testing.T) {
+	raw, err := os.ReadFile("testdata/redact-text.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct{ Name, Text, Want string }
+	if err := json.Unmarshal(raw, &cases); err != nil || len(cases) < 20 {
+		t.Fatalf("cases: %v (%d)", err, len(cases))
+	}
+	mark := regexp.MustCompile(`\[redacted[^\]]*\]`)
+	for _, c := range cases {
+		if got := mark.ReplaceAllString(RedactText(c.Text), "<R>"); got != c.Want {
+			t.Errorf("%s: RedactText(%q) = %q, want %q", c.Name, c.Text, got, c.Want)
+		}
+	}
+}
+
+// A credential inside a longer string (a command) is hidden in the approvals view too.
+func TestRedactValueHidesCredentialsInsideStrings(t *testing.T) {
+	out := RedactValue(map[string]any{"command": "curl -H 'Authorization: Bearer abcdefghij12345' https://x.example/a", "cwd": "/tmp/work"}).(map[string]any)
+	if got := out["command"].(string); strings.Contains(got, "abcdefghij12345") || !strings.Contains(got, "https://x.example/a") {
+		t.Errorf("command: %q", got)
+	}
+	if out["cwd"] != "/tmp/work" {
+		t.Errorf("cwd: %v", out["cwd"])
 	}
 }

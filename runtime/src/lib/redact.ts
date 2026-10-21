@@ -5,6 +5,8 @@
  * - A value is redacted when its key clearly names a credential (`isSecretKey`) or when it looks like one
  *   (`isSecretValue`), and reads `[redacted, N characters]` (N: the string's length in characters, or its JSON's for
  *   another value). A value already redacted so is kept.
+ * - A string that holds a credential among other text (a command with a token in it) is redacted in place by
+ *   `redactText`, the same rules the secret scrubbing of tool results uses (scrub.ts), so the two agree.
  * - Strings are cut at 2,000 characters, arrays at 100 items, objects at 100 keys, nesting at 6 levels.
  * - A view whose JSON is still over 16 KiB is replaced by `{"[truncated]": "<the first 2,000 characters>"}`.
  */
@@ -82,7 +84,8 @@ function redact(value: unknown, depth: number): unknown {
 	if (typeof value === "number") return Number.isFinite(value) ? value : null;
 	if (typeof value === "string") {
 		if (isSecretValue(value)) return redactedMark(value);
-		return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING)}…` : value;
+		const text = redactText(value, ARGUMENT_MARKS);
+		return text.length > MAX_STRING ? `${text.slice(0, MAX_STRING)}…` : text;
 	}
 	if (depth >= MAX_DEPTH) return "[…]";
 	if (Array.isArray(value)) {
@@ -101,4 +104,123 @@ function redact(value: unknown, depth: number): unknown {
 		return out;
 	}
 	return null;
+}
+
+// ── Free text ─────────────────────────────────────────────────────────────────────────────────────────────────
+// The same rules applied to what is found in text: a tool's output, a command, a log line. A port of RedactText in
+// internal/agents/redact.go (the two share the cases in internal/agents/testdata/redact-text.json).
+
+/** What a redacted part reads. */
+export type RedactMarks = {
+	/** A credential found: the value's mark. */
+	value(found: string): string;
+	/** A private key block. */
+	pem: string;
+	/** A bearer or basic token after the word. */
+	bearer: string;
+};
+
+/** The approvals view's marks: the length of what was hidden. */
+export const ARGUMENT_MARKS: RedactMarks = { value: redactedMark, pem: "[redacted private key]", bearer: "[redacted]" };
+
+const PEM_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+const HEADER_LINE = /\b(authorization|proxy-authorization|cookie|set-cookie)(["']?[ \t]*[:=][ \t]*["']?)([^\r\n"']+)/gi;
+const BEARER_TEXT = /\b(bearer|basic)[ \t]+[^\s"',;]{8,}/gi;
+// The lookbehind starts a key only at the start of a run of name characters (a long run is then scanned once).
+const ASSIGNMENT = /(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?[ \t]*[:=][ \t]*)("[^"\r\n]*"|'[^'\r\n]*'|\[redacted[^\]\r\n]*\]|[^\s,;&"'\]})]+)/g;
+const URL_USERINFO = /(:\/\/[^/\s:@]+:)([^@\s/]+)(@)/g;
+const TEXT_TOKEN = /[^\s"'`<>()[\]{},;|]+/g;
+const WORD_PIECE = /[^/?&=@#:]+/g;
+const PATH_LIKE = /\/.*\//;
+
+/** Whether a value has a known credential's shape: a token prefix, an Authorization value, a JWT. */
+export function knownTokenShape(v: string): boolean {
+	return SECRET_PREFIX.test(v) || AUTH_VALUE.test(v) || JWT.test(v);
+}
+
+/**
+ * Redacts the credentials in free text: PEM private keys, Authorization and Cookie header lines, bearer tokens,
+ * `name: value` and `name=value` where the name is a credential's (including in URLs and JSON), passwords in URLs, and
+ * any word that looks like a credential (`isSecretValue`). A long path is never mistaken for a random string, and
+ * prose ("basic understanding", `token: true`) is left alone.
+ */
+export function redactText(text: string, marks: RedactMarks): string {
+	if (text === "") return text;
+	let out = text.replace(PEM_BLOCK, marks.pem);
+	out = out.replace(HEADER_LINE, (_m, name: string, sep: string, value: string) => `${name}${sep}${marks.value(value.replace(/[ \t]+$/, ""))}`);
+	out = out.replace(BEARER_TEXT, (m: string) => {
+		const i = m.search(/[ \t]/);
+		return tokenLike(m.slice(i).replace(/^[ \t]+/, "")) ? `${m.slice(0, i)} ${marks.bearer}` : m;
+	});
+	out = redactAssignments(out, marks);
+	out = out.replace(URL_USERINFO, `$1${marks.bearer}$3`);
+	return out.replace(TEXT_TOKEN, (word) => redactWord(word, marks));
+}
+
+function redactAssignments(text: string, marks: RedactMarks): string {
+	ASSIGNMENT.lastIndex = 0;
+	let out = "";
+	let pos = 0;
+	for (;;) {
+		ASSIGNMENT.lastIndex = pos;
+		const m = ASSIGNMENT.exec(text);
+		if (m === null) break;
+		const end = m.index + m[0].length;
+		const valueStart = m.index + m[1]!.length + m[2]!.length;
+		const value = m[3]!;
+		if (!isSecretKey(m[1]!) || REDACTED_MARK_IN_TEXT.test(value.replace(/^["']|["']$/g, "")) || benignValue(value)) {
+			out += text.slice(pos, valueStart);
+			pos = Math.max(valueStart, pos + 1);
+			if (pos > text.length) break;
+			continue;
+		}
+		out += text.slice(pos, valueStart);
+		const quote = value[0];
+		out += value.length >= 2 && (quote === '"' || quote === "'") && value.endsWith(quote) ? `${quote}${marks.value(value.slice(1, -1))}${quote}` : marks.value(value);
+		pos = end;
+	}
+	return out + text.slice(pos);
+}
+
+/** An already redacted value: either mark (`[redacted, N characters]`, `[redacted secret]`, `[redacted]`). */
+const REDACTED_MARK_IN_TEXT = /^\[redacted(?:[^\]\r\n]*)\]$/;
+
+function redactWord(word: string, marks: RedactMarks): string {
+	const lead = word.match(/^[.:]*/)![0];
+	const core = word.slice(lead.length);
+	const body = core.replace(/[.:!?]+$/, "");
+	const trail = core.slice(body.length);
+	if (body === "" || REDACTED_MARK_IN_TEXT.test(body)) return word;
+	const pathLike = PATH_LIKE.test(body);
+	// A word with a separator inside (`NAME=value`, a URL's query) is judged by its parts, not as one random string.
+	const joined = /[?&=@#:]/.test(body.replace(/=+$/, ""));
+	if (knownTokenShape(body) || (!pathLike && !joined && isSecretValue(body))) return lead + marks.value(body) + trail;
+	if (!/[/?&=@#:]/.test(body)) return word;
+	const pieces = body.replace(WORD_PIECE, (piece) => {
+		if (REDACTED_MARK_IN_TEXT.test(piece)) return piece;
+		return knownTokenShape(piece) || (!pathLike && isSecretValue(piece)) ? marks.value(piece) : piece;
+	});
+	return lead + pieces + trail;
+}
+
+/** Whether the word after "Bearer" or "Basic" reads like a credential and not like prose. */
+function tokenLike(v: string): boolean {
+	v = v.replace(/[.:!?]+$/, "");
+	if (v.length < 8) return false;
+	let caps = 0;
+	for (let i = 0; i < v.length; i++) {
+		const c = v[i]!;
+		if ((c >= "0" && c <= "9") || "_+/=.-".includes(c)) return true;
+		if (c >= "A" && c <= "Z" && i > 0) caps++;
+	}
+	return caps >= 2;
+}
+
+/** What a credential's name is often given that is no credential: a flag, a number, empty, a placeholder. */
+function benignValue(raw: string): boolean {
+	const v = raw.replace(/^["']+|["']+$/g, "").trim();
+	if (["", "true", "false", "null", "nil", "none", "undefined", "yes", "no", "on", "off"].includes(v.toLowerCase())) return true;
+	if (v.startsWith("$") || v.startsWith("<") || v.startsWith("{") || v.startsWith("[") || v.startsWith("%") || /^[*x•]+$/.test(v)) return true;
+	if (!/[\p{L}\p{N}]/u.test(v)) return true; // only punctuation: [], (), ---
+	return /^[0-9.]+$/.test(v);
 }

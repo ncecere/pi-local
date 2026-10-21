@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -145,6 +146,8 @@ func redactValue(value any, depth int) any {
 		if IsSecretValue(v) {
 			return RedactedMark(v)
 		}
+		// A credential inside a longer string (a command with a token in it) is redacted too.
+		v = RedactText(v)
 		if r := []rune(v); len(r) > maxRedactString {
 			return string(r[:maxRedactString]) + "…"
 		}
@@ -225,22 +228,89 @@ func RedactText(text string) string {
 		return parts[1] + parts[2] + RedactedMark(strings.TrimRight(parts[3], " \t"))
 	})
 	text = bearerText.ReplaceAllStringFunc(text, func(m string) string {
-		return m[:strings.IndexAny(m, " \t")] + " [redacted]"
+		i := strings.IndexAny(m, " \t")
+		if !tokenLike(strings.TrimLeft(m[i:], " \t")) {
+			return m // prose: "basic understanding"
+		}
+		return m[:i] + " [redacted]"
 	})
 	text = redactAssignments(text)
 	text = urlUserinfo.ReplaceAllString(text, "${1}[redacted]${3}")
-	return textToken.ReplaceAllStringFunc(text, func(word string) string {
-		if redactedMark.MatchString(word) {
-			return word
-		}
-		if pathLikeText.MatchString(word) && !secretPrefix.MatchString(word) && !authValue.MatchString(word) && !jwtValue.MatchString(word) {
-			return word
-		}
-		if IsSecretValue(word) {
-			return RedactedMark(word)
-		}
+	return textToken.ReplaceAllStringFunc(text, redactWord)
+}
+
+// knownTokenShape: a value with a known credential's shape (a token prefix, an Authorization value, a JWT).
+func knownTokenShape(v string) bool {
+	return secretPrefix.MatchString(v) || authValue.MatchString(v) || jwtValue.MatchString(v)
+}
+
+// wordPiece is what lies between the separators of a URL, a query string or a `name=value` word.
+var wordPiece = regexp.MustCompile(`[^/?&=@#:]+`)
+
+// redactWord redacts a word of free text that looks like a credential, or one of its parts (a URL's query value). A
+// path is only redacted for a part with a known credential's shape, so a long path is never mistaken for a random
+// string. Sentence punctuation around a word is left alone.
+func redactWord(word string) string {
+	core := strings.TrimLeft(word, ".:")
+	lead := word[:len(word)-len(core)]
+	trimmed := strings.TrimRight(core, ".:!?")
+	trail := core[len(trimmed):]
+	if trimmed == "" || redactedMark.MatchString(trimmed) {
 		return word
-	})
+	}
+	pathLike := pathLikeText.MatchString(trimmed)
+	// A word with a separator inside (`NAME=value`, a URL's query) is judged by its parts, not as one random string.
+	joined := strings.ContainsAny(strings.TrimRight(trimmed, "="), "?&=@#:")
+	if knownTokenShape(trimmed) || (!pathLike && !joined && IsSecretValue(trimmed)) {
+		return lead + RedactedMark(trimmed) + trail
+	}
+	if !strings.ContainsAny(trimmed, "/?&=@#:") {
+		return word
+	}
+	return lead + wordPiece.ReplaceAllStringFunc(trimmed, func(piece string) string {
+		if redactedMark.MatchString(piece) {
+			return piece
+		}
+		if knownTokenShape(piece) || (!pathLike && IsSecretValue(piece)) {
+			return RedactedMark(piece)
+		}
+		return piece
+	}) + trail
+}
+
+// tokenLike: whether the word after "Bearer" or "Basic" reads like a credential and not like prose: it has a digit or
+// one of _+/=.- inside, or at least two capital letters after its first character (base64).
+func tokenLike(v string) bool {
+	v = strings.TrimRight(v, ".:!?")
+	if len(v) < 8 {
+		return false
+	}
+	caps := 0
+	for i, c := range v {
+		switch {
+		case c >= '0' && c <= '9', c == '_' || c == '+' || c == '/' || c == '=' || c == '.' || c == '-':
+			return true
+		case c >= 'A' && c <= 'Z' && i > 0:
+			caps++
+		}
+	}
+	return caps >= 2
+}
+
+// benignValue: what a credential's name is often given that is no credential: a flag, a number, empty, a placeholder.
+func benignValue(v string) bool {
+	v = strings.TrimSpace(strings.Trim(v, `"'`))
+	switch strings.ToLower(v) {
+	case "", "true", "false", "null", "nil", "none", "undefined", "yes", "no", "on", "off":
+		return true
+	}
+	if strings.HasPrefix(v, "$") || strings.HasPrefix(v, "<") || strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[") || strings.HasPrefix(v, "%") || strings.Trim(v, "*x•") == "" {
+		return true
+	}
+	if !strings.ContainsFunc(v, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		return true // only punctuation: [], (), ---
+	}
+	return strings.Trim(v, "0123456789.") == ""
 }
 
 // redactAssignments redacts the value of every `name: value` and `name=value` whose name is a credential's. A value
@@ -256,7 +326,7 @@ func redactAssignments(text string) string {
 		end := pos + loc[1]
 		key, valueStart := text[pos+loc[2]:pos+loc[3]], pos+loc[6]
 		value := text[valueStart:end]
-		if !IsSecretKey(key) || redactedMark.MatchString(strings.Trim(value, `"'`)) {
+		if !IsSecretKey(key) || redactedMark.MatchString(strings.Trim(value, `"'`)) || benignValue(value) {
 			out.WriteString(text[pos:valueStart])
 			pos = max(valueStart, pos+1)
 			continue
