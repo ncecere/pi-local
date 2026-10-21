@@ -4,6 +4,7 @@ import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import { type Agent, errorMessage } from '~/api/client';
 import { AgentStatus } from '~/components/agent-manager/agent-status';
+import { BudgetPanel } from '~/components/agent-manager/budget-panel';
 import { ModelSelect } from '~/components/agent-manager/model-select';
 import { Fact, Panel, saveAgentChange } from '~/components/agent-manager/panel';
 import { ErrorNotice, FIELD, Field, Optional } from '~/components/models/fields';
@@ -25,6 +26,7 @@ export function OverviewTab({ agent, catalog }: { agent: Agent; catalog: AgentCa
     <div className="flex flex-col gap-6">
       {/* A saved change bumps the revision: the form starts again from what was saved. */}
       <AgentForm key={agent.revision} agent={agent} catalog={catalog} />
+      <BudgetPanel key={`budget-${agent.revision}`} agent={agent} />
       <RuntimePanel agent={agent} />
     </div>
   );

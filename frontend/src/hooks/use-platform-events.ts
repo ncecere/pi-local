@@ -9,6 +9,7 @@ import type {
   AgentThreadEvent,
   Approval,
   ApprovalEvent,
+  BudgetEvent,
   McpEvent,
   McpLoginStatus,
   McpServer,
@@ -24,6 +25,7 @@ import type {
 import { transport } from '~/api/transport';
 import { AGENTS_KEY, applyAgentEvent, threadsKey } from '~/hooks/use-agents';
 import { APPROVALS_KEY } from '~/hooks/use-approvals';
+import { BUDGETS_KEY } from '~/hooks/use-budgets';
 import { applyElicitationData, ELICITATIONS_KEY } from '~/hooks/use-elicitations';
 import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
 import { MCP_LOGINS_KEY, MCP_SERVERS_KEY, putMcpLogin } from '~/hooks/use-mcp';
@@ -36,7 +38,7 @@ import { firstLineOf, isAgentQuestion } from '~/lib/elicitations';
 import { setEventsLive } from '~/lib/events-live';
 import { threadKey } from '~/lib/inbox';
 import { applyMcpEvent } from '~/lib/mcp';
-import { showNotification } from '~/lib/notification-toast';
+import { showBudgetToast, showNotification } from '~/lib/notification-toast';
 import { applyRunToHistory, applyScheduleEvent, applyScheduleRun } from '~/lib/schedules';
 import { applyTeamEvent } from '~/lib/teams';
 
@@ -59,6 +61,8 @@ import { applyTeamEvent } from '~/lib/teams';
  *   toast with a way to it.
  * - `notification`: an agent's `notify_person`: a toast with an Open button to its
  *   conversation, unless that conversation is on screen.
+ * - `budget`: a budget reached 80% or 100% (a toast saying so, with a way to Usage), or was
+ *   changed (level 0, quietly). Budgets and usage are read again either way.
  * - `mcp`: an MCP server added, changed, tested, signed in or out, or deleted.
  *   It updates the catalog (['mcp', 'servers']) in place: an OAuth sign-in's
  *   outcome arrives this way.
@@ -119,6 +123,7 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({ queryKey: SCHEDULES_KEY });
       void queryClient.invalidateQueries({ queryKey: UPDATE_KEY });
       void queryClient.invalidateQueries({ queryKey: YOU_KEY });
+      void queryClient.invalidateQueries({ queryKey: BUDGETS_KEY });
       void queryClient.invalidateQueries({
         predicate: (query) =>
           query.queryKey[0] === 'agents' &&
@@ -230,6 +235,18 @@ export function usePlatformEvents() {
           }),
       }),
     );
+    source.on('budget', (data) => {
+      let event: BudgetEvent;
+      try {
+        event = JSON.parse(data) as BudgetEvent;
+      } catch {
+        return;
+      }
+      // Spending moved, or a budget was changed: budgets and usage are read again.
+      void queryClient.invalidateQueries({ queryKey: BUDGETS_KEY });
+      void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
+      showBudgetToast(event, () => void latest.current.navigate({ to: '/settings/usage' }));
+    });
     source.on('mcp', (data) => {
       let event: McpEvent;
       try {

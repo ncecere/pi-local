@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/approvals"
+	"github.com/ncecere/pi-local/internal/budget"
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/judge"
@@ -60,6 +62,7 @@ type API struct {
 	Hub       *events.Hub
 	Catalog   *models.Catalog
 	Usage     *usage.Store
+	Budget    *budget.Service
 	Teams     *teams.Store
 	Manager   Manager
 	Approvals *approvals.Store
@@ -386,6 +389,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"pendingApprovals": a.pendingApprovals(ag.ID),
 		"mcp":              mcpChoices(ag.Config.MCP),
 		"schedules":        ag.Config.Schedules,
+		"budget":           ag.Config.Budget,
 	}
 }
 
@@ -487,6 +491,8 @@ type agentInput struct {
 	Schedules    *agents.AgentSchedules `json:"schedules"`
 	Web          *agents.WebTools       `json:"web"`
 	Memory       *agents.MemorySettings `json:"memory"`
+	// Budget: {monthlyUsd, onExceed} sets the agent's monthly budget, null removes it, absent leaves it.
+	Budget json.RawMessage `json:"budget"`
 }
 
 func (in agentInput) apply(c *agents.Config) error {
@@ -530,6 +536,19 @@ func (in agentInput) apply(c *agents.Config) error {
 		c.Approvals = *in.Approvals
 		if c.Approvals.TimeoutSeconds == agents.DefaultApprovalTimeout {
 			c.Approvals.TimeoutSeconds = 0 // the default stays implicit in agent.yaml
+		}
+	}
+	if len(in.Budget) > 0 {
+		if string(in.Budget) == "null" {
+			c.Budget = nil
+		} else {
+			var b agents.Budget
+			dec := json.NewDecoder(bytes.NewReader(in.Budget))
+			dec.DisallowUnknownFields()
+			if dec.Decode(&b) != nil {
+				return &agents.InvalidError{Code: "invalid_budget", Message: "A budget is {monthlyUsd, onExceed}."}
+			}
+			c.Budget = &b
 		}
 	}
 	if in.ModelID != nil && *in.ModelID != "" {
@@ -628,6 +647,10 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	if err != nil {
 		agentFailure(w, err)
 		return
+	}
+	if len(in.Budget) > 0 {
+		// Budgets' states are read again.
+		a.Hub.Publish("budget", budget.Event{Status: budget.Status{Scope: "agent", AgentID: ag.ID}})
 	}
 	ok(w, a.AgentJSON(updated))
 }
@@ -789,6 +812,14 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 			names = append(names, cmp.Or(f.Name, filepath.Base(f.Path)))
 		}
 		title = strings.Join(names, ", ")
+	}
+	// An agent over a budget that says stop takes no new messages.
+	if err := a.Budget.Check(r.Context(), ag.ID); err != nil {
+		var over *budget.OverBudgetError
+		if errors.As(err, &over) {
+			writeJSON(w, http.StatusPaymentRequired, map[string]any{"error": map[string]any{"code": "over_budget", "message": over.Message, "details": map[string]any{"budget": over.Status}}})
+			return
+		}
 	}
 	modelID, thinking, good := a.conversationChoice(w, r, ag, t, msg.ModelID, msg.Thinking)
 	if !good {

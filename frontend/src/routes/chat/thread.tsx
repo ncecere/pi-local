@@ -22,6 +22,7 @@ import { NoReplyNote } from '~/components/chat/reply-outcome-note';
 import { Button } from '~/components/ui/button';
 import { FullPageSpinner } from '~/components/ui/spinner';
 import { UnavailableState } from '~/components/ui/unavailable-state';
+import { BudgetBanner } from '~/components/usage/budget-parts';
 import {
   type Connection,
   peekHandover,
@@ -30,9 +31,11 @@ import {
 } from '~/hooks/use-agent-thread';
 import { useAgent, useAgents, useForkThread, useThreadInfo } from '~/hooks/use-agents';
 import { useAttachments } from '~/hooks/use-attachments';
+import { useBudgets } from '~/hooks/use-budgets';
 import { type ChatScrollTarget, useChatScroll } from '~/hooks/use-chat-scroll';
 import { useElicitationsByThread } from '~/hooks/use-elicitations';
 import { useModelChoice } from '~/hooks/use-model-choice';
+import { budgetNotice } from '~/lib/budget';
 import { isPendingMessage } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
 import {
@@ -96,6 +99,9 @@ function ThreadConversation({
   const agentsQuery = useAgents();
   const agent = useAgent(agentId);
   const session = useAgentThread({ agentId, threadId, handover });
+  // The agent's budget (or the app's) nearly used, over, or used up: said above the message box.
+  const budgets = useBudgets();
+  const budgetNote = budgetNotice(agentId, budgets.data);
   const info = useThreadInfo(agentId, threadId);
   // The model and thinking level for this conversation, chosen in the composer. A conversation
   // opened from the new chat page starts with the choice its first message carries.
@@ -479,6 +485,11 @@ function ThreadConversation({
             )}
           </div>
 
+          {budgetNote && (
+            <div className="px-4 pb-2">
+              <BudgetBanner notice={budgetNote} />
+            </div>
+          )}
           <Composer
             autoFocus={(handover?.focus ?? false) || focusComposer}
             value={session.draft}

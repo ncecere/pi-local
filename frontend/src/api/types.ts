@@ -78,6 +78,15 @@ export interface Agent {
    * Absent from an older backend (read as on, sharing nothing more).
    */
   memory?: AgentMemory;
+  /** Its monthly budget; null (or absent from an older backend): none. */
+  budget?: AgentBudget | null;
+}
+
+/** A monthly spending limit (an agent's `budget`, or the app's in Settings → Usage), in US dollars. */
+export interface AgentBudget {
+  monthlyUsd: number;
+  /** "stop": new messages, schedule runs and asks are refused at the limit; "warn": only said. */
+  onExceed: 'stop' | 'warn';
 }
 
 /** An agent's memory settings (its agent.yaml `memory`). */
@@ -585,6 +594,13 @@ export interface Model {
   /** USD per million tokens; null: unpriced. */
   inputPrice: number | null;
   outputPrice: number | null;
+  /** USD per million cached tokens; null: counted at the input price. Absent from an older backend. */
+  cacheReadPrice?: number | null;
+  cacheWritePrice?: number | null;
+  /** Where the prices came from: the app's list prices, or typed by the person; null: unpriced. */
+  priceSource?: 'list' | 'you' | null;
+  /** The app's price list has a price for this model. */
+  hasListPrice?: boolean;
   enabled: boolean;
   /** Agents on this model. */
   usedBy: number;
@@ -766,17 +782,60 @@ export interface UsageTotals {
   unpricedRequests: number;
 }
 
-/** `GET /api/me/usage?days=`. Dates are YYYY-MM-DD, local time. */
+/** `GET /api/me/usage?days=` or `?month=`, optionally `&agent=` and `&model=`. Dates are YYYY-MM-DD, local time. */
 export interface UsageReport {
   from: string;
   to: string;
   days: number;
+  /** "YYYY-MM" for a month report. */
+  month?: string;
   total: UsageTotals;
   /** Deleted agents keep their last name. */
   agents: (UsageTotals & { agentId: string; name: string })[];
   models: (UsageTotals & { modelId: string; name: string })[];
-  /** Every day of the range, zeros included. */
+  /** Every day of the range (a month: the whole month), zeros included. */
   byDay: (UsageTotals & { day: string })[];
+  /** What the filters offer: everything with usage in the period, whatever is filtered. Absent from an older backend. */
+  options?: {
+    agents: { agentId: string; name: string }[];
+    models: { modelId: string; name: string }[];
+  };
+  /** The app's budget, and the filtered agent's, for the month shown. Null when none applies. */
+  budget?: { app: BudgetStatus | null; agent: BudgetStatus | null } | null;
+}
+
+/** One budget and how much of it is used this month (`GET /api/budgets`). */
+export interface BudgetStatus {
+  scope: 'app' | 'agent';
+  agentId?: string;
+  /** The agent's name, or "Pi Local". */
+  name: string;
+  /** "YYYY-MM". */
+  month: string;
+  /** "October". */
+  monthName: string;
+  monthlyUsd: number;
+  onExceed: 'stop' | 'warn';
+  spentUsd: number;
+  /** Requests to unpriced models this month: not in `spentUsd`. */
+  unpricedRequests: number;
+  percent: number;
+  state: 'ok' | 'near' | 'over';
+  /** The budget says stop and is used up: new work is refused. */
+  blocked: boolean;
+}
+
+/** `GET /api/budgets`. */
+export interface BudgetOverview {
+  app: BudgetStatus | null;
+  agents: BudgetStatus[];
+}
+
+/** `GET /api/events` `budget` event: level 80 or 100, or 0 when a budget was changed (read again). */
+export interface BudgetEvent {
+  level: 0 | 80 | 100;
+  message: string;
+  status: Partial<BudgetStatus>;
 }
 
 // ── Always on: schedules, search, the desktop (docs/api.md, Phase 7) ────────────────────────

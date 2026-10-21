@@ -1,6 +1,17 @@
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { UsageTotals } from '~/api/client';
-import { barHeights, cachedOf, costOf, tokensOf, USAGE_RANGES, type UsageRange } from '~/lib/usage';
+import {
+  barHeights,
+  cachedOf,
+  costOf,
+  monthKey,
+  monthLabel,
+  shiftMonth,
+  tokensOf,
+  USAGE_RANGES,
+  type UsageRange,
+} from '~/lib/usage';
 import { cn } from '~/lib/utils';
 
 /** The pieces of Settings → Usage (ported from Pi Agent Interface). */
@@ -173,6 +184,8 @@ export function UsageTable<T extends UsageTotals & { name: string }>({
   rows,
   rowKey,
   detail,
+  plainDetail,
+  onPick,
 }: {
   /** The first column's heading: "Agent", "Model". */
   label: string;
@@ -180,6 +193,10 @@ export function UsageTable<T extends UsageTotals & { name: string }>({
   rowKey: (row: T) => string;
   /** A muted second line under the name (a model's ID, say). */
   detail?: (row: T) => string | undefined;
+  /** The detail is a sentence, not an ID: not set in the code font. */
+  plainDetail?: boolean;
+  /** Makes the name a button that narrows the page to this row. */
+  onPick?: (row: T) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-[var(--border-subtle)]">
@@ -212,9 +229,25 @@ export function UsageTable<T extends UsageTotals & { name: string }>({
             return (
               <tr key={rowKey(row)}>
                 <th scope="row" className="px-4 py-2.5 text-left font-medium">
-                  <span className="block">{row.name}</span>
+                  {onPick ? (
+                    <button
+                      type="button"
+                      onClick={() => onPick(row)}
+                      title={`Show only ${row.name}`}
+                      className="block text-left font-medium underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent-bright)]"
+                    >
+                      {row.name}
+                    </button>
+                  ) : (
+                    <span className="block">{row.name}</span>
+                  )}
                   {extra && (
-                    <span className="block font-mono text-xs font-normal text-[var(--text-muted)]">
+                    <span
+                      className={cn(
+                        'block text-xs font-normal text-[var(--text-muted)]',
+                        !plainDetail && 'font-mono',
+                      )}
+                    >
                       {extra}
                     </span>
                   )}
@@ -239,3 +272,80 @@ export function UsageTable<T extends UsageTotals & { name: string }>({
     </div>
   );
 }
+
+/** What period the Usage page shows: the last days, or one calendar month. */
+export type UsageView = { kind: 'days'; days: UsageRange } | { kind: 'month'; month: string };
+
+/** 7, 30 or 90 days, or a month (with arrows to the months before and after). */
+export function PeriodPicker({
+  value,
+  onChange,
+  now = new Date(),
+}: {
+  value: UsageView;
+  onChange: (view: UsageView) => void;
+  now?: Date;
+}) {
+  const thisMonth = monthKey(now);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <fieldset className="flex rounded-lg border border-[var(--border-subtle)] p-0.5">
+        <legend className="sr-only">Period</legend>
+        {USAGE_RANGES.map((range) => {
+          const on = value.kind === 'days' && value.days === range;
+          return (
+            <button
+              key={range}
+              type="button"
+              aria-pressed={on}
+              onClick={() => onChange({ kind: 'days', days: range })}
+              className={cn(PERIOD_BUTTON, on ? PERIOD_ON : PERIOD_OFF)}
+            >
+              {range} days
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          aria-pressed={value.kind === 'month'}
+          onClick={() => onChange({ kind: 'month', month: thisMonth })}
+          className={cn(PERIOD_BUTTON, value.kind === 'month' ? PERIOD_ON : PERIOD_OFF)}
+        >
+          Month
+        </button>
+      </fieldset>
+      {value.kind === 'month' && (
+        <fieldset className="m-0 flex items-center gap-1 border-0 p-0">
+          <legend className="sr-only">Month</legend>
+          <button
+            type="button"
+            aria-label="The month before"
+            onClick={() => onChange({ kind: 'month', month: shiftMonth(value.month, -1) })}
+            className={ARROW}
+          >
+            <ChevronLeft className="size-4" aria-hidden="true" />
+          </button>
+          <span className="min-w-28 text-center text-sm font-medium tabular-nums">
+            {monthLabel(value.month)}
+          </span>
+          <button
+            type="button"
+            aria-label="The month after"
+            disabled={value.month >= thisMonth}
+            onClick={() => onChange({ kind: 'month', month: shiftMonth(value.month, 1) })}
+            className={cn(ARROW, 'disabled:opacity-30')}
+          >
+            <ChevronRight className="size-4" aria-hidden="true" />
+          </button>
+        </fieldset>
+      )}
+    </div>
+  );
+}
+
+const PERIOD_BUTTON =
+  'rounded-md px-3 py-1 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent-bright)]';
+const PERIOD_ON = 'bg-[var(--bg-control)] font-medium text-[var(--text-primary)]';
+const PERIOD_OFF = 'text-[var(--text-muted)] hover:text-[var(--text-primary)]';
+const ARROW =
+  'rounded-md p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-control)] hover:text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--accent-bright)]';

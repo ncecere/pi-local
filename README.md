@@ -16,7 +16,8 @@ reply finishes the next time you open the app.
 - **Models:**
   - OpenAI, Anthropic, Ollama, LM Studio, OpenRouter, LiteLLM or any compatible server
   - keys in the macOS keychain
-  - usage and estimated cost
+  - usage and estimated cost, with list prices for well-known models, a usage drill-down, and monthly budgets
+    (per agent and for the whole app) that warn or stop
 - **Agents:**
   - kinds: **assistant**, **researcher**, and **coding**, which works like the pi coding agent in a project folder you
     choose: pi's coding prompt, `read`/`write`/`edit`/`bash`, and the project's `AGENTS.md` or `CLAUDE.md`

@@ -178,6 +178,22 @@ func watch(core *app.App, window *application.WebviewWindow, n *notifier, status
 				if json.Unmarshal(ev.Data, &e) == nil && away {
 					n.send("notify-"+e.AgentID+"-"+strconv.FormatInt(time.Now().UnixMilli(), 10), e.AgentName+": "+e.Title, e.Message)
 				}
+			case "budget":
+				// A budget reached 80% or 100% of its limit (level 0: a budget was changed, nothing to say).
+				var e struct {
+					Level   int    `json:"level"`
+					Message string `json:"message"`
+					Status  struct {
+						Scope, AgentID, Month string
+					} `json:"status"`
+				}
+				if json.Unmarshal(ev.Data, &e) == nil && e.Level > 0 && away {
+					title := "Budget used up"
+					if e.Level < 100 {
+						title = "Budget nearly used up"
+					}
+					n.send("budget-"+e.Status.Scope+"-"+e.Status.AgentID+"-"+e.Status.Month+"-"+strconv.Itoa(e.Level), title, e.Message)
+				}
 			case "schedule_run":
 				var e struct {
 					Name string `json:"name"`

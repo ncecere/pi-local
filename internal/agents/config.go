@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -92,6 +93,41 @@ type Config struct {
 	Web WebTools `yaml:"web,omitempty"`
 	// Memory: what it knows about the person (the basics, and the categories it shares) and its own notes.
 	Memory MemorySettings `yaml:"memory,omitempty"`
+	// Budget: a monthly limit on what the agent may spend on its model (nil: none).
+	Budget *Budget `yaml:"budget,omitempty"`
+}
+
+// Budget is an agent's monthly spending limit, counted from the usage and prices in the app (this calendar month, priced
+// models only). OnExceed says what happens at the limit: "stop" refuses the agent's new work until the next month or a
+// higher limit, "warn" only says so.
+type Budget struct {
+	MonthlyUSD float64 `yaml:"monthlyUsd" json:"monthlyUsd"`
+	OnExceed   string  `yaml:"onExceed" json:"onExceed"`
+}
+
+// Budget modes.
+const (
+	BudgetStop = "stop"
+	BudgetWarn = "warn"
+)
+
+// MaxBudgetUSD is the largest monthly budget that can be set.
+const MaxBudgetUSD = 1_000_000
+
+// CheckBudget fills the default mode (stop) and checks the amount: more than zero, at most a million dollars, whole
+// cents.
+func (b *Budget) CheckBudget() error {
+	if b.OnExceed == "" {
+		b.OnExceed = BudgetStop
+	}
+	if b.OnExceed != BudgetStop && b.OnExceed != BudgetWarn {
+		return invalid("invalid_budget", "A budget either stops the agent or only warns: use stop or warn.")
+	}
+	if !(b.MonthlyUSD >= 0.01 && b.MonthlyUSD <= MaxBudgetUSD) {
+		return invalid("invalid_budget", "A monthly budget is from $0.01 to $1,000,000.")
+	}
+	b.MonthlyUSD = math.Round(b.MonthlyUSD*100) / 100
+	return nil
 }
 
 // WebTools are an agent's web tools (read-only: they change nothing).
@@ -230,6 +266,11 @@ func (c *Config) Validate() error {
 	c.Memory.Share = share
 	if err := c.Workspace.checkFolder(); err != nil {
 		return err
+	}
+	if c.Budget != nil {
+		if err := c.Budget.CheckBudget(); err != nil {
+			return err
+		}
 	}
 	if len(c.Approvals.Tools) > 100 {
 		return invalid("invalid_approval_tools", "At most 100 tools or patterns ask first.")

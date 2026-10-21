@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   type Agent,
   type AgentApprovals,
+  type AgentBudget,
   type AgentMcpServer,
   type AgentTemplate,
   type AgentThread,
@@ -258,6 +259,8 @@ export function useUpdateAgent() {
       mcp?: AgentMcpServer[];
       schedules?: { agentMade: boolean };
       web?: WebTools;
+      /** null removes the agent's budget. */
+      budget?: AgentBudget | null;
     }) => api.patch<Agent>(agentPath(id), body),
     onSuccess: (agent) =>
       queryClient.setQueryData<Agent[]>(AGENTS_KEY, (list) =>

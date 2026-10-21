@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncecere/pi-local/internal/secrets"
+	"github.com/ncecere/pi-local/internal/usage"
 )
 
 // Kind is an API a provider speaks.
@@ -105,8 +106,15 @@ type Model struct {
 	Images        bool     `json:"images"`
 	InputPrice    *float64 `json:"inputPrice"`
 	OutputPrice   *float64 `json:"outputPrice"`
-	Enabled       bool     `json:"enabled"`
-	UsedBy        int      `json:"usedBy"`
+	// CacheReadPrice and CacheWritePrice: USD per million cached tokens; nil counts them at the input price.
+	CacheReadPrice  *float64 `json:"cacheReadPrice"`
+	CacheWritePrice *float64 `json:"cacheWritePrice"`
+	// PriceSource: "list" (the app's list prices), "you" (set by the person), nil when unpriced.
+	PriceSource *string `json:"priceSource"`
+	// HasListPrice: the app's price list has a price for this model ("Use list prices" works).
+	HasListPrice bool `json:"hasListPrice"`
+	Enabled      bool `json:"enabled"`
+	UsedBy       int  `json:"usedBy"`
 }
 
 // DemoModelID is the runtime's scripted model, always available.
@@ -267,15 +275,27 @@ func scanProvider(row interface{ Scan(...any) error }) (*Provider, error) {
 	return &p, nil
 }
 
-const modelCols = `provider_id, model_id, name, context_window, max_tokens, reasoning, images, input_price, output_price, enabled`
+const modelCols = `provider_id, model_id, name, context_window, max_tokens, reasoning, images, input_price, output_price, cache_read_price, cache_write_price, price_source, enabled`
 
 func (c *Catalog) scanModel(row interface{ Scan(...any) error }) (*Model, error) {
 	var m Model
 	var reasoning, images, enabled int
-	var in, out sql.NullFloat64
-	if err := row.Scan(&m.Provider, &m.ModelID, &m.Name, &m.ContextWindow, &m.MaxTokens, &reasoning, &images, &in, &out, &enabled); err != nil {
+	var in, out, cacheRead, cacheWrite sql.NullFloat64
+	var source sql.NullString
+	if err := row.Scan(&m.Provider, &m.ModelID, &m.Name, &m.ContextWindow, &m.MaxTokens, &reasoning, &images, &in, &out, &cacheRead, &cacheWrite, &source, &enabled); err != nil {
 		return nil, err
 	}
+	if cacheRead.Valid {
+		m.CacheReadPrice = &cacheRead.Float64
+	}
+	if cacheWrite.Valid {
+		m.CacheWritePrice = &cacheWrite.Float64
+	}
+	if source.Valid && (in.Valid || out.Valid) {
+		m.PriceSource = &source.String
+	}
+	_, m.HasListPrice = LookupListPrice(m.ModelID)
+	m.HasListPrice = m.HasListPrice && !localPreset(m.Provider)
 	m.ID = m.Provider + "/" + m.ModelID
 	m.Reasoning, m.Images, m.Enabled = reasoning != 0, images != 0, enabled != 0
 	if in.Valid {
@@ -360,6 +380,16 @@ func (c *Catalog) Model(ctx context.Context, id string) (*Model, error) {
 		return nil, ErrNotFound
 	}
 	return m, err
+}
+
+// UsagePrice is a model's prices for costing its usage; ok is false for a model that is gone or has no input and
+// output price (its requests are counted, as unpriced).
+func (c *Catalog) UsagePrice(ctx context.Context, id string) (usage.Price, bool) {
+	m, err := c.Model(ctx, id)
+	if err != nil || m.InputPrice == nil || m.OutputPrice == nil {
+		return usage.Price{}, false
+	}
+	return usage.Price{Input: *m.InputPrice, Output: *m.OutputPrice, CacheRead: m.CacheReadPrice, CacheWrite: m.CacheWritePrice}, true
 }
 
 // Choice is a model as the agent catalog offers it.
@@ -668,7 +698,12 @@ type ModelInput struct {
 	Images        *bool           `json:"images"`
 	InputPrice    json.RawMessage `json:"inputPrice"`
 	OutputPrice   json.RawMessage `json:"outputPrice"`
-	Enabled       *bool           `json:"enabled"`
+	// CacheReadPrice and CacheWritePrice: per million cached tokens; null counts them at the input price.
+	CacheReadPrice  json.RawMessage `json:"cacheReadPrice"`
+	CacheWritePrice json.RawMessage `json:"cacheWritePrice"`
+	// PriceFromList sets all the prices to the app's list prices for this model.
+	PriceFromList *bool `json:"priceFromList"`
+	Enabled       *bool `json:"enabled"`
 }
 
 var modelIDPattern = regexp.MustCompile(`^[^\s\x00-\x1f]{1,200}$`)
@@ -685,6 +720,73 @@ func price(raw json.RawMessage, current *float64) (*float64, error) {
 		return nil, bad("invalid_price", "A price is a number of US dollars per million tokens, from 0 to 10,000.")
 	}
 	return &v, nil
+}
+
+// applyPrices sets a model's prices from the input: the list's when asked (or for a new model given none, unless it
+// is on a local server), else the person's. Prices the person set are marked "you"; clearing both leaves it unpriced.
+func applyPrices(m *Model, in ModelInput, isNew bool) error {
+	fromList := func() error {
+		p, ok := LookupListPrice(m.ModelID)
+		if !ok || localPreset(m.Provider) {
+			return &Error{Status: http.StatusBadRequest, Code: "no_list_price", Message: fmt.Sprintf("There is no list price for %s. Enter its prices by hand.", m.Name)}
+		}
+		m.InputPrice, m.OutputPrice, m.CacheReadPrice, m.CacheWritePrice = &p.Input, &p.Output, p.CacheRead, p.CacheWrite
+		source := PriceList
+		m.PriceSource = &source
+		return nil
+	}
+	if in.PriceFromList != nil && *in.PriceFromList {
+		return fromList()
+	}
+	raws := [4]json.RawMessage{in.InputPrice, in.OutputPrice, in.CacheReadPrice, in.CacheWritePrice}
+	given, hasValue := false, false
+	for _, raw := range raws {
+		given = given || len(raw) > 0
+		hasValue = hasValue || (len(raw) > 0 && string(raw) != "null")
+	}
+	if isNew && !hasValue {
+		// A model added without prices (none, or null: what an empty form sends) gets its list price, when it has one.
+		// Not an error when it doesn't.
+		if _, ok := LookupListPrice(m.ModelID); ok && !localPreset(m.Provider) {
+			return fromList()
+		}
+		return nil
+	}
+	if !given {
+		return nil
+	}
+	before := [4]*float64{m.InputPrice, m.OutputPrice, m.CacheReadPrice, m.CacheWritePrice}
+	var err error
+	if m.InputPrice, err = price(in.InputPrice, m.InputPrice); err != nil {
+		return err
+	}
+	if m.OutputPrice, err = price(in.OutputPrice, m.OutputPrice); err != nil {
+		return err
+	}
+	if m.CacheReadPrice, err = price(in.CacheReadPrice, m.CacheReadPrice); err != nil {
+		return err
+	}
+	if m.CacheWritePrice, err = price(in.CacheWritePrice, m.CacheWritePrice); err != nil {
+		return err
+	}
+	if m.InputPrice == nil && m.OutputPrice == nil {
+		m.CacheReadPrice, m.CacheWritePrice, m.PriceSource = nil, nil, nil
+		return nil
+	}
+	// Saving the prices a model already has (an edit form sends them all) changes nothing, not even where they came from.
+	after := [4]*float64{m.InputPrice, m.OutputPrice, m.CacheReadPrice, m.CacheWritePrice}
+	same := !isNew
+	for i := range before {
+		if (before[i] == nil) != (after[i] == nil) || (before[i] != nil && *before[i] != *after[i]) {
+			same = false
+		}
+	}
+	if same && m.PriceSource != nil {
+		return nil
+	}
+	source := PriceYou
+	m.PriceSource = &source
+	return nil
 }
 
 // PutModel adds a model to a provider, or changes it.
@@ -739,21 +841,19 @@ func (c *Catalog) PutModel(ctx context.Context, providerID, modelID string, in M
 	if in.Enabled != nil {
 		m.Enabled = *in.Enabled
 	}
-	if m.InputPrice, err = price(in.InputPrice, m.InputPrice); err != nil {
-		c.mu.Unlock()
-		return nil, err
-	}
-	if m.OutputPrice, err = price(in.OutputPrice, m.OutputPrice); err != nil {
+	if err := applyPrices(m, in, isNew); err != nil {
 		c.mu.Unlock()
 		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	_, err = c.db.ExecContext(ctx, `INSERT INTO models (provider_id, model_id, name, context_window, max_tokens, reasoning, images, input_price, output_price, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err = c.db.ExecContext(ctx, `INSERT INTO models (provider_id, model_id, name, context_window, max_tokens, reasoning, images, input_price, output_price, cache_read_price, cache_write_price, price_source, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (provider_id, model_id) DO UPDATE SET name = excluded.name, context_window = excluded.context_window, max_tokens = excluded.max_tokens,
 			reasoning = excluded.reasoning, images = excluded.images, input_price = excluded.input_price, output_price = excluded.output_price,
+			cache_read_price = excluded.cache_read_price, cache_write_price = excluded.cache_write_price, price_source = excluded.price_source,
 			enabled = excluded.enabled, updated_at = excluded.updated_at`,
-		providerID, modelID, m.Name, m.ContextWindow, m.MaxTokens, boolInt(m.Reasoning), boolInt(m.Images), m.InputPrice, m.OutputPrice, boolInt(m.Enabled), now, now)
+		providerID, modelID, m.Name, m.ContextWindow, m.MaxTokens, boolInt(m.Reasoning), boolInt(m.Images), m.InputPrice, m.OutputPrice,
+		m.CacheReadPrice, m.CacheWritePrice, m.PriceSource, boolInt(m.Enabled), now, now)
 	c.mu.Unlock()
 	if err != nil {
 		return nil, err

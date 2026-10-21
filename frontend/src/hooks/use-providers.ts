@@ -91,6 +91,11 @@ export interface ModelSettings {
   images?: boolean;
   inputPrice?: number | null;
   outputPrice?: number | null;
+  /** USD per million cached tokens; null: counted at the input price. */
+  cacheReadPrice?: number | null;
+  cacheWritePrice?: number | null;
+  /** Set every price to the app's list prices for this model. */
+  priceFromList?: boolean;
   enabled?: boolean;
 }
 

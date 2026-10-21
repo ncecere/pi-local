@@ -86,3 +86,45 @@ export function byUse<T extends UsageTotals & { name: string }>(rows: readonly T
     (a, b) => tokensOf(b) - tokensOf(a) || b.requests - a.requests || a.name.localeCompare(b.name),
   );
 }
+
+// ── Which usage to read: a period, an agent, a model ────────────────────────────────────────
+
+/** What the Usage page reads: the last `days` days, or one calendar `month` ("2026-10"), optionally one agent or model. */
+export interface UsageQuery {
+  days?: UsageRange;
+  month?: string;
+  agent?: string;
+  model?: string;
+}
+
+/** The query string for `GET /api/me/usage` (a month wins over days; empty filters are left out). */
+export function usageQueryString(query: UsageQuery): string {
+  const params = new URLSearchParams();
+  if (query.month) params.set('month', query.month);
+  else params.set('days', String(query.days ?? 30));
+  if (query.agent) params.set('agent', query.agent);
+  if (query.model) params.set('model', query.model);
+  return params.toString();
+}
+
+/** "2026-10" of a date, in local time. */
+export function monthKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/** The month before or after ("2026-01", -1 → "2025-12"); the input unchanged when it isn't a month. */
+export function shiftMonth(month: string, by: number): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) return month;
+  return monthKey(new Date(Number(match[1]), Number(match[2]) - 1 + by, 1));
+}
+
+/** "October 2026". */
+export function monthLabel(month: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) return month;
+  return new Date(Number(match[1]), Number(match[2]) - 1, 1).toLocaleString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+}

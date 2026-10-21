@@ -1,13 +1,17 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/ncecere/pi-local/internal/agents"
+	"github.com/ncecere/pi-local/internal/budget"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/usage"
 	"github.com/ncecere/pi-local/internal/web"
@@ -28,6 +32,9 @@ func (a *API) modelRoutes(m *http.ServeMux) {
 	m.HandleFunc("DELETE /api/providers/{provider}/models/{model...}", a.deleteModel)
 	m.HandleFunc("PUT /api/settings/default-model", a.setDefaultModel)
 	m.HandleFunc("GET /api/me/usage", a.usageReport)
+	m.HandleFunc("GET /api/budgets", a.budgets)
+	m.HandleFunc("GET /api/settings/budget", a.budgetSetting)
+	m.HandleFunc("PUT /api/settings/budget", a.saveBudgetSetting)
 }
 
 func catalogFailure(w http.ResponseWriter, err error) {
@@ -150,20 +157,25 @@ func (a *API) setDefaultModel(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]string{"defaultModelId": a.Catalog.DefaultModel(r.Context())})
 }
 
+// usageReport: usage over the last 7, 30 or 90 days, or one calendar month (?month=2026-10), optionally for one agent
+// (?agent=) or one model (?model=), with this month's budgets.
 func (a *API) usageReport(w http.ResponseWriter, r *http.Request) {
-	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
-	if days != 7 && days != 30 && days != 90 {
-		days = 30
+	q := usage.Query{Agent: r.URL.Query().Get("agent"), Model: r.URL.Query().Get("model")}
+	if month := r.URL.Query().Get("month"); month != "" {
+		if _, _, _, ok := a.Usage.MonthRange(month); !ok || !monthPattern.MatchString(month) {
+			fail(w, http.StatusBadRequest, "invalid_month", "A month looks like 2026-10.")
+			return
+		}
+		q.Month = month
+	} else {
+		q.Days, _ = strconv.Atoi(r.URL.Query().Get("days"))
+		if q.Days != 7 && q.Days != 30 && q.Days != 90 {
+			q.Days = 30
+		}
 	}
 	ctx := r.Context()
-	report, err := a.Usage.Report(ctx, days,
-		func(model string) (float64, float64, bool) {
-			m, err := a.Catalog.Model(ctx, model)
-			if err != nil || m.InputPrice == nil || m.OutputPrice == nil {
-				return 0, 0, false
-			}
-			return *m.InputPrice, *m.OutputPrice, true
-		},
+	report, err := a.Usage.Report(ctx, q,
+		func(model string) (usage.Price, bool) { return a.Catalog.UsagePrice(ctx, model) },
 		usage.Names{
 			Agent: func(id string) (string, bool) {
 				ag, err := a.Agents.Get(id)
@@ -183,7 +195,61 @@ func (a *API) usageReport(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "internal", "could not read usage")
 		return
 	}
+	// The budgets, for the month shown (this one unless a month was asked for), whatever else is filtered.
+	view := map[string]*budget.Status{"app": nil, "agent": nil}
+	view["app"], _ = a.Budget.AppStatus(ctx, q.Month)
+	if q.Agent != "" {
+		view["agent"], _ = a.Budget.AgentStatus(ctx, q.Month, q.Agent)
+	}
+	if view["app"] != nil || view["agent"] != nil {
+		report.Budget = view
+	}
 	ok(w, report)
+}
+
+var monthPattern = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`)
+
+// budgets: this month's budgets, the app's and each agent's.
+func (a *API) budgets(w http.ResponseWriter, r *http.Request) {
+	o, err := a.Budget.Overview(r.Context())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "could not read budgets")
+		return
+	}
+	ok(w, o)
+}
+
+// budgetSetting: the app-wide monthly budget (null when there is none).
+func (a *API) budgetSetting(w http.ResponseWriter, r *http.Request) {
+	ok(w, map[string]any{"budget": a.Budget.App(r.Context())})
+}
+
+func (a *API) saveBudgetSetting(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Budget json.RawMessage `json:"budget"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	var b *agents.Budget
+	if len(in.Budget) > 0 && string(in.Budget) != "null" {
+		b = &agents.Budget{}
+		dec := json.NewDecoder(bytes.NewReader(in.Budget))
+		dec.DisallowUnknownFields()
+		if dec.Decode(b) != nil {
+			fail(w, http.StatusBadRequest, "invalid_budget", "A budget is {monthlyUsd, onExceed}.")
+			return
+		}
+	} else if len(in.Budget) == 0 {
+		fail(w, http.StatusBadRequest, "invalid_budget", "Send budget: {monthlyUsd, onExceed}, or null to remove it.")
+		return
+	}
+	if err := a.Budget.SetApp(r.Context(), b); err != nil {
+		agentFailure(w, err)
+		return
+	}
+	a.Hub.Publish("budget", budget.Event{Level: 0, Message: "", Status: budget.Status{Scope: "app"}})
+	ok(w, map[string]any{"budget": a.Budget.App(r.Context())})
 }
 
 // modelRef turns "provider/modelId" into an agent.yaml model reference.

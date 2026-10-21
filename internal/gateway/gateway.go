@@ -318,6 +318,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveAsks(w http.ResponseWriter, r *http.Request, caller string) {
 	refused := func(err error) bool {
+		// An agent over its budget: 402 over_budget, with the message its model is told.
+		var coded interface {
+			error
+			HTTPStatus() int
+			Code() string
+		}
+		if errors.As(err, &coded) {
+			fail(w, coded.HTTPStatus(), coded.Code(), coded.Error())
+			return true
+		}
 		var refusal *asks.Error
 		if errors.As(err, &refusal) {
 			fail(w, http.StatusForbidden, "refused", refusal.Message)

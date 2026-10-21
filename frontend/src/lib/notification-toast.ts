@@ -1,5 +1,5 @@
 import { toast } from 'sonner';
-import type { NotificationEvent } from '~/api/types';
+import type { BudgetEvent, NotificationEvent } from '~/api/types';
 
 /** The conversation's address. */
 export const threadPathOf = (agentId: string, threadId: string) =>
@@ -36,6 +36,23 @@ export function showNotification(
     duration: 10_000,
     ...(event.message ? { description: event.message } : {}),
     ...(threadId ? { action: { label: 'Open', onClick: () => open(agentId, threadId) } } : {}),
+  });
+  return true;
+}
+
+/**
+ * A `budget` live event at 80% or 100%: a toast saying which budget, with a way to the Usage page. Level 0 (a
+ * budget was changed) says nothing. Returns whether a toast was shown.
+ */
+export function showBudgetToast(event: BudgetEvent, openUsage: () => void): boolean {
+  if (!event || (event.level !== 80 && event.level !== 100) || typeof event.message !== 'string')
+    return false;
+  const show = event.level === 100 && event.status?.blocked ? toast.error : toast;
+  show(event.level === 100 ? 'Budget used up' : 'Budget nearly used up', {
+    id: `budget-${event.status?.scope ?? ''}-${event.status?.agentId ?? ''}-${event.level}`,
+    duration: 15_000,
+    description: event.message,
+    action: { label: 'Open usage', onClick: openUsage },
   });
   return true;
 }
