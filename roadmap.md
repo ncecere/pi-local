@@ -166,10 +166,13 @@ and runtime contract stay compatible with PDP's.
 9. **Not wanted:** a global quick-ask hotkey; model routing.
 10. **Releases:** each version ships when it's done (v0.2.0 …), with patch releases between. For each one: build,
     test, end-to-end QA and fixes, then tag after review.
+11. **Connections gallery, first set** (v0.4): sign-in-and-done remote MCP servers (Notion, GitHub, Linear, Atlassian,
+    Asana); Microsoft 365 and Google for mail, calendar and files, marked Advanced until their servers don't need your own
+    OAuth app; Apple Calendar, Reminders and Notes on this computer (macOS first).
 
 ## Still open
 
-- **Connections gallery** (v0.4): which connections first; review when we get there.
+- Nothing right now.
 
 ## v0.2 order
 
