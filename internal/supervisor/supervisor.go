@@ -259,6 +259,22 @@ func (s *Supervisor) Wake(ctx context.Context, id string) error {
 	return err
 }
 
+// running is the agent's runtime when it is up and not stopping: what a call uses as it is. Every change to an
+// agent's configuration (its agent.yaml, model, keys, MCP servers, teams) calls Wake, which resolves it again and
+// restarts the runtime when it differs; a call need not (resolving reads the keychain, under the agent's lock).
+func (s *Supervisor) running(id string) *proc {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.agents[id]
+	if !ok || st.proc == nil || s.closed {
+		return nil
+	}
+	if p := st.proc; p.alive() && !p.stopping {
+		return p
+	}
+	return nil
+}
+
 func (s *Supervisor) wake(ctx context.Context, id string) (*proc, error) {
 	st := s.state(id)
 	st.lock.Lock()
@@ -618,9 +634,12 @@ func (s *Supervisor) Awake() []string {
 // with "/". A runtime that died between the start and the request is started again once.
 func (s *Supervisor) Call(ctx context.Context, id, method, pathAndQuery string, body []byte, header http.Header) (*http.Response, error) {
 	for attempt := 0; ; attempt++ {
-		p, err := s.wake(ctx, id)
-		if err != nil {
-			return nil, err
+		p := s.running(id)
+		if p == nil || attempt > 0 {
+			var err error
+			if p, err = s.wake(ctx, id); err != nil {
+				return nil, err
+			}
 		}
 		var reader io.Reader
 		if body != nil {

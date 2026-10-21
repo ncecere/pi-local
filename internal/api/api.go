@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/user"
 	"regexp"
 	"strings"
@@ -73,7 +74,7 @@ type API struct {
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
 	KeepAlive time.Duration
 
-	mux *http.ServeMux
+	mux http.Handler
 }
 
 const (
@@ -125,7 +126,49 @@ func (a *API) Handler() http.Handler {
 	a.alwaysRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
-	return m
+	if os.Getenv("PI_LOCAL_TRACE") == "1" {
+		a.mux = trace(m)
+	}
+	return a.mux
+}
+
+// trace logs each request's start, first byte and end (PI_LOCAL_TRACE=1, for finding what waits). Paths only: no
+// bodies, headers or query values.
+func trace(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		slog.Info("api →", "method", r.Method, "path", r.URL.Path)
+		tw := &traceWriter{ResponseWriter: w, start: start}
+		next.ServeHTTP(tw, r)
+		slog.Info("api ←", "method", r.Method, "path", r.URL.Path, "status", tw.status, "firstByte", tw.first, "total", time.Since(start).Round(time.Millisecond))
+	})
+}
+
+type traceWriter struct {
+	http.ResponseWriter
+	start  time.Time
+	status int
+	first  time.Duration
+}
+
+func (t *traceWriter) WriteHeader(code int) {
+	if t.status == 0 {
+		t.status, t.first = code, time.Since(t.start).Round(time.Millisecond)
+	}
+	t.ResponseWriter.WriteHeader(code)
+}
+
+func (t *traceWriter) Write(b []byte) (int, error) {
+	if t.status == 0 {
+		t.WriteHeader(http.StatusOK)
+	}
+	return t.ResponseWriter.Write(b)
+}
+
+func (t *traceWriter) Flush() {
+	if f, ok := t.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // --- helpers ------------------------------------------------------------------------------------------------
