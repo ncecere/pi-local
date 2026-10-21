@@ -2,6 +2,7 @@ import { ChevronDown, FileText, LoaderCircle, PanelRightClose, X } from 'lucide-
 import { useId, useState } from 'react';
 import { errorMessage } from '~/api/client';
 import type { ChatDocumentRef } from '~/api/types';
+import { ArtifactCanvas } from '~/components/chat/artifact-canvas';
 import { DocumentValue } from '~/components/chat/document-views';
 import { SidePanelPortal } from '~/components/layout/side-panel-slot';
 import { Dialog, DialogContent, DialogTitle } from '~/components/ui/dialog';
@@ -65,7 +66,11 @@ function DocumentSection({
       {open && (
         <div id={bodyId} className="mt-2.5">
           {query.data ? (
-            <DocumentValue kind={kind} value={query.data.value} />
+            kind === 'artifacts' ? (
+              <ArtifactCanvas agentId={agentId} threadId={threadId} value={query.data.value} />
+            ) : (
+              <DocumentValue kind={kind} value={query.data.value} />
+            )
           ) : query.isError ? (
             <p role="alert" className="text-xs text-[var(--danger-on-tint)]">
               {errorMessage(query.error, "This document couldn't be read.")}{' '}
@@ -124,6 +129,8 @@ export function DocumentsPanel({
   const [hidden, setHidden] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const count = documents ? Object.keys(documents).length : 0;
+  const hasCanvas = !!documents?.artifacts;
+  const title = hasCanvas ? 'Canvas & documents' : 'Documents';
   if (!documents || count === 0) return null;
 
   const opener = (onClick: () => void, label: string) => (
@@ -138,7 +145,7 @@ export function DocumentsPanel({
       )}
     >
       <FileText className="size-3.5" aria-hidden="true" />
-      Documents
+      {title}
       <span className="tabular-nums text-[var(--text-muted)]">{count}</span>
     </button>
   );
@@ -148,10 +155,13 @@ export function DocumentsPanel({
       <SidePanelPortal>
         <aside
           aria-label="Conversation documents"
-          className="flex w-[20rem] shrink-0 flex-col border-l border-[var(--border-subtle)] bg-[var(--bg-app)]/40"
+          className={cn(
+            'flex shrink-0 flex-col border-l border-[var(--border-subtle)] bg-[var(--bg-app)]/40',
+            hasCanvas ? 'w-[32rem] max-w-[45vw]' : 'w-[20rem]',
+          )}
         >
           <div className="flex items-center gap-2 px-4 pb-1 pt-[4.5rem]">
-            <h2 className="flex-1 text-sm font-semibold text-[var(--text-primary)]">Documents</h2>
+            <h2 className="flex-1 text-sm font-semibold text-[var(--text-primary)]">{title}</h2>
             <button
               type="button"
               onClick={() => setHidden(true)}
@@ -184,7 +194,7 @@ export function DocumentsPanel({
           className="left-auto right-0 top-0 h-full w-[min(24rem,100%)] max-w-none translate-x-0 translate-y-0 overflow-y-auto rounded-none border-y-0 border-r-0 p-0"
         >
           <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-4 py-3">
-            <DialogTitle className="flex-1 text-sm">Documents</DialogTitle>
+            <DialogTitle className="flex-1 text-sm">{title}</DialogTitle>
             <button
               type="button"
               onClick={() => setDrawer(false)}

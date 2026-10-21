@@ -147,6 +147,7 @@ export function asTodoList(value: unknown): TodoList | null {
 }
 
 const TITLES: Record<string, string> = {
+  artifacts: 'Canvas',
   'research.plan': 'Research plan',
   'research.sources': 'Sources',
   'triage.queue': 'Triage queue',

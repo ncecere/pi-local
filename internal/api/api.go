@@ -141,6 +141,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /api/agents/{agent}/threads/{thread}", a.withThread(a.getThread))
 	m.HandleFunc("GET /api/agents/{agent}/threads/{thread}/events", a.withThread(a.threadEvents))
 	m.HandleFunc("GET /api/agents/{agent}/threads/{thread}/documents/{kind}", a.withThread(a.threadDocument))
+	a.artifactRoutes(m)
 	m.HandleFunc("POST /api/agents/{agent}/threads/{thread}/messages", a.withThread(a.sendMessage))
 	m.HandleFunc("POST /api/agents/{agent}/threads/{thread}/stop", a.withThread(a.stopThread))
 	m.HandleFunc("POST /api/agents/{agent}/threads/{thread}/fork", a.withThread(a.forkThread))
