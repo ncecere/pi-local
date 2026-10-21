@@ -958,18 +958,22 @@ agent as a template does not copy these local paths.
 
 The app indexes locally into `knowledge_*` tables in `app.db` (FTS5). Agents using the same folder share one index,
 but every search and file opening is scoped to that agent's current folder list. Removing the last reference drops
-that folder's index, never its files. The app rescans on startup and polls for added, edited and deleted files every
-30 seconds. Only changed files are read again; startup and manual rescans also retry failed files. A missing folder
+that folder's index, never its files. Pending removals are retained independently of the scan queue and retried after
+storage errors; re-adding a folder cancels its pending removal. The app rescans on startup and polls for added,
+edited and deleted files every 30 seconds. Only changed files are read again; startup and manual rescans also retry failed files. A missing folder
 keeps its index but is excluded from searches until it returns.
 
 - Text: `.txt`, `.md`, `.markdown`, `.mdx`, `.rst`, `.org`, `.tex`, `.csv`, `.tsv`, `.log`, `.json`, `.yaml`, `.yml`,
   `.toml`, `.ini`; plus `.pdf`, `.docx`, `.xlsx`, `.pptx` through the same runtime converters as `read`.
 - Hidden paths, symbolic links, Office lock files (`~$…`), `node_modules` and special files are skipped. Index reads
   are confined with `os.Root`, including when a directory changes into a symlink between scans. Converters receive
-  private temporary snapshots, removed afterwards, not unchecked paths to external documents.
+  private temporary snapshots, removed afterwards, not unchecked paths to external documents. The converter's
+  subprocess receives only executable-path, home, locale and temporary-directory environment settings, never the
+  app's provider/MCP/gateway credentials or Node loader environment.
 - Limits: 50 MiB per file, 10,000 supported files per folder (sorted path order), 3,000 passages per file, about 1,200
-  characters each. Very long documents are partial. PDF/Office conversion has time and output limits. Scanned PDFs
-  need OCR elsewhere; damaged, encrypted and unreadable documents are reported. Office layout is best effort, and
+  characters each. Splitting streams even single huge lines, stops at the passage cap, and checks cancellation
+  throughout; cancelled work is not indexed. Very long documents are partial. PDF/Office conversion has time and
+  output limits. Scanned PDFs need OCR elsewhere; damaged, encrypted and unreadable documents are reported. Office layout is best effort, and
   Excel conversion itself is limited to 5,000 rows and 100 columns per sheet.
 
 ```ts

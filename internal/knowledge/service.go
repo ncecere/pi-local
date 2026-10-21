@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/ncecere/pi-local/internal/search"
 )
@@ -58,16 +57,20 @@ type Service struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	queue  chan request
+	wake   chan struct{}
 
-	mu      sync.Mutex
-	folders map[string]*state
-	lastOn  time.Time
+	// Reconciliation and deletion are serialized: a folder cannot be re-added between the purge's reference
+	// check and its transaction. This lock is separate from mu, which is never held while waiting on app.db.
+	reconcileMu sync.Mutex
+	mu          sync.Mutex
+	folders     map[string]*state
+	purges      map[string]struct{} // reliable work, independent of the bounded scan queue
+	lastOn      time.Time
 }
 
 type request struct {
-	path  string
-	full  bool // retry the files that failed
-	purge bool // the folder is no longer watched: forget it
+	path string
+	full bool // retry the files that failed
 }
 
 // state is a watched folder's progress, in memory.
@@ -85,7 +88,8 @@ func New(store *Store, extractor Extractor, interval time.Duration, onChange fun
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{store: store, extractor: extractor, interval: interval, onChange: onChange, ctx: ctx, cancel: cancel,
-		queue: make(chan request, 512), folders: map[string]*state{}}
+		queue: make(chan request, 512), wake: make(chan struct{}, 1),
+		folders: map[string]*state{}, purges: map[string]struct{}{}}
 }
 
 // Store is the index, for the status and search.
@@ -97,7 +101,7 @@ func (s *Service) Start() {
 	go s.loop()
 }
 
-// Close stops it (a scan in progress ends after its current file).
+// Close cancels scans, conversion and passage splitting before waiting for the worker.
 func (s *Service) Close() {
 	s.cancel()
 	s.wg.Wait()
@@ -107,16 +111,28 @@ func (s *Service) loop() {
 	defer s.wg.Done()
 	tick := time.NewTicker(s.interval)
 	defer tick.Stop()
+	// Failed deletes stay pending; don't depend on another config change or a free scan-queue slot to retry.
+	retry := time.NewTicker(time.Second)
+	defer retry.Stop()
 	for {
+		if s.ctx.Err() != nil {
+			return
+		}
+		// Give pending removals priority even when all 512 scan slots are occupied.
+		select {
+		case <-s.wake:
+			s.drainPurges()
+		default:
+		}
 		select {
 		case <-s.ctx.Done():
 			return
+		case <-s.wake:
+			s.drainPurges()
+		case <-retry.C:
+			s.drainPurges()
 		case r := <-s.queue:
-			if r.purge {
-				s.purge(r.path)
-			} else {
-				s.scan(r.path, r.full)
-			}
+			s.scan(r.path, r.full)
 		case <-tick.C:
 			s.mu.Lock()
 			var paths []string
@@ -135,25 +151,21 @@ func (s *Service) loop() {
 func (s *Service) enqueue(r request) {
 	s.mu.Lock()
 	st, watched := s.folders[r.path]
-	if !r.purge && (!watched || (st.queued && !r.full)) {
+	if !watched || (st.queued && !r.full) {
 		s.mu.Unlock()
 		return
 	}
-	if !r.purge {
-		st.queued = true
-	}
+	st.queued = true
 	s.mu.Unlock()
 	select {
 	case s.queue <- r:
 	default:
 		// Full: the next tick asks again.
-		if !r.purge {
-			s.mu.Lock()
-			if st, ok := s.folders[r.path]; ok {
-				st.queued = false
-			}
-			s.mu.Unlock()
+		s.mu.Lock()
+		if current, ok := s.folders[r.path]; ok && current == st {
+			current.queued = false
 		}
+		s.mu.Unlock()
 	}
 }
 
@@ -161,13 +173,20 @@ func (s *Service) enqueue(r request) {
 // no longer wanted are forgotten, and so is anything the index has for a folder that isn't wanted (a deleted agent's,
 // from before the app was closed).
 func (s *Service) SetFolders(paths []string) {
+	s.reconcileMu.Lock()
 	want := map[string]bool{}
 	for _, p := range paths {
 		want[filepath.Clean(p)] = true
 	}
+	// Read all rows before taking mu (app.db has one connection). Include orphaned indexes from earlier runs.
+	known, err := s.store.folderPaths(s.ctx)
+	if err != nil && s.ctx.Err() == nil {
+		slog.Warn("listing old knowledge folders", "err", err)
+	}
 	s.mu.Lock()
-	var added, removed []string
+	var added []string
 	for p := range want {
+		delete(s.purges, p) // a new reference cancels an old pending removal
 		if _, ok := s.folders[p]; !ok {
 			s.folders[p] = &state{}
 			added = append(added, p)
@@ -176,35 +195,28 @@ func (s *Service) SetFolders(paths []string) {
 	for p := range s.folders {
 		if !want[p] {
 			delete(s.folders, p)
-			removed = append(removed, p)
+			s.purges[p] = struct{}{}
 		}
 	}
+	for _, p := range known {
+		if !want[p] {
+			s.purges[p] = struct{}{}
+		}
+	}
+	pending := len(s.purges) > 0
 	s.mu.Unlock()
-	sort.Strings(added)
-	for _, p := range removed {
-		s.enqueue(request{path: p, purge: true})
-	}
-	// What the index has from earlier runs for folders nobody wants now.
-	if known, err := s.store.folderPaths(s.ctx); err == nil {
-		for _, p := range known {
-			if !want[p] && !contains(removed, p) {
-				s.enqueue(request{path: p, purge: true})
-			}
+	s.reconcileMu.Unlock()
+	if pending {
+		select {
+		case s.wake <- struct{}{}:
+		default: // the pending map, not the signal, owns the work
 		}
 	}
+	sort.Strings(added)
 	for _, p := range added {
 		s.enqueue(request{path: p, full: true})
 	}
 	s.changed(true)
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // Rescan reads a folder again now, including the files that failed before.
@@ -246,11 +258,42 @@ func (s *Service) changed(force bool) {
 	s.onChange()
 }
 
-func (s *Service) purge(path string) {
-	if err := s.store.forget(s.ctx, path); err != nil && s.ctx.Err() == nil {
-		slog.Warn("forgetting a knowledge folder", "folder", path, "err", err)
+// drainPurges leaves failures pending for the retry ticker. Serialize the final reference check and deletion with
+// SetFolders, so a stale removal can never delete a folder that was re-added. Never hold mu during database work.
+func (s *Service) drainPurges() {
+	s.mu.Lock()
+	paths := make([]string, 0, len(s.purges))
+	for path := range s.purges {
+		paths = append(paths, path)
 	}
-	s.changed(true)
+	s.mu.Unlock()
+	for _, path := range paths {
+		if s.ctx.Err() != nil {
+			return
+		}
+		s.reconcileMu.Lock()
+		s.mu.Lock()
+		_, pending := s.purges[path]
+		_, watched := s.folders[path]
+		s.mu.Unlock()
+		if !pending || watched {
+			s.reconcileMu.Unlock()
+			continue
+		}
+		err := s.store.forget(s.ctx, path)
+		if err == nil {
+			s.mu.Lock()
+			delete(s.purges, path)
+			s.mu.Unlock()
+		}
+		s.reconcileMu.Unlock()
+		if err != nil && s.ctx.Err() == nil {
+			slog.Warn("forgetting a knowledge folder; will retry", "folder", path, "err", err)
+		}
+		if err == nil {
+			s.changed(true)
+		}
+	}
 }
 
 type found struct {
@@ -316,7 +359,7 @@ func walk(root string) (files []found, truncated bool, err error) {
 
 // scan brings one folder's index up to date.
 func (s *Service) scan(path string, full bool) {
-	if !s.watching(path) {
+	if s.ctx.Err() != nil || !s.watching(path) {
 		return
 	}
 	s.progress(path, 0, 0, true)
@@ -439,11 +482,10 @@ func (s *Service) indexText(folder string, f found) {
 		s.store.put(s.ctx, folder, f.rel, f.size, f.mtime, StatusError, "Not a text file.", nil)
 		return
 	}
-	text := string(raw)
-	if !utf8.ValidString(text) {
-		text = strings.ToValidUTF8(text, "\uFFFD")
+	passages, err := SplitContext(s.ctx, string(raw), f.kind)
+	if err == nil {
+		s.store.put2(s.ctx, folder, f, passages)
 	}
-	s.store.put2(s.ctx, folder, f, Split(text, f.kind))
 }
 
 func (s *Service) indexDocument(folder string, f found, r Result) {
@@ -460,7 +502,10 @@ func (s *Service) indexDocument(folder string, f found, r Result) {
 		s.store.put(s.ctx, folder, f.rel, f.size, f.mtime, StatusError, "A scanned PDF: it has no text to search.", nil)
 		return
 	}
-	s.store.put2(s.ctx, folder, f, Split(r.Markdown, f.kind))
+	passages, err := SplitContext(s.ctx, r.Markdown, f.kind)
+	if err == nil {
+		s.store.put2(s.ctx, folder, f, passages)
+	}
 }
 
 func ensureSentence(s string) string {

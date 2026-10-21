@@ -139,6 +139,7 @@ func (e NodeExtractor) run(ctx context.Context, paths []string, timeout time.Dur
 	args := append(append([]string{}, e.Runtime.Args...), e.Runtime.Script, "--extract", "--batch")
 	cmd := exec.CommandContext(ctx, e.Runtime.Node, args...)
 	cmd.Dir = e.Runtime.Dir
+	cmd.Env = extractionEnv()
 	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n") + "\n")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -172,6 +173,19 @@ func (e NodeExtractor) run(ctx context.Context, paths []string, timeout time.Dur
 		return got, ctx.Err()
 	}
 	return got, waitErr
+}
+
+// extractionEnv deliberately does not inherit credentials, runtime gateway keys, NODE_OPTIONS or loader settings.
+// Extraction needs only Node's executable lookup, home, locale and temporary-directory conventions. In particular,
+// a document converter has no reason to receive the main app's provider/MCP/cloud credentials.
+func extractionEnv() []string {
+	env := make([]string, 0, 10)
+	for _, key := range []string{"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP", "TZ"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
 }
 
 // readLine reads one line of any length up to maxMarkdownBytes (a long document is one line of JSON).

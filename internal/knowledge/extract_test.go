@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,6 +70,53 @@ func TestBundledRuntimeExtractModeDoesNotStartAnAgent(t *testing.T) {
 	got := (NodeExtractor{Runtime: rt}).Extract(context.Background(), []string{path})[path]
 	if got.Error != "" || !strings.Contains(got.Markdown, "## Page 2\n\nLocated on page two") {
 		t.Fatalf("bundled extraction: %+v", got)
+	}
+}
+
+func TestExtractorSubprocessReceivesOnlyTheMinimalEnvironment(t *testing.T) {
+	rt := sourceRuntime(t)
+	dir := t.TempDir()
+	rt.Dir, rt.Script, rt.Args = dir, filepath.Join(dir, "environment.mjs"), nil
+	for _, key := range []string{"PI_KNOWLEDGE_TEST_SECRET", "MODEL_API_KEY", "MCP_KEY", "PLATFORM_KEY", "AWS_SECRET_ACCESS_KEY"} {
+		t.Setenv(key, "synthetic-test-secret-not-a-real-credential")
+	}
+	// Loader injection is not needed for bundled extraction and must not reach the child either.
+	t.Setenv("NODE_OPTIONS", "--require=/synthetic-missing-secret-loader.cjs")
+	t.Setenv("HOME", dir)
+	t.Setenv("TMPDIR", dir)
+	t.Setenv("LANG", "C")
+	allowed := map[string]bool{"PATH": true, "HOME": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TMPDIR": true, "TMP": true, "TEMP": true, "TZ": true}
+	for _, entry := range extractionEnv() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !allowed[key] {
+			t.Fatalf("unexpected forwarded environment key: %s", key)
+		}
+	}
+	write(t, rt.Script, `
+// CoreFoundation may synthesize this encoding marker on macOS; the app does not pass it through.
+const allowed = new Set(["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP", "TZ", "__CF_USER_TEXT_ENCODING"]);
+let input = "";
+for await (const chunk of process.stdin) input += chunk;
+for (const path of input.trim().split("\n")) {
+  // Report names, never inherited values, even if this test regresses.
+  const report = {unexpected: Object.keys(process.env).filter(k => !allowed.has(k)), home: process.env.HOME, temp: process.env.TMPDIR, locale: process.env.LANG};
+  console.log(JSON.stringify({path, markdown: JSON.stringify(report)}));
+}
+`)
+	path := filepath.Join(dir, "document.pdf")
+	result := (NodeExtractor{Runtime: rt}).Extract(context.Background(), []string{path})[path]
+	if result.Error != "" {
+		t.Fatalf("the minimal-environment child did not run: %s", result.Error)
+	}
+	var report struct {
+		Unexpected         []string
+		Home, Temp, Locale string
+	}
+	if err := json.Unmarshal([]byte(result.Markdown), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Unexpected) != 0 || report.Home != dir || report.Temp != dir || report.Locale != "C" {
+		t.Fatalf("unexpected subprocess environment keys: %v (expected home/temp/locale present: %v)", report.Unexpected, report.Home == dir && report.Temp == dir && report.Locale == "C")
 	}
 }
 
