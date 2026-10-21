@@ -8,7 +8,10 @@ ported frontend changes as little as possible.
 **Conventions**
 - Success: `{"data": …}`. Error: `{"error": {"code", "message", "details"?}}`.
 - JSON bodies are at most 256 KiB.
-- There is no CSRF token or cookie. The app has one local user. The headless server binds to loopback only.
+- There is no CSRF token or cookie. The app has one local user. The headless server binds to loopback only and is
+  **unauthenticated, for development/tests with scratch data and fake services only**. Other local processes,
+  including an agent's network-enabled shell, can call its management and human-decision routes. Loopback is not
+  an agent-vs-person authorization boundary. The packaged Wails app does not expose that HTTP listener.
 - Thread IDs: 1–64 of `[A-Za-z0-9_-]`; otherwise `400 invalid_thread_id`. Agent IDs: `ag_` + 16 lowercase base32
   characters; an unknown one is `404 not_found`.
 - Times: `Agent.*At` are ISO 8601 strings. `AgentThread.*At` are Unix ms (numbers), as in the platform's shapes.
@@ -561,6 +564,11 @@ interface (`SandboxPlatform`): there the sandbox reports it is not available yet
 | Read | anywhere, except `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/Library/Keychains`, and the app's data folder outside this agent's own folder (`agents/<id>/`, which it may read, with its `agent.yaml`, `state.sqlite` and logs). The folders leading to its own can be looked at but not listed (tools that look for a project root walk up through them). The keychain's system service is closed too, or `security find-generic-password` would read it around the closed file. |
 | Write | its **workspace**; its **temp folder** (`agents/<id>/tmp`, its `$TMPDIR`); `/dev/null`, `/dev/tty`, the pseudo-terminals, `/dev/fd/*` and the other harmless devices; `/private/tmp` (many tools hard-code `/tmp`, and `mktemp` and test runners use it; it is shared with the person's other processes); and this user's own folder under `/private/var/folders/<xx>/<yyyy>/` (macOS's `$TMPDIR`, cache and data folders that compilers and system tools write to without being asked; not the rest of `/private/var/folders`). Never the credential folders, nor the app's data folder outside the workspace and temp folder (so a command can't edit its own `agent.yaml`), even when the data folder is under a writable path. |
 | Network | on by default; `workspace.network` off denies every connection to or from an IP address (including `localhost`) and listening sockets. Unix sockets (local services, `ssh-agent`) still work. |
+
+Workspace file tools refuse paths outside the workspace/agent temporary directory, including unresolved symlinks
+(and contained symlinks whose target does not exist). This is a path-based check, not a race-safe filesystem sandbox;
+concurrent file or parent-directory swaps between validation and use remain a limitation. The shell sandbox above
+is a separate OS-enforced boundary.
 
 Tools that cache under the home folder fail to write there, so the shell sets `XDG_CACHE_HOME`, `GOCACHE`,
 `npm_config_cache` and `PIP_CACHE_DIR` into `agents/<id>/tmp/cache`. Other tools' home caches (cargo, a Gradle home)

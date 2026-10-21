@@ -21,7 +21,8 @@ Trust and control.
   “What happened” panel. Filter and export the log as CSV. Cancelled and expired approvals are recorded even when a
   reply is stopped.
 - **Security:** fast-judgments requests cannot redirect credentials or judged text to another origin. Command rules
-  remembered from an approval respect whole-word boundaries (`ls` never allows `lsof`).
+  remembered from an approval respect whole-word boundaries (`ls` never allows `lsof`). Workspace file tools refuse
+  dangling symlinks and check normalized home/file-URL paths before permitting access.
 
 ## 0.2.0
 

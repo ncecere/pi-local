@@ -135,8 +135,11 @@ Revisit PDP integration once the local app is at v1.0 ([13]):
 - **Send an agent to the cloud** to keep working or finish a job while the computer is off, then bring it back.
 - **Team agents:** remote agents on PDP shared with team members, used from Pi Local next to local ones.
 
-Until then, keep it possible: agents stay portable folders (with their own memory inside), and the export format
-and runtime contract stay compatible with PDP's.
+Until then, keep it possible: agents stay portable folders (with their own memory inside), with versioned export and
+runtime contracts. Once the local app is v1.0-ready, evaluate an evolved PDP or a new sibling Go project, including
+celld for per-agent SQLite state and lifecycle. Preserve agent portability rather than requiring PDP's current
+per-agent PostgreSQL storage. See [the remote-execution design notes](docs/plans/post-v1-remote-execution.md); no remote
+implementation is part of the pre-v1.0 roadmap, and the person still chooses the v1.0 launch.
 
 ## Later
 
