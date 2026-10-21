@@ -2,7 +2,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowDown, ArrowUp, Clock, CornerUpLeft, LoaderCircle } from 'lucide-react';
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { errorMessage } from '~/api/client';
+import { errorMessage, type McpElicitation } from '~/api/client';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import { publishAgentLive } from '~/components/agent/avatar/agent-live';
 import {
@@ -13,6 +13,7 @@ import {
 } from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
 import { DocumentsPanel } from '~/components/chat/documents-panel';
+import { ElicitationList } from '~/components/chat/elicitation-card';
 import { preloadMarkdownRenderer, useMarkdownRendererReady } from '~/components/chat/markdown';
 import { textOf } from '~/components/chat/message-content';
 import { MessageList } from '~/components/chat/message-list';
@@ -29,6 +30,7 @@ import {
 import { useAgent, useAgents, useForkThread, useThreadInfo } from '~/hooks/use-agents';
 import { useAttachments } from '~/hooks/use-attachments';
 import { type ChatScrollTarget, useChatScroll } from '~/hooks/use-chat-scroll';
+import { useElicitationsByThread } from '~/hooks/use-elicitations';
 import { isPendingMessage } from '~/lib/chat-view';
 import { usePageTitle } from '~/lib/document-title';
 import {
@@ -41,6 +43,8 @@ import {
 import { isScheduledThreadId } from '~/lib/schedules';
 import { findSnippetMessage } from '~/lib/search-find';
 import { rememberAgent } from '~/routes/chat/home';
+
+const NO_ELICITATIONS: McpElicitation[] = [];
 
 /** How long an idle agent leaves the person's message unanswered before the page says so. */
 const DROPPED_NOTICE_MS = 4_000;
@@ -90,6 +94,8 @@ function ThreadConversation({
   const agent = useAgent(agentId);
   const session = useAgentThread({ agentId, threadId, handover });
   const info = useThreadInfo(agentId, threadId);
+  // MCP servers asking the person something while a tool call of this conversation waits.
+  const elicitations = useElicitationsByThread().get(`${agentId}/${threadId}`);
   const title = info?.title;
   const calledBy = info?.calledBy ?? null;
   usePageTitle(title ?? (agent ? `Chat with ${agent.name}` : 'Conversation'));
@@ -398,6 +404,11 @@ function ThreadConversation({
                   onEdit={editMessage}
                   onBranch={branchFrom}
                   scrollRef={scroll.scrollRef}
+                />
+                {/* Kept mounted: an answered card stays a moment to say how it ended. */}
+                <ElicitationList
+                  elicitations={elicitations ?? NO_ELICITATIONS}
+                  className="mx-auto w-full max-w-[46rem] px-4 pb-4 sm:pl-14"
                 />
                 {(session.sendError || note || dropped) && (
                   <div className="mx-auto max-w-[42rem] space-y-2 px-4 pb-4">

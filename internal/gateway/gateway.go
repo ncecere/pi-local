@@ -16,6 +16,7 @@ import (
 
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
+	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
@@ -77,6 +78,8 @@ type Handler struct {
 	Approvals Approvals
 	OAuth     OAuth
 	Schedules *schedules.Store
+	// Elicitations: MCP servers' questions to the person, relayed by the runtime (nil: not offered).
+	Elicitations *elicitations.Store
 	// AppKey authenticates the app's own MCP probe, for /mcp/oauth only.
 	AppKey string
 }
@@ -199,6 +202,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveSchedules(w, r, agentID)
 	case h.OAuth != nil && strings.HasPrefix(r.URL.Path, "/mcp/oauth/"):
 		h.serveOAuth(w, r, agentID)
+	case h.Elicitations != nil && (r.URL.Path == "/mcp/elicitations" || strings.HasPrefix(r.URL.Path, "/mcp/elicitations/")):
+		h.serveElicitations(w, r, agentID)
 	case h.Asks != nil && strings.HasPrefix(r.URL.Path, "/a2a/"):
 		h.serveAsks(w, r, agentID)
 	default:
@@ -267,6 +272,67 @@ func (h *Handler) serveAsks(w http.ResponseWriter, r *http.Request, caller strin
 		}
 	default:
 		fail(w, http.StatusNotFound, "not_found", "not offered")
+	}
+}
+
+// serveElicitations: an MCP server's question to the person, for the runtime that relays it.
+//
+//	POST   /mcp/elicitations              {server, serverName, tool, threadId, message, requestedSchema} → {id, expiresAt}
+//	GET    /mcp/elicitations/{id}?wait=s  → {done, action, content}: the answer, or done false after s seconds (≤ 30)
+//	DELETE /mcp/elicitations/{id}         the server or the call gave up
+func (h *Handler) serveElicitations(w http.ResponseWriter, r *http.Request, agentID string) {
+	id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/mcp/elicitations"), "/")
+	failWith := func(err error) {
+		var ee *elicitations.Error
+		if errors.As(err, &ee) {
+			fail(w, ee.Status, ee.Code, ee.Message)
+			return
+		}
+		fail(w, http.StatusInternalServerError, "internal", err.Error())
+	}
+	switch {
+	case r.Method == http.MethodPost && id == "":
+		var body elicitations.Request
+		if !decode(w, r, &body) {
+			return
+		}
+		// Only for a server the agent uses (the app's catalog says which).
+		if h.OAuth == nil || !h.OAuth.Uses(agentID, body.Server) {
+			fail(w, http.StatusForbidden, "forbidden", "this agent doesn't use that MCP server")
+			return
+		}
+		e, err := h.Elicitations.Create(agentID, body)
+		if err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, map[string]any{"id": e.ID, "expiresAt": e.ExpiresAt})
+	case r.Method == http.MethodGet && id != "" && !strings.Contains(id, "/"):
+		wait := 25 * time.Second
+		if s, err := strconv.Atoi(r.URL.Query().Get("wait")); err == nil && s >= 0 && s <= 30 {
+			wait = time.Duration(s) * time.Second
+		}
+		answer, done, err := h.Elicitations.Wait(r.Context(), agentID, id, wait)
+		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			failWith(err)
+			return
+		}
+		if !done {
+			ok(w, map[string]any{"done": false})
+			return
+		}
+		ok(w, map[string]any{"done": true, "action": answer.Action, "content": answer.Content})
+	case r.Method == http.MethodDelete && id != "" && !strings.Contains(id, "/"):
+		if err := h.Elicitations.Withdraw(agentID, id); err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, map[string]bool{"ok": true})
+	default:
+		fail(w, http.StatusNotFound, "not_found", "no such route")
 	}
 }
 

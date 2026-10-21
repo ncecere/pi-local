@@ -70,7 +70,7 @@ func watch(core *app.App, window *application.WebviewWindow, n *notifier, status
 			}
 		}
 		pending, _ := core.Approvals.List(context.Background(), false)
-		status(working, len(pending))
+		status(working, len(pending)+len(core.Elicitations.Pending()))
 	}
 	refresh()
 	go func() {
@@ -85,6 +85,14 @@ func watch(core *app.App, window *application.WebviewWindow, n *notifier, status
 				}
 				if json.Unmarshal(ev.Data, &e) == nil && e.Approval.Status == "pending" && away {
 					n.send("approval-"+e.Approval.ID, e.Approval.AgentName+" asks first", "It wants to run "+e.Approval.Tool+". Open Pi Local to approve or deny it.")
+				}
+				refresh()
+			case "elicitation":
+				var e struct {
+					ID, AgentName, ServerName, State string
+				}
+				if json.Unmarshal(ev.Data, &e) == nil && e.State == "pending" && away {
+					n.send("elicitation-"+e.ID, e.ServerName+" asks you", e.AgentName+" is waiting for your answer. Open Pi Local to see the question.")
 				}
 				refresh()
 			case "schedule_run":

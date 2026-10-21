@@ -244,6 +244,8 @@ export interface InboxEntry {
   calledBy?: { agentId: string; name: string; threadId: string } | null;
   /** Tool calls in it waiting for the person's approval. */
   pendingApprovals?: number;
+  /** MCP servers in it asking the person something (elicitations): they wait like approvals. */
+  pendingElicitations?: number;
   meta: ThreadMeta;
   bucket: Bucket;
   status: RowStatus;

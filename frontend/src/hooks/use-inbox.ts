@@ -12,6 +12,7 @@ import {
 } from '~/api/client';
 import { chattable, threadsKey, useAgents } from '~/hooks/use-agents';
 import { useApprovalsByThread, usePendingApprovals } from '~/hooks/use-approvals';
+import { useElicitationsByThread, usePendingElicitations } from '~/hooks/use-elicitations';
 import { useCurrentUser } from '~/hooks/use-session';
 import { isEventsLive } from '~/lib/events-live';
 import {
@@ -212,6 +213,8 @@ export function useInbox(): Inbox {
   const now = useNow(wakeAt);
   // Conversations with tool calls waiting for the person: "Needs you", not "Working".
   const approvals = useApprovalsByThread();
+  // And those where an MCP server asks the person something: they wait the same way.
+  const elicitations = useElicitationsByThread();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `signature` stands for the lists' data
   const entries = useMemo(() => {
@@ -223,7 +226,9 @@ export function useInbox(): Inbox {
         const key = threadKey(agent.id, thread.threadId);
         // What this browser knows, with what the platform says (busy, finished, failed).
         const meta = withPlatform(metas[key] ?? {}, thread, since);
-        const waiting = approvals.get(key)?.length ?? 0;
+        const approving = approvals.get(key)?.length ?? 0;
+        const asked = elicitations.get(key)?.length ?? 0;
+        const waiting = approving + asked;
         out.push({
           key,
           agentId: agent.id,
@@ -231,7 +236,8 @@ export function useInbox(): Inbox {
           title: thread.title,
           updatedAt: thread.updatedAt,
           calledBy: thread.calledBy ?? null,
-          pendingApprovals: waiting,
+          pendingApprovals: approving,
+          pendingElicitations: asked,
           meta,
           bucket: bucketOf(meta, thread, now, waiting),
           status: statusOf(meta, now, waiting),
@@ -239,7 +245,7 @@ export function useInbox(): Inbox {
       }
     });
     return out;
-  }, [agents, metas, now, signature, approvals]);
+  }, [agents, metas, now, signature, approvals, elicitations]);
 
   const sections = useMemo(() => sectionsOf(entries, now), [entries, now]);
   return {
@@ -257,11 +263,13 @@ export function useInbox(): Inbox {
 /**
  * How many things need the person: conversations with a reply finished or
  * failed that they have not seen, and conversations (or requests without one)
- * waiting for their approval. A conversation is counted once.
+ * waiting for their approval or their answer to an MCP server's question.
+ * A conversation is counted once.
  */
 export function useAttentionCount(): number {
   const metas = useInboxMetas();
   const pending = usePendingApprovals().data;
+  const asked = usePendingElicitations();
   const now = Date.now();
   const keys = new Set<string>();
   for (const [key, meta] of Object.entries(metas)) {
@@ -276,6 +284,12 @@ export function useAttentionCount(): number {
           ? threadKey(approval.agentId, approval.threadId)
           : `${approval.agentId}#${approval.id}`,
       );
+  for (const elicitation of asked)
+    keys.add(
+      elicitation.threadId
+        ? threadKey(elicitation.agentId, elicitation.threadId)
+        : `${elicitation.agentId}#${elicitation.id}`,
+    );
   return keys.size;
 }
 

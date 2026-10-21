@@ -30,6 +30,7 @@ import (
 	"github.com/ncecere/pi-local/internal/appdb"
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
+	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
 	"github.com/ncecere/pi-local/internal/mcp"
@@ -75,6 +76,8 @@ type App struct {
 	Schedules *schedules.Store
 	Search    *search.Store
 	Updater   *update.Updater
+	// Elicitations are MCP servers' questions to the person, while a tool call waits (memory only).
+	Elicitations *elicitations.Store
 	// DB is app.db (diagnostics and tests).
 	DB *sql.DB
 
@@ -187,6 +190,14 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.MCP.OnChange = a.mcpChanged
 	a.MCP.OnLogin = func(st mcp.LoginStatus) { a.Hub.Publish("mcp-login", st) }
+	a.Elicitations = elicitations.New(0)
+	a.Elicitations.OnChange = func(e elicitations.Elicitation) { a.Hub.Publish("elicitation", e) }
+	a.Elicitations.AgentName = func(id string) string {
+		if ag, err := a.Agents.Get(id); err == nil {
+			return ag.Config.Name
+		}
+		return id
+	}
 	a.Search = search.New(db)
 	a.Threads = threads.NewIndex(db, func(c threads.Change) {
 		a.Hub.Publish("thread", map[string]any{"agentId": c.AgentID, "threadId": c.ThreadID, "deleted": c.Deleted, "thread": c.Thread})
@@ -220,11 +231,17 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	a.MCP.SetProber(a.mcpProber)
 
 	a.Sup = supervisor.New(supervisor.Options{
-		Runtime:      cfg.Runtime,
-		GatewayURL:   gatewayURL,
-		Resolve:      a.resolve,
-		BaseEnv:      baseEnv(cfg.DataDir),
-		OnStatus:     func(c supervisor.StatusChange) { a.publishAgent(c.AgentID) },
+		Runtime:    cfg.Runtime,
+		GatewayURL: gatewayURL,
+		Resolve:    a.resolve,
+		BaseEnv:    baseEnv(cfg.DataDir),
+		OnStatus: func(c supervisor.StatusChange) {
+			// A stopped runtime's MCP connections are gone, and with them anyone to answer its servers' questions.
+			if c.Status == supervisor.Asleep || c.Status == supervisor.Failed {
+				a.Elicitations.ForgetAgent(c.AgentID)
+			}
+			a.publishAgent(c.AgentID)
+		},
 		OnStarted:    a.started,
 		Refuse:       a.refuse,
 		IdleTimeout:  cfg.IdleTimeout,
@@ -249,18 +266,19 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
 			a.Approvals.ForgetAgent(context.Background(), c.AgentID)
+			a.Elicitations.ForgetAgent(c.AgentID)
 			a.Schedules.ForgetAgent(context.Background(), c.AgentID)
 			a.Search.Forget(context.Background(), c.AgentID, "")
 			if err := a.Teams.RemoveAgent(context.Background(), c.AgentID); err != nil {
@@ -375,6 +393,8 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 			raw, _ := json.Marshal(servers)
 			env["MCP_SERVERS"] = string(raw)
 			env["MCP_OAUTH_URL"] = a.gatewayURL + "/mcp/oauth"
+			// The servers may ask the person a question mid-call (MCP elicitation); the runtime relays it here.
+			env["MCP_ELICIT_URL"] = a.gatewayURL + "/mcp/elicitations"
 		}
 	}
 	// Its own schedules (the schedule tools), when its agent.yaml allows them.

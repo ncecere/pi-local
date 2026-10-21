@@ -87,6 +87,8 @@ type AgentThread = {
   thread (created, renamed, started, finished, failed, deleted). `busy` changes come from the message being sent and
   from the runtime's reports (end of a reply, and every thread at each runtime start).
 - `event: agent`, `data: {agentId, deleted: boolean, agent?: Agent}` when an agent changes (created, renamed, status)
+- `event: elicitation`, `data: McpElicitation` when an MCP server asks something and on each change of its state (see
+  [MCP elicitation](#mcp-elicitation))
 - `event: update`, `data: UpdateStatus` when the update status changes: a check, or an install's stage (see
   [Updates](#updates))
 - `event: resync`, `data: {}` when events may have been missed; the lists should be read again
@@ -366,6 +368,50 @@ type McpLoginStatus = {
 Live events: `event: mcp`, `data: {slug, deleted, server?: McpServer}`; `event: mcp-login`, `data: McpLoginStatus`
 on each burst of output (throttled) and each change of state.
 
+### MCP elicitation
+
+An MCP server can ask the person something in the middle of a tool call (`elicitation/create`): a message and a small
+form. The runtime declares the `elicitation` capability (form mode) to the servers it connects to and relays each
+`elicitation/create` to the app; the tool call waits until the person answers, or the question expires after 15
+minutes. A typical case is a server confirming before it acts: `m365` asks before it sends an email, with a message
+that spells out the recipients, subject and body, and a form with one boolean field
+(`{send: {type: "boolean", title: "Yes, go ahead"}}`, required); `tdx` does the same with `approve`.
+
+```ts
+type McpElicitation = {
+  id: string;                 // "el_…"
+  agentId: string; agentName: string;
+  threadId: string | null;    // the conversation whose tool call asks; null if not known
+  server: string;             // MCP server slug, e.g. "m365"
+  serverName: string;         // e.g. "Microsoft 365"
+  tool: string | null;        // the MCP tool being called (not prefixed), e.g. "send_draft"
+  message: string;            // the server's own words, plain text: untrusted, shown as text (never HTML or markdown)
+  requestedSchema: {
+    type: "object";
+    properties: Record<string, {
+      type: "string" | "number" | "integer" | "boolean";
+      title?: string; description?: string; default?: string | number | boolean;
+      enum?: string[]; enumNames?: string[];        // a string chosen from a list
+      minimum?: number; maximum?: number; minLength?: number; maxLength?: number;
+      format?: "email" | "uri" | "date" | "date-time";
+    }>;
+    required?: string[];
+  };
+  state: "pending" | "accepted" | "declined" | "cancelled" | "expired";
+  createdAt: number;          // Unix ms
+  expiresAt: number;          // Unix ms
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/elicitations` | `McpElicitation[]`: the pending ones, across agents. |
+| `POST /api/elicitations/{id}` | Body `{action: "accept" \| "decline" \| "cancel", content?: Record<string, string \| number \| boolean>}` (`content` with `accept` only; it must match `requestedSchema`). Answers `McpElicitation`. Errors: `400 invalid_content` (the message names the field), `404 not_found`, `409 not_pending` (already answered or expired). The answer reaches the server at once and the tool call goes on. |
+
+Live events: `event: elicitation`, `data: McpElicitation` when one is asked and on every change of its state; one
+whose `state` isn't `pending` leaves the pending list. The UI shows a pending one as a card in its conversation (one
+without a thread on the agent's home page), counts its conversation as "Needs you" like a pending approval, and
+shows a toast for a new one that isn't on screen.
 ## Chat features (Phase 6)
 
 All of these are the runtime's, passed through (`runtime/src/lib/server.ts`, `view.ts`, `delta.ts`):

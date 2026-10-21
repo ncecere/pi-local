@@ -131,6 +131,67 @@ export interface ApprovalEvent {
   approval: Approval;
 }
 
+export type ElicitationState = 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired';
+
+/** One field of an elicitation's form: a primitive, as MCP's `requestedSchema` allows. */
+export interface ElicitationField {
+  type: 'string' | 'number' | 'integer' | 'boolean';
+  title?: string;
+  description?: string;
+  default?: string | number | boolean;
+  /** A string chosen from these. */
+  enum?: string[];
+  /** What each `enum` value is called, in the same order. */
+  enumNames?: string[];
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  format?: 'email' | 'uri' | 'date' | 'date-time';
+}
+
+export interface ElicitationSchema {
+  type: 'object';
+  properties: Record<string, ElicitationField>;
+  required?: string[];
+}
+
+/**
+ * An MCP server asking the person something during a tool call
+ * (`elicitation/create`, form mode): `GET /api/elicitations`, and the
+ * `elicitation` live event. The call waits until it is answered or expires.
+ */
+export interface McpElicitation {
+  /** "el_…". */
+  id: string;
+  agentId: string;
+  agentName: string;
+  /** The conversation whose tool call asks; null when not known. */
+  threadId: string | null;
+  /** The MCP server's slug, e.g. "m365". */
+  server: string;
+  serverName: string;
+  /** The MCP tool being called (not prefixed), when known. */
+  tool: string | null;
+  /** The server's own words, plain text: shown as text, never as HTML or markdown. */
+  message: string;
+  requestedSchema: ElicitationSchema;
+  state: ElicitationState;
+  /** Unix ms. */
+  createdAt: number;
+  /** Unix ms. */
+  expiresAt: number;
+}
+
+export type ElicitationAction = 'accept' | 'decline' | 'cancel';
+export type ElicitationContent = Record<string, string | number | boolean>;
+
+/** `POST /api/elicitations/{id}`'s body: `content` with `accept` only. */
+export interface ElicitationAnswer {
+  action: ElicitationAction;
+  content?: ElicitationContent;
+}
+
 /** `POST /api/agents/{a}/attachments`: the file as saved in the workspace. */
 export interface Attachment {
   /** Relative to the workspace: `attachments/<YYYY-MM-DD>/<name>`. */

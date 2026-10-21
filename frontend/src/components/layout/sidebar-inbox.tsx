@@ -46,10 +46,12 @@ import {
 import { Spinner } from '~/components/ui/spinner';
 import { useDeleteThread, useRenameThread } from '~/hooks/use-agents';
 import { usePendingApprovals } from '~/hooks/use-approvals';
+import { usePendingElicitations } from '~/hooks/use-elicitations';
 import { type InboxActions, useInbox, useInboxActions } from '~/hooks/use-inbox';
 import { searchable, useMessageSearch } from '~/hooks/use-message-search';
 import { calledByLabel } from '~/lib/agent-asks';
 import { approvalHeadline } from '~/lib/approvals';
+import { elicitationHeadline } from '~/lib/elicitations';
 import { keepFocusWhenRemoved } from '~/lib/focus-return';
 import {
   activityAt,
@@ -131,6 +133,12 @@ export function SidebarInbox({ filter }: { filter: string }) {
       approval.status === 'pending' &&
       !(approval.threadId && listedKeys.has(`${approval.agentId}/${approval.threadId}`)) &&
       (!agentFilter || approval.agentId === agentFilter),
+  );
+  // And MCP servers' questions whose conversation isn't a row here.
+  const unlistedQuestions = usePendingElicitations().filter(
+    (elicitation) =>
+      !(elicitation.threadId && listedKeys.has(`${elicitation.agentId}/${elicitation.threadId}`)) &&
+      (!agentFilter || elicitation.agentId === agentFilter),
   );
 
   // Messages whose text holds the query (the messageSearch feature), beyond the titles that do.
@@ -369,7 +377,7 @@ export function SidebarInbox({ filter }: { filter: string }) {
           </p>
         </section>
       )}
-      {(sections.approval.length > 0 || unlisted.length > 0) && (
+      {(sections.approval.length > 0 || unlisted.length > 0 || unlistedQuestions.length > 0) && (
         <section aria-labelledby="inbox-needs-you">
           <Heading id="inbox-needs-you">Needs you</Heading>
           {list(sections.approval, 'Conversations waiting for your approval')}
@@ -397,6 +405,36 @@ export function SidebarInbox({ filter }: { filter: string }) {
                     </span>
                     <span className="truncate font-mono text-xs text-[var(--text-primary)]/90">
                       {approvalHeadline(approval.tool, approval.arguments)}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+          {unlistedQuestions.length > 0 && (
+            <ul aria-label="Questions waiting for your answer" className="flex flex-col gap-px">
+              {unlistedQuestions.map((elicitation) => (
+                <li key={elicitation.id}>
+                  <Link
+                    {...(elicitation.threadId
+                      ? {
+                          to: '/agents/$agentId/threads/$threadId' as const,
+                          params: {
+                            agentId: elicitation.agentId,
+                            threadId: elicitation.threadId,
+                          },
+                        }
+                      : { to: '/' as const, search: { agent: elicitation.agentId } })}
+                    className="flex flex-col gap-0.5 rounded-md px-2.5 py-1.5 outline-none hover:bg-[var(--sidebar-row-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-bright)]"
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5 text-xs">
+                      <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-secondary)]">
+                        {elicitation.agentName}
+                      </span>
+                      <StatusBadge status="approval" />
+                    </span>
+                    <span className="truncate text-xs text-[var(--text-primary)]/90">
+                      {elicitationHeadline(elicitation)}
                     </span>
                   </Link>
                 </li>
@@ -893,7 +931,7 @@ function InboxRow({
       <StatusBadge
         status={status}
         workingSince={meta.workingSince}
-        count={entry.pendingApprovals}
+        count={(entry.pendingApprovals ?? 0) + (entry.pendingElicitations ?? 0)}
       />
     ) : bucket === 'done' && meta.settledAt ? (
       <span className="shrink-0 text-xs text-[var(--text-muted)] tabular-nums">

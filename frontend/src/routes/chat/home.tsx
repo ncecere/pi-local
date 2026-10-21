@@ -12,6 +12,7 @@ import {
   useFileDrop,
 } from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
+import { ElicitationList } from '~/components/chat/elicitation-card';
 import { writeHandover } from '~/hooks/use-agent-thread';
 import {
   chattable,
@@ -21,6 +22,7 @@ import {
   useAgentThreads,
 } from '~/hooks/use-agents';
 import { useAttachments } from '~/hooks/use-attachments';
+import { usePendingElicitations } from '~/hooks/use-elicitations';
 import { useCurrentUser } from '~/hooks/use-session';
 import { useTeams } from '~/hooks/use-teams';
 import { agentKindLabel } from '~/lib/agent-groups';
@@ -109,6 +111,15 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   // it is ready by the time the first message is sent.
   const threads = useAgentThreads(agent?.id, Boolean(agent));
   const recent = threads.data?.slice(0, 5) ?? [];
+  // An MCP server's question for this agent that isn't part of a conversation is answered here.
+  const pendingQuestions = usePendingElicitations();
+  const questions = useMemo(
+    () =>
+      pendingQuestions.filter(
+        (elicitation) => elicitation.agentId === agent?.id && !elicitation.threadId,
+      ),
+    [pendingQuestions, agent?.id],
+  );
 
   const start = useCallback(
     async (text: string) => {
@@ -216,6 +227,8 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
               New agent
             </Link>
           </p>
+
+          <ElicitationList elicitations={questions} className="mt-7" />
 
           {agent && recent.length > 0 && (
             <div className="mt-9 hidden md:block">

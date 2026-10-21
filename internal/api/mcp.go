@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/mcp"
 )
 
@@ -23,6 +24,8 @@ func (a *API) mcpRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/mcp/servers/{slug}/login", a.mcpLogin)
 	m.HandleFunc("DELETE /api/mcp/servers/{slug}/login", a.cancelMCPLogin)
 	m.HandleFunc("GET /api/mcp/import", a.importSources)
+	m.HandleFunc("GET /api/elicitations", a.listElicitations)
+	m.HandleFunc("POST /api/elicitations/{id}", a.answerElicitation)
 	m.HandleFunc("POST /api/mcp/import", a.importMCP)
 }
 
@@ -164,6 +167,34 @@ func (a *API) revealMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	ok(w, map[string]string{"value": v})
+}
+
+// listElicitations: MCP servers' questions waiting for the person.
+func (a *API) listElicitations(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ok(w, a.Elicitations.Pending())
+}
+
+// answerElicitation: the person's answer, {action: accept|decline|cancel, content?}.
+func (a *API) answerElicitation(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Action  string         `json:"action"`
+		Content map[string]any `json:"content"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	e, err := a.Elicitations.Answer(r.PathValue("id"), in.Action, in.Content)
+	if err != nil {
+		var ee *elicitations.Error
+		if errors.As(err, &ee) {
+			fail(w, ee.Status, ee.Code, ee.Message)
+			return
+		}
+		fail(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	ok(w, e)
 }
 
 func (a *API) importSources(w http.ResponseWriter, r *http.Request) {

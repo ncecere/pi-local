@@ -23,6 +23,7 @@ import type {
 import { transport } from '~/api/transport';
 import { AGENTS_KEY, applyAgentEvent, threadsKey } from '~/hooks/use-agents';
 import { APPROVALS_KEY } from '~/hooks/use-approvals';
+import { applyElicitationData, ELICITATIONS_KEY } from '~/hooks/use-elicitations';
 import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
 import { MCP_LOGINS_KEY, MCP_SERVERS_KEY, putMcpLogin } from '~/hooks/use-mcp';
 import { SCHEDULES_KEY, scheduleRunsKey } from '~/hooks/use-schedules';
@@ -48,6 +49,10 @@ import { applyTeamEvent } from '~/lib/teams';
  * - `approval`: a tool call asks for approval, or its request was decided,
  *   timed out or cancelled. It updates the pending list (['approvals']) in place,
  *   so the sidebar's "Needs you" and the title's count follow at once.
+ * - `elicitation`: an MCP server asks the person something during a tool call,
+ *   or its question was answered, cancelled or expired. It updates the pending
+ *   list (['elicitations']) in place; a new one not on screen says so in a
+ *   toast with a way to it.
  * - `mcp`: an MCP server added, changed, tested, signed in or out, or deleted.
  *   It updates the catalog (['mcp', 'servers']) in place: an OAuth sign-in's
  *   outcome arrives this way.
@@ -99,6 +104,7 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY, exact: true });
       void queryClient.invalidateQueries({ queryKey: TEAMS_KEY });
       void queryClient.invalidateQueries({ queryKey: APPROVALS_KEY });
+      void queryClient.invalidateQueries({ queryKey: ELICITATIONS_KEY });
       void queryClient.invalidateQueries({ queryKey: MCP_SERVERS_KEY });
       void queryClient.invalidateQueries({ queryKey: MCP_LOGINS_KEY });
       void queryClient.invalidateQueries({ queryKey: SCHEDULES_KEY });
@@ -165,6 +171,35 @@ export function usePlatformEvents() {
       queryClient.setQueryData<Approval[]>(APPROVALS_KEY, (list) =>
         applyApprovalEvent(list, approval),
       );
+    });
+    source.on('elicitation', (data) => {
+      const applied = applyElicitationData(queryClient, data);
+      if (!applied) return;
+      const { elicitation } = applied;
+      // Answered (here or elsewhere), cancelled or expired: its toast has nothing to show.
+      if (elicitation.state !== 'pending') toast.dismiss(`elicitation-${elicitation.id}`);
+      if (!applied.isNew) return;
+      const { agentId, threadId } = elicitation;
+      // Its card is on screen already: no toast.
+      const path = threadId
+        ? `/agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(threadId)}`
+        : null;
+      if (path && window.location.pathname === path) return;
+      toast(`${elicitation.serverName} is asking you something`, {
+        id: `elicitation-${elicitation.id}`,
+        duration: 15_000,
+        description: elicitation.agentName,
+        action: {
+          label: 'Show',
+          onClick: () =>
+            void (threadId
+              ? latest.current.navigate({
+                  to: '/agents/$agentId/threads/$threadId',
+                  params: { agentId, threadId },
+                })
+              : latest.current.navigate({ to: '/', search: { agent: agentId } })),
+        },
+      });
     });
     source.on('mcp', (data) => {
       let event: McpEvent;

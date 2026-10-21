@@ -165,3 +165,89 @@ describe("OAuth MCP servers", () => {
 		expect(store.states.has("remote")).toBe(false);
 	}, 20_000);
 });
+
+describe("MCP elicitation (a server asks the person mid-call)", () => {
+	/** The app's relay (MCP_ELICIT_URL): records each question; `decide` answers it after `delayMs`. */
+	async function fakeApp(decide: (q: Record<string, unknown>) => { action: string; content?: Record<string, unknown> }, delayMs = 0) {
+		const { createServer } = await import("node:http");
+		const questions: Record<string, unknown>[] = [];
+		const answers = new Map<string, { at: number; answer: { action: string; content?: Record<string, unknown> } }>();
+		const withdrawn: string[] = [];
+		const server = createServer(async (req, res) => {
+			const send = (status: number, body: unknown) => {
+				res.writeHead(status, { "content-type": "application/json" });
+				res.end(JSON.stringify(body));
+			};
+			if (req.headers.authorization !== `Bearer ${KEY}`) return send(401, {});
+			const url = new URL(req.url ?? "/", "http://x");
+			const id = url.pathname.split("/")[3];
+			if (req.method === "POST") {
+				let raw = "";
+				for await (const chunk of req) raw += chunk;
+				const q = JSON.parse(raw);
+				questions.push(q);
+				const newId = `el_${questions.length}`;
+				answers.set(newId, { at: Date.now() + delayMs, answer: decide(q) });
+				return send(200, { data: { id: newId, expiresAt: Date.now() + 60_000 } });
+			}
+			if (req.method === "DELETE" && id) {
+				withdrawn.push(id);
+				return send(200, { data: { ok: true } });
+			}
+			const a = id ? answers.get(id) : undefined;
+			if (!a) return send(404, {});
+			const wait = Math.max(0, a.at - Date.now());
+			await new Promise((r) => setTimeout(r, Math.min(wait, 300)));
+			if (Date.now() < a.at) return send(200, { data: { done: false } });
+			return send(200, { data: { done: true, ...a.answer } });
+		});
+		await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+		cleanup.push(() => new Promise((r) => server.close(r)));
+		const address = server.address() as { port: number };
+		return { url: `http://127.0.0.1:${address.port}/mcp/elicitations`, questions, withdrawn };
+	}
+	const confirmTool = { name: "confirm", description: "Confirm", inputSchema: { type: "object", properties: { text: { type: "string" } } } };
+
+	it("relays the question to the app with the call's tool and thread, and gives the server the person's answer; the call's clock waits", async () => {
+		const dir = await tempAgentDir(cleanup);
+		// The person takes 1.5 s; the call's own limit is 0.5 s: only a paused clock lets this succeed.
+		const app = await fakeApp(() => ({ action: "accept", content: { send: true } }), 1500);
+		const server = stdioServer(dir, { env: { FIXTURE_ELICIT: "1" }, tools: [confirmTool] });
+		const env = { MCP_SERVERS: JSON.stringify([server]), MCP_ELICIT_URL: app.url, PLATFORM_KEY: KEY, MCP_CALL_TIMEOUT_MS: "500" };
+		const agent = await startTestAgent(undefined, { env });
+		cleanup.push(() => agent.close());
+		agent.model.reply(toolCall("mcp__fx__confirm", { text: "hello Mehdi" }), answer("done"));
+		await agent.send("t1", "send it");
+		const view = await agent.settled("t1");
+		const result = view.messages.find((m) => m.role === "tool");
+		expect(result?.isError).toBeFalsy();
+		expect(result?.text).toContain("sent: hello Mehdi");
+		expect(app.questions).toHaveLength(1);
+		expect(app.questions[0]).toMatchObject({ server: "fx", serverName: "Fixture", tool: "confirm", message: "Send this?\n\nText: hello Mehdi" });
+		expect(app.questions[0]!.requestedSchema).toMatchObject({ properties: { send: { type: "boolean" } }, required: ["send"] });
+	}, 20_000);
+
+	it("a declined question means the server does nothing", async () => {
+		const dir = await tempAgentDir(cleanup);
+		const app = await fakeApp(() => ({ action: "decline" }));
+		const server = stdioServer(dir, { env: { FIXTURE_ELICIT: "1" }, tools: [confirmTool] });
+		const agent = await startTestAgent(undefined, { env: { MCP_SERVERS: JSON.stringify([server]), MCP_ELICIT_URL: app.url, PLATFORM_KEY: KEY } });
+		cleanup.push(() => agent.close());
+		agent.model.reply(toolCall("mcp__fx__confirm", { text: "x" }), answer("ok"));
+		await agent.send("t1", "send it");
+		const result = (await agent.settled("t1")).messages.find((m) => m.role === "tool");
+		expect(result?.isError).toBe(true);
+		expect(result?.text).toContain("not sent (decline)");
+	}, 20_000);
+
+	it("without the app's relay the client doesn't claim it can ask (the server refuses, as before)", async () => {
+		const dir = await tempAgentDir(cleanup);
+		const server = stdioServer(dir, { env: { FIXTURE_ELICIT: "1" }, tools: [confirmTool] });
+		const agent = await startTestAgent(undefined, { env: { MCP_SERVERS: JSON.stringify([server]) } });
+		cleanup.push(() => agent.close());
+		agent.model.reply(toolCall("mcp__fx__confirm", { text: "x" }), answer("ok"));
+		await agent.send("t1", "send it");
+		const result = (await agent.settled("t1")).messages.find((m) => m.role === "tool");
+		expect(result?.text).toContain("this client can't ask the person");
+	}, 20_000);
+});

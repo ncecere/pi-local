@@ -21,6 +21,7 @@ import (
 
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/approvals"
+	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/models"
@@ -60,6 +61,8 @@ type API struct {
 	// Desktop is the desktop app's own settings (nil in the headless server).
 	Desktop Desktop
 	Updater *update.Updater
+	// Elicitations: MCP servers' questions to the person.
+	Elicitations *elicitations.Store
 	// SaveDialog asks where to save a file (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
 	SaveDialog func(defaultName string) (string, error)
 	// FolderDialog asks for a folder (the desktop app's native dialog); "" means cancelled. Nil: no dialog.

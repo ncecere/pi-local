@@ -355,3 +355,91 @@ func TestALocalServersSignInCommand(t *testing.T) {
 		t.Fatalf("cleared: %+v", list)
 	}
 }
+
+type elicitationJSON struct {
+	ID         string  `json:"id"`
+	AgentID    string  `json:"agentId"`
+	AgentName  string  `json:"agentName"`
+	ThreadID   *string `json:"threadId"`
+	Server     string  `json:"server"`
+	ServerName string  `json:"serverName"`
+	Tool       *string `json:"tool"`
+	Message    string  `json:"message"`
+	State      string  `json:"state"`
+}
+
+func TestAnMCPServerAsksThePersonMidCall(t *testing.T) {
+	h := start(t, t.TempDir(), Config{})
+	defer h.close()
+	node, _ := exec.LookPath("node")
+	h.mustDo("POST", "/api/mcp/servers", map[string]any{
+		"name": "Fixture", "transport": "stdio", "command": node, "args": []string{fixture("stdio-mcp-server.mjs")},
+		"env": map[string]string{"FIXTURE_ELICIT": "1"},
+	}, 201)
+	scripted(t, h)
+	agent := h.agentOn("Mailer", "script/s1", map[string]any{"mcp": []map[string]any{{"server": "fixture"}}})
+	events, cancel := h.app.Hub.Subscribe()
+	defer cancel()
+
+	ask := func(thread, text string) elicitationJSON {
+		h.mustDo("POST", "/api/agents/"+agent+"/threads/"+thread+"/messages", map[string]string{"text": `CALL:mcp__fixture__confirm:{"text":"` + text + `"}`, "requestId": "r-" + thread}, 202)
+		var found elicitationJSON
+		eventually(t, 30*time.Second, "the server's question", func() bool {
+			for _, e := range decodeInto[[]elicitationJSON](t, h.mustDo("GET", "/api/elicitations", nil, 200)) {
+				if e.ThreadID != nil && *e.ThreadID == thread {
+					found = e
+					return true
+				}
+			}
+			return false
+		})
+		return found
+	}
+
+	// Accepted: the server goes ahead, and the question is gone.
+	q := ask("t1", "hello Mehdi")
+	if q.AgentID != agent || q.AgentName != "Mailer" || q.Server != "fixture" || q.ServerName != "Fixture" || q.Tool == nil || *q.Tool != "confirm" || q.State != "pending" || !strings.Contains(q.Message, "Text: hello Mehdi") {
+		t.Fatalf("the question: %+v", q)
+	}
+	// The form is checked: a wrong type, an unknown field, a missing required one.
+	for _, bad := range []map[string]any{{"send": "yes"}, {"send": true, "other": 1}, {}} {
+		if code, body := h.do("POST", "/api/elicitations/"+q.ID, map[string]any{"action": "accept", "content": bad}); code != 400 || !strings.Contains(string(body), "invalid_content") {
+			t.Fatalf("content %v: %d %s", bad, code, body)
+		}
+	}
+	answered := decodeInto[elicitationJSON](t, h.mustDo("POST", "/api/elicitations/"+q.ID, map[string]any{"action": "accept", "content": map[string]any{"send": true}}, 200))
+	if answered.State != "accepted" {
+		t.Fatalf("answered: %+v", answered)
+	}
+	h.mustDo("POST", "/api/elicitations/"+q.ID, map[string]any{"action": "decline"}, 409)
+	if reply := lastReply(h.waitReply(agent, "t1")); !strings.Contains(reply, "sent: hello Mehdi") {
+		t.Fatalf("after accepting: %q", reply)
+	}
+	if left := decodeInto[[]elicitationJSON](t, h.mustDo("GET", "/api/elicitations", nil, 200)); len(left) != 0 {
+		t.Fatalf("still pending: %+v", left)
+	}
+	saw := false
+	for !saw {
+		select {
+		case ev := <-events:
+			saw = ev.Name == "elicitation"
+		case <-time.After(5 * time.Second):
+			t.Fatal("no elicitation event")
+		}
+	}
+
+	// Declined: the server does nothing.
+	q = ask("t2", "second")
+	h.mustDo("POST", "/api/elicitations/"+q.ID, map[string]any{"action": "decline"}, 200)
+	if reply := lastReply(h.waitReply(agent, "t2")); !strings.Contains(reply, "not sent (decline)") {
+		t.Fatalf("after declining: %q", reply)
+	}
+
+	// The agent goes to sleep with a question open: the question goes too (nobody is left to answer it).
+	q = ask("t3", "third")
+	h.mustDo("POST", "/api/agents/"+agent+"/sleep", nil, 200)
+	eventually(t, 20*time.Second, "the question to go", func() bool {
+		return len(decodeInto[[]elicitationJSON](t, h.mustDo("GET", "/api/elicitations", nil, 200))) == 0
+	})
+	h.mustDo("POST", "/api/elicitations/"+q.ID, map[string]any{"action": "accept", "content": map[string]any{"send": true}}, 409)
+}

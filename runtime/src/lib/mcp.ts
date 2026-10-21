@@ -54,6 +54,71 @@ export function threadFetch(base: McpFetch): McpFetch {
 	};
 }
 
+/** How long a tool call may take, not counting the time a person spends answering the server's question. */
+const CALL_TIMEOUT_MS = 120_000;
+
+/** What an MCP server asks the person mid-call (`elicitation/create`, form mode), as the app is told. */
+export type ElicitRequest = {
+	server: string;
+	serverName: string;
+	tool?: string;
+	threadId?: string;
+	message: string;
+	requestedSchema: unknown;
+};
+
+/** MCP's ElicitResult. */
+export type ElicitResult = { action: "accept" | "decline" | "cancel"; content?: Record<string, unknown> };
+
+/** Asks the person (through the app) and waits for the answer; `signal` aborts when the server or the call gives up. */
+export type Elicitor = (request: ElicitRequest, signal: AbortSignal) => Promise<ElicitResult>;
+
+/**
+ * The app's elicitation relay (MCP_ELICIT_URL): POST the question, then wait for the answer in long polls; DELETE it
+ * when the server or the call gives up first. Anything unexpected is "cancel": the server then does nothing.
+ */
+export function appElicitor(base: string, key: string, fetchImpl: typeof fetch = fetch): Elicitor {
+	const headers = { authorization: `Bearer ${key}`, "content-type": "application/json" };
+	return async (request, signal) => {
+		let id: string;
+		try {
+			const res = await fetchImpl(base, { method: "POST", headers, body: JSON.stringify(request), signal });
+			if (!res.ok) {
+				console.error(`[runtime] MCP ${request.server}: the app refused its question (status ${res.status})`);
+				return { action: "cancel" };
+			}
+			id = ((await res.json()) as { data: { id: string } }).data.id;
+		} catch (error) {
+			if (signal.aborted) throw error;
+			console.error(`[runtime] MCP ${request.server}: couldn't relay its question:`, (error as Error).message);
+			return { action: "cancel" };
+		}
+		const withdraw = () => void fetchImpl(`${base}/${encodeURIComponent(id)}`, { method: "DELETE", headers }).catch(() => {});
+		signal.addEventListener("abort", withdraw, { once: true });
+		try {
+			for (;;) {
+				const res = await fetchImpl(`${base}/${encodeURIComponent(id)}?wait=25`, { headers, signal });
+				if (res.status === 404) return { action: "cancel" };
+				if (!res.ok) throw new Error(`status ${res.status}`);
+				const data = ((await res.json()) as { data: { done: boolean; action?: ElicitResult["action"]; content?: Record<string, unknown> } }).data;
+				if (!data.done) continue;
+				const action = data.action === "accept" || data.action === "decline" ? data.action : "cancel";
+				return action === "accept" && data.content ? { action, content: data.content } : { action };
+			}
+		} catch (error) {
+			if (signal.aborted) throw error;
+			console.error(`[runtime] MCP ${request.server}: waiting for the answer failed:`, (error as Error).message);
+			withdraw();
+			return { action: "cancel" };
+		} finally {
+			signal.removeEventListener("abort", withdraw);
+		}
+	};
+}
+
+/** A tool call in progress on a connection: whose it is, and its clock (paused while a person answers). */
+type CallInFlight = { tool: string; thread: () => Promise<string | undefined>; pause(): void; resume(): void };
+
 /** Above this many MCP tools, they are deferred: the model finds them with tool_search. */
 const DEFER_ABOVE = 20;
 
@@ -189,17 +254,46 @@ function stderrLogger(slug: string): (chunk: string) => void {
 class Connection {
 	private client: Promise<McpClient> | undefined;
 	private readonly onStderr: (chunk: string) => void;
+	/** Calls in progress, newest last: a server's question belongs to one of them (stdio says no more than that). */
+	readonly calls: CallInFlight[] = [];
 	constructor(
 		private readonly server: McpServerConfig,
 		private readonly fetchImpl?: McpFetch,
 		private readonly oauthStore?: (slug: string) => McpOAuthStateStore | undefined,
+		private readonly elicit?: Elicitor,
 	) {
 		this.onStderr = stderrLogger(server.slug);
 	}
 
+	/** Relays a server's question to the person; every call's clock stops meanwhile. */
+	private async answer(params: unknown, signal: AbortSignal): Promise<ElicitResult> {
+		const p = (params ?? {}) as { mode?: string; message?: unknown; requestedSchema?: unknown };
+		// Only form mode is declared; a URL-mode request (or no relay) is cancelled, so the server does nothing.
+		if (!this.elicit || (p.mode !== undefined && p.mode !== "form") || typeof p.message !== "string") return { action: "cancel" };
+		const calls = [...this.calls];
+		const call = calls.at(-1);
+		for (const c of calls) c.pause();
+		try {
+			const threadId = await call?.thread().catch(() => undefined);
+			return await this.elicit(
+				{ server: this.server.slug, serverName: this.server.name, ...(call ? { tool: call.tool } : {}), ...(threadId ? { threadId } : {}), message: p.message, requestedSchema: p.requestedSchema ?? { type: "object", properties: {} } },
+				signal,
+			);
+		} finally {
+			for (const c of calls) c.resume();
+		}
+	}
+
 	get(): Promise<McpClient> {
 		this.client ??= (async () => {
-			const client = new McpClient({ name: "pi-local-agent", version: "1", requestTimeoutMs: 120_000 });
+			const client = new McpClient({
+				name: "pi-local-agent",
+				version: "1",
+				requestTimeoutMs: CALL_TIMEOUT_MS,
+				// The person can be asked (form mode): the app shows the server's question and sends the answer back.
+				...(this.elicit ? { capabilities: { elicitation: { form: {} } } } : {}),
+			});
+			if (this.elicit) client.setRequestHandler("elicitation/create", (params, { signal }) => this.answer(params, signal));
 			const fetch = this.fetchImpl ? (this.server.sendThread ? threadFetch(this.fetchImpl) : this.fetchImpl) : undefined;
 			const base = this.server.oauth ? this.oauthStore?.(this.server.slug) : undefined;
 			const store = base ? refreshOnlyStore(base) : undefined;
@@ -237,6 +331,7 @@ function toolsFor(
 	conn: Connection,
 	deferred: boolean,
 	threadOf?: ThreadOf,
+	callTimeoutMs: number = CALL_TIMEOUT_MS,
 ): ToolRegistration[] {
 	return tools.map((tool) =>
 		defineTool({
@@ -248,7 +343,29 @@ function toolsFor(
 				const client = await conn.get();
 				// The handshake above names no thread; the call does (the platform looks it up among this agent's threads).
 				const thread = server.sendThread ? await threadOf?.(api.conversationId as unknown as number) : undefined;
-				const call = () => client.callTool(tool.name, args as Record<string, unknown>, context.abortSignal ? { signal: context.abortSignal } : {});
+				// Its own clock (CALL_TIMEOUT_MS), stopped while the server waits for the person's answer.
+				const controller = new AbortController();
+				const onAbort = () => controller.abort(context.abortSignal?.reason);
+				context.abortSignal?.addEventListener("abort", onAbort, { once: true });
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				let timedOut = false;
+				const arm = () => {
+					clearTimeout(timer);
+					timer = setTimeout(() => {
+						timedOut = true;
+						controller.abort(new Error("timed out"));
+					}, callTimeoutMs);
+				};
+				const inFlight: CallInFlight = {
+					tool: tool.name,
+					thread: async () => thread ?? threadOf?.(api.conversationId as unknown as number),
+					pause: () => clearTimeout(timer),
+					resume: arm,
+				};
+				conn.calls.push(inFlight);
+				arm();
+				// pi-mcp's own limit is set far off: the clock above decides.
+				const call = () => client.callTool(tool.name, args as Record<string, unknown>, { signal: controller.signal, timeoutMs: 24 * 60 * 60_000 });
 				try {
 					const result = await (thread === undefined ? call() : callThread.run(thread, call));
 					return { output: toLlmContent(result), isError: result.isError === true };
@@ -256,7 +373,12 @@ function toolsFor(
 					await conn.close(); // a fresh session next time
 					// Signed out (or the tokens were revoked) while connected: say what to do, as a connect would.
 					if (error instanceof McpOAuthAuthorizationRequiredError) throw new McpSignInRequiredError(server);
+					if (timedOut) throw new Error(`${server.name} didn't answer ${tool.name} within ${Math.round(callTimeoutMs / 1000)} seconds.`);
 					throw error;
+				} finally {
+					clearTimeout(timer);
+					context.abortSignal?.removeEventListener("abort", onAbort);
+					conn.calls.splice(conn.calls.indexOf(inFlight), 1);
 				}
 			},
 		}),
@@ -275,6 +397,10 @@ export class AgentMcp {
 	private toolSearch: Extension | undefined;
 	/** The thread a conversation belongs to (set once the threads are known); the template's proxied tool calls name it. */
 	threadOf: ThreadOf = async () => undefined;
+	/** Relays the servers' questions to the person (MCP_ELICIT_URL), when the app offers it. */
+	private readonly elicit: Elicitor | undefined;
+	/** A tool call's own time limit (MCP_CALL_TIMEOUT_MS, for tests; CALL_TIMEOUT_MS otherwise). */
+	private readonly callTimeoutMs: number;
 
 	constructor(
 		private readonly env: Record<string, string | undefined>,
@@ -288,10 +414,13 @@ export class AgentMcp {
 		const oauthBase = env.MCP_OAUTH_URL;
 		const oauthKey = env.PLATFORM_KEY;
 		const oauthStore = oauthBase && oauthKey ? (slug: string) => appOAuthStore(oauthBase, oauthKey, slug, this.fetchImpl) : undefined;
+		const timeout = Number(env.MCP_CALL_TIMEOUT_MS);
+		this.callTimeoutMs = Number.isFinite(timeout) && timeout >= 100 ? timeout : CALL_TIMEOUT_MS;
+		this.elicit = env.MCP_ELICIT_URL && oauthKey ? appElicitor(env.MCP_ELICIT_URL, oauthKey, (input, init) => this.fetchImpl(input, init)) : undefined;
 		for (const server of servers) {
-			const conn = new Connection(server, (input, init) => this.fetchImpl(input, init), oauthStore);
+			const conn = new Connection(server, (input, init) => this.fetchImpl(input, init), oauthStore, this.elicit);
 			this.connections.push(conn);
-			tools.push(...toolsFor("mcp", server, server.tools ?? [], conn, deferred, (id) => this.threadOf(id)));
+			tools.push(...toolsFor("mcp", server, server.tools ?? [], conn, deferred, (id) => this.threadOf(id), this.callTimeoutMs));
 		}
 		if (tools.length > 0) this.extensions.push(defineExtension({ name: "mcp", tools }));
 		if (deferred) this.extensions.push(this.searchExtension());
@@ -362,7 +491,7 @@ export class AgentMcp {
 		const connections: Connection[] = [];
 		const listed: { server: McpServerConfig; conn: Connection; tools: NonNullable<McpServerConfig["tools"]> }[] = [];
 		for (const server of servers) {
-			const conn = new Connection(server);
+			const conn = new Connection(server, undefined, undefined, this.elicit);
 			connections.push(conn);
 			try {
 				const client = await conn.get();
@@ -375,7 +504,7 @@ export class AgentMcp {
 			}
 		}
 		const total = listed.reduce((n, l) => n + l.tools.length, 0);
-		const tools = listed.flatMap((l) => toolsFor("mcpc", l.server, l.tools, l.conn, total > DEFER_ABOVE));
+		const tools = listed.flatMap((l) => toolsFor("mcpc", l.server, l.tools, l.conn, total > DEFER_ABOVE, async () => threadId, this.callTimeoutMs));
 		const extension = defineExtension({ name: `mcp-thread:${threadId}`, tools });
 		this.install(extension);
 		this.threadExts.set(threadId, { key, extension, connections });
