@@ -234,7 +234,14 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		env.PLATFORM_GATEWAY_URL && env.PLATFORM_KEY
 			? new ThreadStatusReporter(harness, threads, gatewayPost(env.PLATFORM_GATEWAY_URL, env.PLATFORM_KEY))
 			: undefined;
-	void status?.sync().catch((error: unknown) => logError("thread sync:", (error as Error).message));
+	// Before the runtime says it is ready (at most 3 s): a sync arriving later could report a thread idle just after
+	// the platform marked it busy for a message on its way.
+	if (status) {
+		const synced = status.sync().catch((error: unknown) => logError("thread sync:", (error as Error).message));
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		await Promise.race([synced, new Promise<void>((resolve) => (timer = setTimeout(resolve, 3_000)))]);
+		clearTimeout(timer);
+	}
 	const { handler, touch } = createRuntimeServer({
 		harness,
 		threads,

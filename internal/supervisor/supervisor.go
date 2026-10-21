@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -133,9 +134,9 @@ type agentState struct {
 	status    Status     // guarded by Supervisor.mu
 	lastError string     // guarded by Supervisor.mu
 	failures  int        // consecutive crashes, for the restart backoff; guarded by Supervisor.mu
-	// stale: its configuration changed since the runtime was checked; the next call resolves it again (Wake).
-	// Guarded by Supervisor.mu.
-	stale bool
+	// gen counts configuration changes (Invalidate); checked is the newest one a finished wake has applied. While
+	// they differ, calls go through wake (and wait for a restart in progress). Guarded by Supervisor.mu.
+	gen, checked uint64
 }
 
 type proc struct {
@@ -154,6 +155,20 @@ type proc struct {
 	exitCode    int
 	stopping    bool // guarded by Supervisor.mu: an intended stop
 	log         *logFile
+	// inflight counts calls on their way to it; lastCall is when the last one began (unix ns). The reaper keeps a
+	// runtime awake meanwhile: a message it has accepted may not show in its status yet.
+	inflight atomic.Int64
+	lastCall atomic.Int64
+}
+
+// recentlyUsed reports whether the supervisor itself sent or started this runtime within idle, or a call is under way:
+// the runtime's own status can't show work it is only just receiving (a fresh runtime has no activity at all).
+func (p *proc) recentlyUsed(now time.Time, idle time.Duration) bool {
+	if p.inflight.Load() > 0 {
+		return true
+	}
+	last := max(p.started.UnixNano(), p.lastCall.Load())
+	return now.Sub(time.Unix(0, last)) < idle
 }
 
 func (p *proc) alive() bool {
@@ -284,7 +299,7 @@ func (s *Supervisor) Wake(ctx context.Context, id string) error {
 func (s *Supervisor) Invalidate(id string) {
 	st := s.state(id)
 	s.mu.Lock()
-	st.stale = true
+	st.gen++
 	s.mu.Unlock()
 }
 
@@ -294,7 +309,7 @@ func (s *Supervisor) running(id string) *proc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.agents[id]
-	if !ok || st.proc == nil || s.closed || st.stale {
+	if !ok || st.proc == nil || s.closed || st.gen != st.checked {
 		return nil
 	}
 	if p := st.proc; p.alive() && !p.stopping {
@@ -310,11 +325,18 @@ func (s *Supervisor) wake(ctx context.Context, id string) (*proc, error) {
 	s.mu.Lock()
 	closed := s.closed
 	current := st.proc
-	// Resolved from here on: a change after this point marks it stale again.
-	st.stale = false
+	gen := st.gen // the changes this wake applies; a later one makes the agent stale again
 	s.mu.Unlock()
 	if closed {
 		return nil, ErrClosed
+	}
+	applied := func(p *proc, err error) (*proc, error) {
+		if err == nil {
+			s.mu.Lock()
+			st.checked = max(st.checked, gen)
+			s.mu.Unlock()
+		}
+		return p, err
 	}
 	spec, err := s.opts.Resolve(ctx, id)
 	if err != nil {
@@ -327,7 +349,7 @@ func (s *Supervisor) wake(ctx context.Context, id string) (*proc, error) {
 	}
 	if current != nil && current.alive() {
 		if current.fingerprint == fingerprint(spec.Env) {
-			return current, nil
+			return applied(current, nil)
 		}
 		slog.Info("agent configuration changed; restarting its runtime", "agent", id, "revision", spec.Revision)
 		s.stopProc(st, current)
@@ -338,7 +360,7 @@ func (s *Supervisor) wake(ctx context.Context, id string) (*proc, error) {
 			return nil, &StartError{AgentID: id, Code: -1, Message: err.Error()}
 		}
 	}
-	return s.start(ctx, id, st, spec)
+	return applied(s.start(ctx, id, st, spec))
 }
 
 const readyPrefix = "PI_RUNTIME_READY "
@@ -685,7 +707,10 @@ func (s *Supervisor) Call(ctx context.Context, id, method, pathAndQuery string, 
 			}
 		}
 		req.Header.Set("Authorization", "Bearer "+p.token)
+		p.inflight.Add(1)
+		p.lastCall.Store(time.Now().UnixNano())
 		resp, err := s.client.Do(req)
+		p.inflight.Add(-1)
 		if err == nil {
 			return resp, nil
 		}
@@ -810,7 +835,7 @@ func (s *Supervisor) ReapOnce(ctx context.Context) {
 		s.mu.Lock()
 		p := st.proc
 		s.mu.Unlock()
-		if p == nil || !p.alive() {
+		if p == nil || !p.alive() || p.recentlyUsed(time.Now(), s.opts.IdleTimeout) {
 			continue
 		}
 		status, err := s.readStatus(ctx, p)
@@ -836,6 +861,10 @@ func (s *Supervisor) ReapOnce(ctx context.Context) {
 		same := st.proc == p
 		s.mu.Unlock()
 		if same && p.alive() {
+			if p.recentlyUsed(time.Now(), s.opts.IdleTimeout) {
+				st.lock.Unlock()
+				continue
+			}
 			if again, err := s.readStatus(ctx, p); err == nil && judge(again, time.Now(), s.opts.IdleTimeout, s.opts.BackgroundMax) == keepAwake {
 				st.lock.Unlock()
 				continue

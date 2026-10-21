@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -63,6 +64,29 @@ type Index struct {
 	now      func() time.Time
 	// NameOf names an agent (for CalledBy); set by the app.
 	NameOf func(agentID string) string
+
+	// sending counts messages on their way to a thread's runtime (Sending … Sent). Meanwhile a sync or report saying
+	// the thread is idle is about the time before the message arrived, so it doesn't clear busy.
+	sendMu  sync.Mutex
+	sending map[string]int
+}
+
+func sendKey(agentID, threadID string) string { return agentID + "\x00" + threadID }
+
+func (x *Index) inFlight(agentID, threadID string) bool {
+	x.sendMu.Lock()
+	defer x.sendMu.Unlock()
+	return x.sending[sendKey(agentID, threadID)] > 0
+}
+
+// Sent says a message Sending announced has reached the runtime, or failed to.
+func (x *Index) Sent(agentID, threadID string) {
+	x.sendMu.Lock()
+	defer x.sendMu.Unlock()
+	k := sendKey(agentID, threadID)
+	if x.sending[k]--; x.sending[k] <= 0 {
+		delete(x.sending, k)
+	}
 }
 
 // youngRecord: a sync doesn't remove a record the app wrote this recently (its first message may not have reached
@@ -74,7 +98,7 @@ func NewIndex(db *sql.DB, onChange func(Change)) *Index {
 	if onChange == nil {
 		onChange = func(Change) {}
 	}
-	return &Index{db: db, onChange: onChange, now: time.Now}
+	return &Index{db: db, onChange: onChange, now: time.Now, sending: map[string]int{}}
 }
 
 const columns = `thread_id, COALESCE(title_override, title), created_at, updated_at, busy, last_reply_at, last_error, called_by_agent, called_by_thread`
@@ -157,7 +181,11 @@ func TitleFrom(text string) string {
 // Sending records that a message is on its way to a thread: the thread is busy from now. The record is made when the
 // thread is new (created reports whether it was, so a refused first message can take it away again).
 // calledBy, when an agent asks, is recorded on a new thread.
+// Every call must be followed by Sent once the message reached the runtime (or failed to).
 func (x *Index) Sending(ctx context.Context, agentID, threadID, text string, calledBy *CalledBy) (created bool, err error) {
+	x.sendMu.Lock()
+	x.sending[sendKey(agentID, threadID)]++
+	x.sendMu.Unlock()
 	now := x.now().UnixMilli()
 	var byAgent, byThread any
 	if calledBy != nil {
@@ -167,12 +195,14 @@ func (x *Index) Sending(ctx context.Context, agentID, threadID, text string, cal
 		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?) ON CONFLICT (agent_id, thread_id) DO NOTHING`,
 		agentID, threadID, TitleFrom(text), now, now, now, now, byAgent, byThread)
 	if err != nil {
+		x.Sent(agentID, threadID)
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	created = n == 1
 	if !created {
 		if _, err := x.db.ExecContext(ctx, `UPDATE threads SET busy = 1, updated_at = ? WHERE agent_id = ? AND thread_id = ?`, now, agentID, threadID); err != nil {
+			x.Sent(agentID, threadID)
 			return false, err
 		}
 	}
@@ -223,7 +253,7 @@ func (x *Index) apply(ctx context.Context, tx *sql.Tx, agentID string, s Status,
 	}
 	title := TitleFrom(s.Title)
 	busy := 0
-	if s.Busy {
+	if s.Busy || x.inFlight(agentID, s.ThreadID) {
 		busy = 1
 	}
 	// Its last activity: a report is about now (a reply ended or began), and so is a sync of a busy thread; a sync of an

@@ -34,6 +34,7 @@ func TestALateReportNeverBringsBackADeletedThread(t *testing.T) {
 	if _, err := x.Sending(ctx, "ag_a", "t1", "hello", nil); err != nil {
 		t.Fatal(err)
 	}
+	x.Sent("ag_a", "t1")
 	if err := x.Delete(ctx, "ag_a", "t1"); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +51,7 @@ func TestTheNewestReportWins(t *testing.T) {
 	ctx := context.Background()
 	x, _, now := newIndex(t)
 	x.Sending(ctx, "ag_a", "t1", "hello", nil)
+	x.Sent("ag_a", "t1")
 	done := ms(*now) + 500
 	x.Report(ctx, "ag_a", Status{ThreadID: "t1", Title: "hello", Busy: false, LastReplyAt: &done, At: ms(*now) + 500})
 	// An older report arriving late (busy, from before the reply ended) changes nothing.
@@ -65,8 +67,10 @@ func TestSyncAdoptsAndRemovesButSparesYoungRecords(t *testing.T) {
 	x, changes, now := newIndex(t)
 	// An old record the runtime no longer has, and a young one whose first message may not have arrived yet.
 	x.Sending(ctx, "ag_a", "old", "old thread", nil)
+	x.Sent("ag_a", "old")
 	*now = now.Add(10 * time.Minute)
 	x.Sending(ctx, "ag_a", "young", "on its way", nil)
+	x.Sent("ag_a", "young")
 	*changes = nil
 	at := ms(*now) + 1
 	err := x.Sync(ctx, "ag_a", []Status{{ThreadID: "fromRuntime", Title: "Made by a tool\nsecond line", CreatedAt: ms(*now) - 5000, Busy: true, At: at}}, at)
@@ -101,6 +105,7 @@ func TestRenameOutlivesTheRuntimesTitle(t *testing.T) {
 	ctx := context.Background()
 	x, _, now := newIndex(t)
 	x.Sending(ctx, "ag_a", "t1", "first message", nil)
+	x.Sent("ag_a", "t1")
 	if _, err := x.Rename(ctx, "ag_a", "t1", "My name"); err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +136,7 @@ func TestWakingDoesNotMakeOldConversationsLookNew(t *testing.T) {
 	ctx := context.Background()
 	x, _, now := newIndex(t)
 	x.Sending(ctx, "ag_a", "old", "research cats", nil)
+	x.Sent("ag_a", "old")
 	replied := ms(*now) + 1_000
 	x.Report(ctx, "ag_a", Status{ThreadID: "old", Title: "research cats", LastReplyAt: &replied, At: replied})
 	before, _ := x.Get(ctx, "ag_a", "old")
@@ -149,5 +155,28 @@ func TestWakingDoesNotMakeOldConversationsLookNew(t *testing.T) {
 	// A conversation busy at the sync is active now.
 	if busy, _ := x.Get(ctx, "ag_a", "busy"); busy.UpdatedAt != later {
 		t.Fatalf("a busy conversation's activity: %v", busy.UpdatedAt)
+	}
+}
+
+func TestASyncCantClearBusyWhileAMessageIsOnItsWay(t *testing.T) {
+	ctx := context.Background()
+	x, _, now := newIndex(t)
+	x.Sending(ctx, "ag_a", "t1", "first", nil)
+	x.Sent("ag_a", "t1")
+	replied := ms(*now) + 100
+	x.Report(ctx, "ag_a", Status{ThreadID: "t1", Title: "first", LastReplyAt: &replied, At: replied})
+
+	// A second message: the runtime restarts for it and syncs before the message reaches it (idle, newer).
+	x.Sending(ctx, "ag_a", "t1", "second", nil)
+	x.Sync(ctx, "ag_a", []Status{{ThreadID: "t1", Title: "first", CreatedAt: ms(*now), LastReplyAt: &replied, At: ms(*now) + 5_000}}, ms(*now)+5_000)
+	if got, _ := x.Get(ctx, "ag_a", "t1"); !got.Busy {
+		t.Fatal("a sync from before the message arrived cleared busy")
+	}
+	// Once it has arrived, the runtime's word counts again.
+	x.Sent("ag_a", "t1")
+	done := ms(*now) + 9_000
+	x.Report(ctx, "ag_a", Status{ThreadID: "t1", Title: "first", LastReplyAt: &done, At: done})
+	if got, _ := x.Get(ctx, "ag_a", "t1"); got.Busy {
+		t.Fatal("the reply's end should clear busy")
 	}
 }

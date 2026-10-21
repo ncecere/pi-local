@@ -422,14 +422,18 @@ func (b *Broker) work(id string) {
 	// The message, as the asking agent (idempotent: a resumed ask sends it again with the same request ID).
 	callerName := b.agents.NameOf(a.caller)
 	b.agents.Touch(ctx, a.target)
+	sent := func() {}
 	if _, err := b.index.Sending(ctx, a.target, a.targetThread, a.message, &threads.CalledBy{AgentID: a.caller, ThreadID: a.callerThread}); err != nil {
 		slog.Warn("recording an asked thread", "ask", id, "err", err)
+	} else {
+		sent = func() { b.index.Sent(a.target, a.targetThread) }
 	}
 	body, _ := json.Marshal(map[string]any{
 		"text": a.message, "requestId": strings.ReplaceAll(id, "_", "-"), "announceAuthor": true,
 		"author": map[string]string{"kind": "agent", "id": a.caller, "name": callerName},
 	})
 	resp, err := b.runtimes.Call(ctx, a.target, http.MethodPost, "/threads/"+a.targetThread+"/messages", body, http.Header{"Content-Type": {"application/json"}})
+	sent()
 	if err != nil {
 		if ctx.Err() == nil {
 			b.finish(id, "failed", "", fmt.Sprintf("%s could not be reached: %v", b.agents.NameOf(a.target), err))

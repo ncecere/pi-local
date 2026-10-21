@@ -692,6 +692,7 @@ func (s *Store) send(ctx context.Context, sc *Schedule, thread, runID string) er
 	if _, err := s.index.Sending(ctx, sc.AgentID, thread, sc.Message, nil); err != nil {
 		return err
 	}
+	defer s.index.Sent(sc.AgentID, thread)
 	body, _ := json.Marshal(map[string]any{
 		"text": sc.Message, "requestId": strings.ReplaceAll(runID, "_", "-"), "announceAuthor": true,
 		"author": map[string]string{"kind": "trigger", "id": sc.ID, "name": sc.Name},

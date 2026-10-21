@@ -704,6 +704,7 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 		fail(w, http.StatusInternalServerError, "internal", "could not record the conversation")
 		return
 	}
+	defer a.Threads.Sent(ag.ID, t)
 	a.Agents.Touch(r.Context(), ag.ID)
 	resp, err := a.Runtimes.Call(r.Context(), ag.ID, http.MethodPost, "/threads/"+t+"/messages", body, http.Header{"Content-Type": {"application/json"}})
 	if err != nil {
