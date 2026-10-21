@@ -61,6 +61,7 @@ func TestExecAuthorityFDDiagnosticInjected(t *testing.T) {
 	}{
 		{"initial", "stage=initial fd=3 F_GETFD=0 type=020000 fstat=0", record(0x3144464145, 1, 3, 0, 0020000, 0)},
 		{"above-limit", "stage=proc-self-fd fd=100 F_GETFD=0 type=020000 fstat=0", record(0x3144464145, 2, 100, 0, 0020000, 0)},
+		{"ambient-pipe", "stage=initial fd=142 F_GETFD=0 type=010000 fstat=0", record(0x3144464145, 1, 142, 0, 0010000, 0)},
 		{"stat-failure", "stage=initial fd=4 F_GETFD=1 type=0 fstat=-9", record(0x3144464145, 1, 4, 1, 0, ^uint64(8))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

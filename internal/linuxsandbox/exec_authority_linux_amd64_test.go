@@ -20,12 +20,17 @@ import (
 // of bwrap admission, so fixture-only detector controls can run on native Linux.
 func buildExecAuthorityProbe(t *testing.T, payload string, fdDiagnostics bool) {
 	t.Helper()
+	buildExecAuthorityFixture(t, payload, "testdata/exec_authority_probe.c", fdDiagnostics)
+}
+
+func buildExecAuthorityFixture(t *testing.T, payload, source string, fdDiagnostics bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	args := []string{"-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
 		"-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pie", "-no-pie",
 		"-nostdlib", "-static", "-Wl,-e,_start", "-Wl,--build-id=none",
-		"-o", payload, "testdata/exec_authority_probe.c"}
+		"-o", payload, source}
 	if fdDiagnostics {
 		args = append(args, "-DEXEC_AUTHORITY_FD_DIAGNOSTICS=1")
 	}
@@ -61,78 +66,92 @@ func buildExecAuthorityProbe(t *testing.T, payload string, fdDiagnostics bool) {
 	}
 }
 
-// These standalone controls never inspect PID 1. Only own synthetic descriptors
-// are inspected. All native PID-1 memory probes retain namespace preconditions.
+// These standalone controls never inspect PID 1. The separate disposable
+// launcher prepares DEFINED INPUTS, not confinement. The raw detector is unchanged;
+// the PID-1/native candidate below NEVER uses this launcher.
 func TestExecAuthorityDetectorControls(t *testing.T) {
 	if os.Getenv("PI_LOCAL_SANDBOX_NATIVE_TESTS") != "1" {
 		t.Skip("native raw-syscall detector controls not opted in")
 	}
-	payload := filepath.Join(t.TempDir(), "exec-authority-probe")
+	dir := t.TempDir()
+	payload, launcher := filepath.Join(dir, "exec-authority-probe"), filepath.Join(dir, "control-input-launcher")
 	buildExecAuthorityProbe(t, payload, true)
+	buildExecAuthorityFixture(t, launcher, "testdata/exec_authority_control_launcher.c", false)
+
+	// Observation only: do not assume every host is dirty or FD142 is stable.
+	// Snapshot BEFORE direct exec; only numeric metadata is retained/logged.
+	t.Run("unprepared-input-observation", func(t *testing.T) {
+		before := snapshotExecAuthorityParentFDs(t)
+		code, output := runExecAuthorityControl(t, payload, nil, nil)
+		switch code {
+		case 12:
+			d, err := decodeExecAuthorityFDDiagnostic(output)
+			if err != nil {
+				t.Fatal("unprepared rejection lacks bounded FD diagnostic")
+			}
+			t.Logf("unprepared observation (NOT confinement evidence): %s", d.summary(nil))
+			if parent, ok := before[d.fd]; ok {
+				t.Logf("parent-before-launch fd=%d present=1 F_GETFD=%d type=%#o", d.fd, parent.flags, parent.fileType)
+			} else {
+				t.Logf("parent-before-launch fd=%d present=0", d.fd)
+			}
+		case 14:
+			if len(output) != 0 {
+				t.Fatal("unprepared clean observation produced unexpected output")
+			}
+			t.Log("unprepared observation: no inherited FD detected; NOT confinement evidence")
+		default:
+			t.Fatalf("unprepared observation: unexpected assertion %d", code)
+		}
+	})
+
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal("synthetic null input unavailable")
+	}
+	defer null.Close()
+	pipe, pipeWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal("synthetic pipe input unavailable")
+	}
+	defer pipe.Close()
+	defer pipeWriter.Close()
+	checkExecAuthorityParentInputs(t, null, pipe, pipeWriter)
+	// Direct exec remains unprepared and MUST reject injected pipe authority,
+	// even on hosts with no ambient leak. No launcher or expectation relaxation.
+	t.Run("unprepared-synthetic-pipe-rejected", func(t *testing.T) {
+		code, output := runExecAuthorityControl(t, payload, nil, []*os.File{pipe})
+		checkExecAuthorityControl(t, code, output, 12, 1, 3, 0010000)
+	})
+
 	for _, control := range []struct {
-		name, arg string
-		inherited bool
-		want      int
+		name, mode, arg string
+		files           []*os.File
+		want            int
+		stage, fd, kind uint64
 	}{
-		{"no-inherited-fd", "", false, 14},
-		{"low-inherited-fd", "", true, 12},
-		{"high-fd-above-both-lowered-limits", "--high-fd-control", false, 12},
-		{"known-stdio-only", "--self-stdio-control", false, 0},
-		{"each-stdio-role-required", "--self-missing-stdio-control", false, 54},
-		{"extra-synthetic-pipe", "--self-pipe-control", false, 49},
-		{"extra-synthetic-eventfd", "--self-eventfd-control", false, 49},
+		{"no-inherited-fd", "none", "", nil, 14, 0, 0, 0},
+		{"unrequested-input-fds-not-preserved", "none", "", []*os.File{null, pipe}, 14, 0, 0, 0},
+		{"low-inherited-fd", "keep-fd3", "", []*os.File{null}, 12, 1, 3, 0020000},
+		{"new-pipe-after-preparation", "new-pipe-fd3", "", nil, 12, 1, 3, 0010000},
+		{"high-fd-above-both-lowered-limits", "none", "--high-fd-control", nil, 12, 2, 100, 0020000},
+		{"known-stdio-only", "none", "--self-stdio-control", nil, 0, 0, 0, 0},
+		{"each-stdio-role-required", "none", "--self-missing-stdio-control", nil, 54, 0, 0, 0},
+		{"extra-synthetic-pipe", "none", "--self-pipe-control", nil, 49, 0, 0, 0},
+		{"extra-synthetic-eventfd", "none", "--self-eventfd-control", nil, 49, 0, 0, 0},
 	} {
 		t.Run(control.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			var args []string
+			args := []string{control.mode, payload}
 			if control.arg != "" {
 				args = append(args, control.arg)
 			}
-			cmd := exec.CommandContext(ctx, payload, args...)
-			// Explicit supplied authority: null stdin/stderr, one stdout pipe.
-			var stdout bytes.Buffer
-			cmd.Stdout = &stdout
-			if control.inherited {
-				file, err := os.Open(os.DevNull)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer file.Close()
-				cmd.ExtraFiles = []*os.File{file}
-			}
-			err := cmd.Run()
-			code := 0
-			if err != nil {
-				exit, ok := err.(*exec.ExitError)
-				if !ok {
-					t.Fatalf("control execution failed: %v", err)
-				}
-				code = exit.ExitCode()
-			}
-			diagnostic, diagnosticErr := decodeExecAuthorityFDDiagnostic(stdout.Bytes())
-			if code != control.want {
-				// Never dump arbitrary subprocess output, even on decode failure.
-				t.Fatalf("same detector: got assertion %d (%s), want %d; %s",
-					code, execAuthorityAssertion(code), control.want, diagnostic.summary(diagnosticErr))
-			}
-			if code == 12 {
-				if diagnosticErr != nil {
-					t.Fatal("inherited-FD rejection lacks valid bounded diagnostic")
-				}
-				stage, fd := uint64(1), uint64(3)
-				if control.arg == "--high-fd-control" {
-					stage, fd = 2, 100
-				}
-				if diagnostic.stage != stage || diagnostic.fd != fd || diagnostic.flags != 0 ||
-					diagnostic.fileType != 0020000 || diagnostic.statResult != 0 {
-					t.Fatalf("negative control did not reach its intended detector path: %s", diagnostic.summary(nil))
-				}
-			} else if stdout.Len() != 0 {
-				t.Fatal("standalone control produced unexpected output")
-			}
+			code, output := runExecAuthorityControl(t, launcher, args, control.files)
+			checkExecAuthorityControl(t, code, output, control.want, control.stage, control.fd, control.kind)
 		})
 	}
+	checkExecAuthorityLauncherArguments(t, launcher, payload, null, pipe)
+	// Child preparation must not clear CLOEXEC in the Go test parent's table.
+	checkExecAuthorityParentInputs(t, null, pipe, pipeWriter)
 }
 
 // A shell/Go target cannot establish the exec-entry FD invariant: startup may
