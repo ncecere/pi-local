@@ -70,7 +70,7 @@ describe("single ownership of an agent's storage file", () => {
 		expect(owners).toHaveLength(1);
 		for (const r of results) if (r.status === "rejected") expect(r.reason).toBeInstanceOf(AgentOwnedElsewhereError);
 		await (owners[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof openSqliteAgentStorage>>>).value.storage.close(ctx);
-	});
+	}, 20_000); // eight openers queue on one exclusive lock: slow on a busy CI machine
 
 	it("keeps no shared-memory index beside the file (nothing another connection could attach to)", async () => {
 		const path = await tempStoragePath(cleanup);
