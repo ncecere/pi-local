@@ -27,6 +27,7 @@ import { AGENTS_KEY, applyAgentEvent, threadsKey } from '~/hooks/use-agents';
 import { APPROVALS_KEY } from '~/hooks/use-approvals';
 import { BACKUPS_KEY } from '~/hooks/use-backups';
 import { BUDGETS_KEY } from '~/hooks/use-budgets';
+import { CONNECTIONS_KEY } from '~/hooks/use-connections';
 import { applyElicitationData, ELICITATIONS_KEY } from '~/hooks/use-elicitations';
 import { useInboxActions, useInboxStore } from '~/hooks/use-inbox';
 import { MCP_LOGINS_KEY, MCP_SERVERS_KEY, putMcpLogin } from '~/hooks/use-mcp';
@@ -122,6 +123,7 @@ export function usePlatformEvents() {
       void queryClient.invalidateQueries({ queryKey: APPROVALS_KEY });
       void queryClient.invalidateQueries({ queryKey: ELICITATIONS_KEY });
       void queryClient.invalidateQueries({ queryKey: MCP_SERVERS_KEY });
+      void queryClient.invalidateQueries({ queryKey: CONNECTIONS_KEY });
       void queryClient.invalidateQueries({ queryKey: MCP_LOGINS_KEY });
       void queryClient.invalidateQueries({ queryKey: SCHEDULES_KEY });
       void queryClient.invalidateQueries({ queryKey: UPDATE_KEY });
@@ -143,6 +145,7 @@ export function usePlatformEvents() {
     });
     source.on('resync', readListsAgain);
     source.on('agent', (data) => {
+      void queryClient.invalidateQueries({ queryKey: CONNECTIONS_KEY });
       let event: AgentEvent;
       try {
         event = JSON.parse(data) as AgentEvent;
@@ -252,6 +255,9 @@ export function usePlatformEvents() {
       showBudgetToast(event, () => void latest.current.navigate({ to: '/settings/usage' }));
     });
     source.on('mcp', (data) => {
+      void queryClient.invalidateQueries({ queryKey: CONNECTIONS_KEY });
+      void queryClient.invalidateQueries({ queryKey: ['templates'] });
+      void queryClient.invalidateQueries({ queryKey: ['agents', 'catalog'] });
       let event: McpEvent;
       try {
         event = JSON.parse(data) as McpEvent;

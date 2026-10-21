@@ -7,6 +7,9 @@
 if (process.argv[2] === "version") {
 	const { CONTRACT_VERSION, PI_DURABLE_VERSION } = await import("./lib/version.ts");
 	console.log(JSON.stringify({ contractVersion: CONTRACT_VERSION, piDurableVersion: PI_DURABLE_VERSION }));
+} else if (process.argv[2] === "apple-mcp") {
+	const { runAppleMcp } = await import("./lib/apple-mcp.ts");
+	await runAppleMcp(process.argv[3]);
 } else if (process.argv[2] === "mcp-probe") {
 	const { runMcpProbe } = await import("./lib/probe.ts");
 	await runMcpProbe();

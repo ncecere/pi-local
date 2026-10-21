@@ -110,6 +110,8 @@ var ErrNotFound = &Error{Status: http.StatusNotFound, Code: "not_found", Message
 
 // Catalog keeps the servers.
 type Catalog struct {
+	// Presets optionally supplies an isolated catalog (tests); nil uses the shipped presets.
+	Presets func() []Preset
 	db      *sql.DB
 	secrets secrets.Store
 	// UsedBy lists the agents using a server (set by the app).

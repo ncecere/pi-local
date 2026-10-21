@@ -89,7 +89,7 @@ export function SettingsAgentDetailPage({
   const tabs: { id: TabId; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'tools', label: 'Tools' },
-    { id: 'mcp', label: 'MCP' },
+    { id: 'mcp', label: 'Connections' },
     { id: 'skills', label: 'Skills' },
     ...(hasKindSettings(agent.agentKind)
       ? [{ id: 'kind' as const, label: `${agentKindLabel(agent)} settings` }]

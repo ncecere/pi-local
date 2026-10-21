@@ -85,12 +85,15 @@ function McpForm({
   return (
     <div className="flex flex-col gap-4">
       <Panel
-        title="MCP servers"
+        title="Connected apps and custom servers"
         description={
           <>
-            Which servers from{' '}
-            <Link to="/settings/mcp" className="text-[var(--accent-bright)] hover:underline">
-              Settings → MCP
+            Which apps from{' '}
+            <Link
+              to="/settings/connections"
+              className="text-[var(--accent-bright)] hover:underline"
+            >
+              Connections
             </Link>{' '}
             {agent.name} uses: each with all its tools, or the ones you pick.
           </>
@@ -98,9 +101,12 @@ function McpForm({
       >
         {servers.length === 0 && unknown.length === 0 ? (
           <p className="text-sm text-[var(--text-muted)]">
-            There are no MCP servers yet. Add some in{' '}
-            <Link to="/settings/mcp" className="text-[var(--accent-bright)] hover:underline">
-              Settings → MCP
+            There are no connections yet. Add some in{' '}
+            <Link
+              to="/settings/connections"
+              className="text-[var(--accent-bright)] hover:underline"
+            >
+              Connections
             </Link>
             .
           </p>

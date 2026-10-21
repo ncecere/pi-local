@@ -680,6 +680,10 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 	var tmpl *templates.Template
 	if in.TemplateID != nil && a.Templates != nil {
 		if t, err := a.Templates.Get(*in.TemplateID); err == nil {
+			if !a.templateAvailable(t) {
+				fail(w, http.StatusConflict, "connection_required", "Connect Apple Calendar and test its calendar tool before using Meeting helper.")
+				return
+			}
 			tmpl = t
 			t.Apply(&cfg)
 			in.TemplateID = nil
