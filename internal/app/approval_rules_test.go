@@ -148,7 +148,8 @@ func TestDenyRulesAskRulesAndBuiltInRules(t *testing.T) {
 func TestProfiles(t *testing.T) {
 	h := start(t, t.TempDir(), Config{})
 	scripted(t, h)
-	tools := map[string]any{"tools": []string{"read", "write", "edit", "bash"}}
+	// Without the sandbox (a sandboxed shell stops asking under balanced: sandbox_test.go).
+	tools := map[string]any{"tools": []string{"read", "write", "edit", "bash"}, "sandbox": false}
 
 	// A new agent is balanced.
 	made := h.agentOn("Fresh", "script/s1", map[string]any{"workspace": tools})
@@ -212,7 +213,7 @@ func TestAlwaysAllowAddsARuleThatIsListedAndRemoved(t *testing.T) {
 	dir := t.TempDir()
 	h := start(t, dir, Config{})
 	scripted(t, h)
-	agent := h.agentOn("Worker", "script/s1", map[string]any{"workspace": map[string]any{"tools": []string{"read", "bash"}}})
+	agent := h.agentOn("Worker", "script/s1", map[string]any{"workspace": map[string]any{"tools": []string{"read", "bash"}, "sandbox": false}})
 
 	req, _ := h.run(agent, "t1", "echo one")
 	if req == nil {

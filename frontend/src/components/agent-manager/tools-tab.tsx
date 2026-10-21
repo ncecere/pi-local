@@ -13,6 +13,7 @@ import {
 } from '~/api/client';
 import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
 import { ProjectFolderInput } from '~/components/agent-manager/project-folder-field';
+import { SandboxPanel } from '~/components/agent-manager/sandbox-panel';
 import { ErrorNotice, FIELD } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
 import { Switch } from '~/components/ui/switch';
@@ -47,25 +48,32 @@ import { formatToolList, parseToolList } from '~/lib/kind-settings';
 import { approvalSuggestions, readAgentMcp } from '~/lib/mcp';
 import { cn } from '~/lib/utils';
 
-const TOOL_TEXT: Record<WorkspaceTool, { label: string; hint: ReactNode }> = {
-  read: {
-    label: 'Read files',
-    hint: 'Open files in its workspace, including files you attach to a message.',
-  },
-  write: { label: 'Write files', hint: 'Create files in its workspace, or replace their content.' },
-  edit: { label: 'Edit files', hint: 'Change parts of files in its workspace.' },
-  bash: {
-    label: 'Run commands',
-    hint: (
-      <>
-        Run shell commands in its workspace.{' '}
-        <strong className="font-medium text-[var(--text-secondary)]">
-          Not confined: a command can reach anything you can.
-        </strong>
-      </>
-    ),
-  },
-};
+const TOOL_TEXT: Record<WorkspaceTool, { label: string; hint: (sandboxed: boolean) => ReactNode }> =
+  {
+    read: {
+      label: 'Read files',
+      hint: () => 'Open files in its workspace, including files you attach to a message.',
+    },
+    write: {
+      label: 'Write files',
+      hint: () => 'Create files in its workspace, or replace their content.',
+    },
+    edit: { label: 'Edit files', hint: () => 'Change parts of files in its workspace.' },
+    bash: {
+      label: 'Run commands',
+      hint: (sandboxed) =>
+        sandboxed ? (
+          'Run shell commands in its workspace, in the sandbox below.'
+        ) : (
+          <>
+            Run shell commands in its workspace.{' '}
+            <strong className="font-medium text-[var(--text-secondary)]">
+              Not confined: a command can reach anything you can.
+            </strong>
+          </>
+        ),
+    },
+  };
 
 /**
  * Whether turning a tool on should choose the recommended "Ask first" for the
@@ -298,7 +306,7 @@ function ToolsForm({
                     </span>
                   </label>
                   <p id={`${inputId}-hint`} className="mt-0.5 text-xs text-[var(--text-muted)]">
-                    {TOOL_TEXT[tool].hint}
+                    {TOOL_TEXT[tool].hint(agent.workspace?.sandbox === true)}
                   </p>
                 </div>
               </div>
@@ -311,6 +319,8 @@ function ToolsForm({
           </div>
         )}
       </Panel>
+
+      <SandboxPanel agent={agent} disabled={dirty} />
 
       <WebPanel agent={agent} />
 
@@ -436,7 +446,9 @@ function ToolsForm({
               />
               <p>
                 {unguarded.includes('bash')
-                  ? 'It can run commands without asking you, and a command can reach anything you can: your files, your accounts, the network.'
+                  ? agent.workspace?.sandbox === true
+                    ? 'It can run commands without asking you. They run in the sandbox, so they can only write in its workspace, its temp folder and /tmp.'
+                    : 'It can run commands without asking you, and a command can reach anything you can: your files, your accounts, the network.'
                   : 'It can change files in its workspace without asking you.'}{' '}
                 <span className="text-[var(--text-secondary)]">
                   Without asking: {unguarded.join(', ')}.

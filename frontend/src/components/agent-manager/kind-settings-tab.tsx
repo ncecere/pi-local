@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { type Agent, errorMessage } from '~/api/client';
 import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
+import { SandboxPanel } from '~/components/agent-manager/sandbox-panel';
 import { ErrorNotice, FIELD, Field } from '~/components/models/fields';
 import { Switch } from '~/components/ui/switch';
 import { useUpdateAgent } from '~/hooks/use-agents';
@@ -22,12 +23,15 @@ export function KindSettingsTab({ agent }: { agent: Agent }) {
     return <ResearcherForm key={agent.revision} agent={agent} />;
   if (agent.agentKind === 'coding')
     return (
-      <Panel>
-        <p className="text-sm text-[var(--text-muted)]">
-          A coding agent has no settings of its own. It uses the pi coding prompt and follows its
-          project folder's AGENTS.md or CLAUDE.md. Set the folder in the Tools tab.
-        </p>
-      </Panel>
+      <div className="flex flex-col gap-4">
+        <Panel>
+          <p className="text-sm text-[var(--text-muted)]">
+            A coding agent has no settings of its own. It uses the pi coding prompt and follows its
+            project folder's AGENTS.md or CLAUDE.md. Set the folder in the Tools tab.
+          </p>
+        </Panel>
+        <SandboxPanel agent={agent} />
+      </div>
     );
   return (
     <Panel>

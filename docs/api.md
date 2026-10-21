@@ -347,8 +347,8 @@ In a conversation, an `ask_agent` tool call's `details` (ChatMessage tool result
 
 Each agent has a **workspace** folder: its own private `<agent>/workspace`, or a **project folder** on this computer
 (`workspace.folder`, as a coding agent has; a coding agent also follows that folder's AGENTS.md or CLAUDE.md). Its
-file tools (`read`, `write`, `edit`) can't reach outside it; `bash` runs in it with a minimal environment, but a shell can reach anything you can, so it asks first by
-default. **Approvals** make an agent ask before chosen tools run: the call waits (also while the agent sleeps, and
+file tools (`read`, `write`, `edit`) can't reach outside it; `bash` runs in it, and unless its **sandbox** is on (v0.3,
+[below](#sandboxed-shell-v03)) a shell can reach anything you can, so it asks first by default. **Approvals** make an agent ask before chosen tools run: the call waits (also while the agent sleeps, and
 across restarts of the app) until you approve or deny it, or it times out (denied).
 
 `Agent` gains:
@@ -358,6 +358,9 @@ across restarts of the app) until you approve or deny it, or it times out (denie
     tools: ("read" | "write" | "edit" | "bash")[];   // none: no file tools
     folder: string;   // a project folder (absolute); "": its own private workspace
     dir: string;      // read-only: the folder it works in (the project folder, or …/agents/<id>/workspace)
+    sandbox: boolean;           // v0.3: `bash` runs in the OS sandbox (agents made before it: false)
+    network: boolean;           // v0.3: sandboxed commands may use the network (default true)
+    sandboxAvailable: boolean;  // v0.3, read-only: this computer has a sandbox (macOS for now)
   };
   approvals: {
     profile: "careful" | "balanced" | "trusting" | "custom";       // v0.3; an agent without one is "custom"
@@ -369,10 +372,11 @@ across restarts of the app) until you approve or deny it, or it times out (denie
   pendingApprovals: number;                                        // waiting for you now
 ```
 
-`PATCH /api/agents/{id}` takes `workspace?` (`{tools, folder?}`; `dir` is ignored) and `approvals?`
+`PATCH /api/agents/{id}` takes `workspace?` (`{tools, folder?, sandbox?, network?}`; `dir` is ignored) and `approvals?`
 (`{profile?, tools?, rules?, timeoutSeconds?}`: `tools` and `timeoutSeconds` replace what is there, so send both;
 `profile` and `rules` left out keep what the agent has, so a client that doesn't know them doesn't lose them).
-Send the whole workspace: `tools` left out is no tools, `folder` left out is its own folder. `folder` must be an absolute path (a
+Send the whole workspace: `tools` left out is no tools, `folder` left out is its own folder (`sandbox` and `network` are
+the exception: left out they keep what the agent has). `folder` must be an absolute path (a
 leading `~/` is expanded) to an existing folder, and not `/`, `/Users`, `/System` or the home folder itself; otherwise
 `400 invalid_workspace_folder` with a message to show. Errors: `invalid_workspace_tools`,
 `invalid_approval_tools` (at most 100 patterns of 1–200 of `[A-Za-z0-9_.*-]`), `invalid_approval_timeout`,
@@ -449,7 +453,7 @@ has no `profile` key and is `custom`, behaving as before):
 | Profile | Asks before |
 |---|---|
 | `careful` | every tool that can change something: `write`, `edit`, `bash`, `schedule`, `cancel_schedule`, and MCP tools not marked read-only (`notify_person`, memory, web and read tools don't) |
-| `balanced` | `bash`; MCP tools marked destructive, and MCP tools not marked read-only whose name has a word like `delete`, `remove`, `send`, `update`, `create`, `write` or `post` |
+| `balanced` | `bash`, unless the agent's shell is sandboxed (below; the built-in rules still ask); MCP tools marked destructive, and MCP tools not marked read-only whose name has a word like `delete`, `remove`, `send`, `update`, `create`, `write` or `post` |
 | `trusting` | nothing (but the built-in rules) |
 | `custom` | the tools in `approvals.tools` (names or patterns), as before profiles |
 
@@ -486,6 +490,58 @@ and the redacted view of its arguments.
 
 Runtime → app: `POST /judge/approval` on the gateway, body `{tool, arguments}` (redacted), answers `{risky: boolean}`
 (`false` when the use is off or the judgment fails).
+
+### Sandboxed shell (v0.3)
+
+With `workspace.sandbox` on, every command `bash` runs is confined by the operating system. macOS first: the runtime
+runs it as `sandbox-exec -p <profile> /bin/bash -c <command>` with a profile generated for the agent
+(`runtime/src/lib/sandbox/darwin.ts`). Linux (bubblewrap) and Windows (AppContainer) are stubs behind the same
+interface (`SandboxPlatform`): there the sandbox reports it is not available yet.
+
+**What a sandboxed command may do:**
+
+| | |
+|---|---|
+| Run | any program, fork, signal its own children, use the system's services: nothing is taken away from processes. |
+| Read | anywhere, except `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/Library/Keychains`, and the app's data folder outside this agent's own folder (`agents/<id>/`, which it may read, with its `agent.yaml`, `state.sqlite` and logs). The folders leading to its own can be looked at but not listed (tools that look for a project root walk up through them). The keychain's system service is closed too, or `security find-generic-password` would read it around the closed file. |
+| Write | its **workspace**; its **temp folder** (`agents/<id>/tmp`, its `$TMPDIR`); `/dev/null`, `/dev/tty`, the pseudo-terminals, `/dev/fd/*` and the other harmless devices; `/private/tmp` (many tools hard-code `/tmp`, and `mktemp` and test runners use it; it is shared with the person's other processes); and this user's own folder under `/private/var/folders/<xx>/<yyyy>/` (macOS's `$TMPDIR`, cache and data folders that compilers and system tools write to without being asked; not the rest of `/private/var/folders`). Never the credential folders, nor the app's data folder outside the workspace and temp folder (so a command can't edit its own `agent.yaml`), even when the data folder is under a writable path. |
+| Network | on by default; `workspace.network` off denies every connection to or from an IP address (including `localhost`) and listening sockets. Unix sockets (local services, `ssh-agent`) still work. |
+
+Tools that cache under the home folder fail to write there, so the shell sets `XDG_CACHE_HOME`, `GOCACHE`,
+`npm_config_cache` and `PIP_CACHE_DIR` into `agents/<id>/tmp/cache`. Other tools' home caches (cargo, a Gradle home)
+are blocked: the model is told, and the person can turn the sandbox off.
+
+**The agent's settings** (`agent.yaml`, and the Tools tab's **Sandbox** panel; the coding agent's Settings tab shows it too):
+
+```yaml
+workspace:
+  tools: [read, write, edit, bash]
+  sandbox: "on"      # on | off. Booleans (true, yes) are read too. Empty/missing: off
+  network: "off"     # on | off. Empty/missing: on. No effect without the sandbox
+```
+
+- A **new** agent whose tools include `bash` gets `sandbox: on` (on a Mac; the coding template too), unless the request
+  or its template says otherwise. An agent from before the sandbox has no setting and stays **off**: nothing changes
+  behind anyone's back. Where the OS has no sandbox yet (`sandboxAvailable: false`), new agents get no setting.
+- API: `workspace.sandbox` and `workspace.network` are booleans in a create or update; left out they keep the agent's
+  (or its template's). A different value: `400 invalid_workspace_sandbox` / `invalid_workspace_network` (agent.yaml
+  strings other than on/off).
+- Changing either restarts a running agent. The runtime gets `WORKSPACE_SANDBOX=on`, `WORKSPACE_SANDBOX_NETWORK=on|off`,
+  `WORKSPACE_SANDBOX_DATA_DIR` and `WORKSPACE_SANDBOX_AGENT_DIR` (absent when off).
+- **Approvals.** The policy sent to the runtime (`TOOL_APPROVALS`) has `sandboxed: true` when the sandbox is on and the
+  agent has `bash`. Under the **balanced** profile `bash` then runs without asking; the built-in rules (`rm -rf*`,
+  `sudo *`, …), the person's rules, and **careful** still ask. The runtime honours `sandboxed` only when it is itself
+  running the shell sandboxed, whatever a policy says.
+- **Never silently unsandboxed.** With the sandbox on, `bash` first starts a harmless program in the sandbox; if
+  `sandbox-exec` is missing, the OS has none yet, or it fails to start (for example inside another sandbox), the
+  command is refused with that reason and a hint to turn the sandbox off for the agent, and nothing runs.
+
+**What the model sees.** The sandbox's refusal is the plain `Operation not permitted`. The runtime reads the command's
+output and adds a line after it, for example:
+- `The sandbox blocked writing outside the workspace: /Users/ada/notes.txt. Commands can write in the workspace, its temp folder and /tmp.`
+- `The sandbox blocked access to /Users/ada/.ssh: it keeps credentials and other agents' data private.`
+- With the network off and a connection error: `The network is off for this agent, so commands can't connect to anything (that may be why this failed).`
+- An `Operation not permitted` with no path it can classify: `This may be the sandbox: commands can only write in the workspace, its temp folder and /tmp.`
 
 ### Attachments
 
@@ -764,7 +820,7 @@ type Template = {
   icon: string;                   // a lucide icon name: "sunrise", "pen-line", "languages", "list-checks", "search", …
   kind: "assistant" | "researcher" | "coding" | string;   // the runtime kind its agents get
   instructions: string;
-  workspace?: { tools: string[] };
+  workspace?: { tools: string[]; sandbox?: "on" | "off"; network?: "on" | "off" };
   approvals?: { profile?: string; tools: string[]; timeoutSeconds: number };
   web?: { search: boolean; fetch: boolean };              // left out: both on
   schedules?: { agentMade: boolean };                     // may set its own schedules

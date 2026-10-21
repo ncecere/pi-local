@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { mkdir, mkdtemp, realpath, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
@@ -10,6 +11,7 @@ import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { DocumentError, documentKindOf, documentToMarkdown, MAX_DOCUMENT_BYTES } from "./documents.ts";
 import { imageProcessor } from "./images.ts";
+import { type SandboxPlatform, sandboxedExec } from "./sandbox/index.ts";
 
 /** The workspace tools an agent may have (WORKSPACE_TOOLS, comma-separated). */
 export const WORKSPACE_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
@@ -47,7 +49,39 @@ export type WorkspaceEnvOptions = {
 	tempDir: string;
 	/** The runtime's environment, filtered to SHELL_ENV_KEEP for `bash`. */
 	processEnv?: NodeJS.ProcessEnv;
+	/**
+	 * Run `bash` (every command the environment executes) in the OS sandbox (lib/sandbox): reads anywhere but the
+	 * credential folders and the app's data folder outside this agent's own, writes only the workspace and temporary
+	 * folders (and /tmp), the network on or off. Absent: commands run unconfined, as the person's own shell would.
+	 */
+	sandbox?: WorkspaceSandbox;
 };
+
+export type WorkspaceSandbox = {
+	/** Whether commands may use the network. */
+	network: boolean;
+	/** The app's data folder and this agent's folder in it (the rest of the data folder is closed to commands). */
+	dataDir?: string;
+	agentDir?: string;
+	/** The person's home folder (default: the runtime's HOME). */
+	home?: string;
+	/** The OS's sandbox (default: the running OS's). For tests. */
+	platform?: SandboxPlatform;
+};
+
+/**
+ * The sandbox settings in the runtime's environment: `WORKSPACE_SANDBOX=on` turns it on, `WORKSPACE_SANDBOX_NETWORK=off`
+ * closes the network, `WORKSPACE_SANDBOX_DATA_DIR` and `WORKSPACE_SANDBOX_AGENT_DIR` name the app's data folder and this
+ * agent's folder. None when the sandbox is off.
+ */
+export function parseSandboxEnv(env: Record<string, string | undefined>): WorkspaceSandbox | undefined {
+	if (env.WORKSPACE_SANDBOX !== "on") return undefined;
+	return {
+		network: env.WORKSPACE_SANDBOX_NETWORK !== "off",
+		...(env.WORKSPACE_SANDBOX_DATA_DIR ? { dataDir: env.WORKSPACE_SANDBOX_DATA_DIR } : {}),
+		...(env.WORKSPACE_SANDBOX_AGENT_DIR ? { agentDir: env.WORKSPACE_SANDBOX_AGENT_DIR } : {}),
+	};
+}
 
 /**
  * NodeExecutionEnv with its temporary files in the agent's own directory instead of the system's. A subclass, not a
@@ -100,10 +134,12 @@ const inside = (root: string, path: string) => {
 /**
  * An ExecutionEnv whose file operations stay inside the workspace (and the agent's temp directory). Every path is
  * resolved against the workspace, symlinks followed, and refused with `permission_denied` when it lands outside, for
- * read, write, edit and anything else that uses the environment's files. `bash` runs in the workspace with a minimal
- * environment, but a shell can reach anything the person can: it is not confined, which is why it asks for approval
- * by default (the app's policy). Not a sandbox against code the agent runs; a guard against the model's file tools
+ * read, write, edit and anything else that uses the environment's files. A guard against the model's file tools
  * wandering off, including through prompt injection.
+ *
+ * `bash` runs in the workspace, and without `options.sandbox` a shell can reach anything the person can, which is why
+ * it asks for approval by default (the app's policy). With it, every command runs in the OS sandbox (lib/sandbox) and
+ * is refused when the sandbox can't be used: never run without it silently.
  */
 export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 	mkdirSync(options.root, { recursive: true });
@@ -129,6 +165,27 @@ export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 	};
 
 	const guarded: Record<string, unknown> = {};
+	if (options.sandbox) {
+		const sb = options.sandbox;
+		const cache = join(roots[1]!, "cache");
+		guarded.exec = sandboxedExec(
+			{ exec: (...args) => base.exec(...args) },
+			{
+				platform: sb.platform,
+				policy: {
+					workspace: roots[0]!,
+					tempDir: roots[1]!,
+					home: sb.home ?? processEnv.HOME ?? homedir(),
+					dataDir: sb.dataDir,
+					agentDir: sb.agentDir,
+					network: sb.network,
+				},
+				// Package managers and compilers cache under the home folder, which is closed to writing: they cache in the
+				// agent's temporary folder instead.
+				env: { XDG_CACHE_HOME: cache, GOCACHE: join(cache, "go-build"), npm_config_cache: join(cache, "npm"), PIP_CACHE_DIR: join(cache, "pip") },
+			},
+		);
+	}
 	for (const [method, positions] of Object.entries(PATH_ARGS)) {
 		guarded[method] = async (...args: unknown[]) => {
 			for (const i of positions) {

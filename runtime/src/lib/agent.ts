@@ -34,7 +34,7 @@ import type { ChatAttachment } from "./view.ts";
 import { ModelChoices } from "./model-choices.ts";
 import { personExtension, TodoDoc } from "./person.ts";
 import { parseWebTools, webExtension } from "./web.ts";
-import { createWorkspaceEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
+import { createWorkspaceEnv, parseSandboxEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
 
 /** Everything one agent needs, from the environment the app starts the runtime with. */
 export type AgentConfig = {
@@ -108,6 +108,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	// Tool approvals: the template's (TOOL_APPROVALS) through the library's own extension, and authors' hooks through
 	// the context. Bound to the harness once it is open.
 	const approvals = new Approvals(parseApprovalPolicy(config.modelEnv.TOOL_APPROVALS));
+	approvals.shellSandboxed = parseSandboxEnv(config.modelEnv) !== undefined;
 	const context: AgentContext = { agentId: config.agentId, name: config.name, instructions: config.instructions, env: config.modelEnv, approvals };
 	// The schedule tools, when the platform allows them for the agent's template version (and the definition doesn't
 	// leave them out): after the definition's extensions, before the MCP servers'. They name their thread through the
@@ -125,7 +126,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	if (workspaceTools.length > 0 && !workspaceDir) throw new AgentDefinitionError("WORKSPACE_TOOLS needs WORKSPACE_DIR");
 	const workspaceTemp = workspaceDir ? (config.modelEnv.WORKSPACE_TEMP_DIR ?? `${workspaceDir.replace(/\/$/, "")}/../tmp`) : undefined;
 	const workspace = workspaceExtension(workspaceTools, workspaceTemp ? { convertedDir: `${workspaceTemp.replace(/\/$/, "")}/converted` } : {});
-	const workspaceEnv = workspaceDir ? createWorkspaceEnv({ root: workspaceDir, tempDir: workspaceTemp!, processEnv: config.modelEnv }) : undefined;
+	const workspaceEnv = workspaceDir ? createWorkspaceEnv({ root: workspaceDir, tempDir: workspaceTemp!, processEnv: config.modelEnv, sandbox: parseSandboxEnv(config.modelEnv) }) : undefined;
 	// Tool preselection (fast judgments): with deferred tools (many MCP tools), the app may judge which ones a message
 	// needs, and they are loaded before the model runs, as tool_search would (small models often skip tool_search).
 	const pickTools =

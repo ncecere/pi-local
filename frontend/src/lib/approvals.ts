@@ -203,7 +203,7 @@ export const PROFILE_OPTIONS: readonly ProfileOption[] = [
     id: 'balanced',
     label: 'Balanced',
     description:
-      'Asks before running commands, and before MCP tools that delete, send or change things. Changes files in its workspace on its own.',
+      'Asks before running commands (not when they run in the sandbox), and before MCP tools that delete, send or change things. Changes files in its workspace on its own.',
   },
   {
     id: 'trusting',

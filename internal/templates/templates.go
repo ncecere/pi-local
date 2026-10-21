@@ -165,6 +165,7 @@ func (t *Template) Apply(c *agents.Config) {
 	c.Instructions = t.Instructions
 	if t.Workspace != nil {
 		c.Workspace.Tools = append([]string(nil), t.Workspace.Tools...)
+		c.Workspace.Sandbox, c.Workspace.Network = t.Workspace.Sandbox, t.Workspace.Network
 	}
 	if t.Approvals != nil {
 		// A template carries how an agent asks (its profile or tools), never one person's rules.
@@ -187,7 +188,7 @@ func (t *Template) Apply(c *agents.Config) {
 func FromAgent(id string, c agents.Config) *Template {
 	t := &Template{ID: id, Name: c.Name, Description: c.Description, Kind: c.Kind, Instructions: c.Instructions, Category: "yours"}
 	if len(c.Workspace.Tools) > 0 {
-		t.Workspace = &agents.Workspace{Tools: append([]string(nil), c.Workspace.Tools...)}
+		t.Workspace = &agents.Workspace{Tools: append([]string(nil), c.Workspace.Tools...), Sandbox: c.Workspace.Sandbox, Network: c.Workspace.Network}
 	}
 	if len(c.Approvals.Tools) > 0 || c.Approvals.Profile != "" {
 		a := c.Approvals
