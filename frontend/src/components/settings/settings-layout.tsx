@@ -5,6 +5,7 @@ import type { FeatureId } from '~/api/client';
 import { SkipLink } from '~/components/layout/skip-link';
 import { ThemeMenu } from '~/components/layout/theme-menu';
 import { Button } from '~/components/ui/button';
+import { FOCUS_RING } from '~/components/ui/focus-ring';
 import { useSuggestedFacts } from '~/hooks/use-memory';
 import { useCurrentUser } from '~/hooks/use-session';
 import { INBOX_SHORTCUTS, shortcutLabel } from '~/lib/inbox-shortcuts';
@@ -18,7 +19,7 @@ import {
 import { cn } from '~/lib/utils';
 import { useTheme } from '~/providers/theme-provider';
 
-/** Settings, as Open Chat Interface lays them out: who you are and help on the left, the section on the right. */
+/** Settings sections live beside the page, with a native section picker on small screens. */
 
 interface Tab {
   to:
@@ -59,6 +60,28 @@ const ALL_TABS: Tab[] = [
   { to: '/settings/backups', label: 'Backups', exact: false },
 ];
 
+const SECTION_GROUPS: { label: string; routes: Tab['to'][] }[] = [
+  { label: 'Personal', routes: ['/settings/you', '/settings/customization'] },
+  {
+    label: 'Agents & work',
+    routes: [
+      '/settings/agents',
+      '/settings/teams',
+      '/settings/schedules',
+      '/settings/conversations',
+      '/settings/prompts',
+    ],
+  },
+  {
+    label: 'Models & connections',
+    routes: ['/settings/models', '/settings/connections', '/settings/mcp'],
+  },
+  {
+    label: 'App',
+    routes: ['/settings', '/settings/usage', '/settings/activity', '/settings/backups'],
+  },
+];
+
 const isActive = (tab: Tab, pathname: string) =>
   tab.exact ? pathname === tab.to || pathname === `${tab.to}/` : pathname.startsWith(tab.to);
 
@@ -76,43 +99,21 @@ function Identity() {
   const { user } = useCurrentUser();
   const name = user.name || 'You';
   return (
-    <div className="flex min-w-0 items-center gap-4 lg:flex-col lg:gap-3 lg:pt-2">
-      <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-base font-semibold text-[var(--accent-foreground)] lg:size-24 lg:text-2xl">
+    <div className="flex min-w-0 items-center gap-3">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-sm font-semibold text-[var(--accent-foreground)]">
         {initialsOf(name)}
       </span>
-      <div className="min-w-0 flex-1 lg:flex-none lg:text-center">
-        <p className="truncate text-base font-bold text-[var(--text-primary)] lg:text-xl">{name}</p>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-[var(--text-primary)]">{name}</p>
         <p className="truncate text-sm text-[var(--text-muted)]">On this computer</p>
       </div>
     </div>
   );
 }
 
-function Card({
-  title,
-  children,
-  className,
-}: {
-  title: string;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        'w-full rounded-xl border border-[var(--border-inset)] bg-[var(--bg-inset)] p-4',
-        className,
-      )}
-    >
-      <h2 className="mb-3 text-sm font-semibold">{title}</h2>
-      {children}
-    </div>
-  );
-}
-
 const SHOWN_SHORTCUTS: ShortcutId[] = ['search', 'new-chat', 'toggle-sidebar'];
 
-function ShortcutsCard() {
+function Shortcuts() {
   const { invertSend } = useTheme();
   const apple = isApplePlatform();
   const shortcuts = [
@@ -133,8 +134,13 @@ function ShortcutsCard() {
   ];
   return (
     // Keyboard shortcuts matter only with a keyboard and a precise pointer.
-    <Card title="Keyboard shortcuts" className="hidden any-pointer-fine:block">
-      <div className="flex flex-col gap-3">
+    <details className="hidden any-pointer-fine:block">
+      <summary
+        className={cn('cursor-pointer rounded-md text-sm text-[var(--text-secondary)]', FOCUS_RING)}
+      >
+        Keyboard shortcuts
+      </summary>
+      <div className="mt-4 flex flex-col gap-3">
         {shortcuts.map((shortcut) => (
           <div key={shortcut.label} className="flex items-center justify-between gap-3">
             <span className="text-sm text-[var(--text-secondary)]">{shortcut.label}</span>
@@ -151,76 +157,111 @@ function ShortcutsCard() {
           </div>
         ))}
       </div>
-    </Card>
+    </details>
   );
 }
 
 function SectionNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
   const features = useCurrentUser().features ?? {};
-  const TABS = ALL_TABS.filter((tab) => !tab.feature || features[tab.feature]);
+  const groups = SECTION_GROUPS.map((group) => ({
+    ...group,
+    tabs: group.routes
+      .map((to) => ALL_TABS.find((tab) => tab.to === to)!)
+      .filter((tab) => !tab.feature || features[tab.feature]),
+  })).filter((group) => group.tabs.length > 0);
+  const tabs = groups.flatMap((group) => group.tabs);
   // Suggestions agents made about the person wait on the You tab for a yes.
   const waiting = useSuggestedFacts().data?.length ?? 0;
   const waitingOn = (tab: Tab) => (tab.to === '/settings/you' ? waiting : 0);
-  const current = TABS.find((tab) => isActive(tab, pathname)) ?? ALL_TABS[0]!;
-  // A window too narrow for every tab scrolls the row: keep the current one in view.
+  const current = tabs.find((tab) => isActive(tab, pathname)) ?? ALL_TABS[0]!;
   const track = useRef<HTMLDivElement>(null);
   const currentTo = current.to;
   useEffect(() => {
+    // Reveal a deep-linked section in a short sidebar without moving the page's scroll area.
     const active = track.current?.querySelector<HTMLElement>(`[href="${currentTo}"]`);
-    active?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    const sidebar = track.current?.closest<HTMLElement>('[data-settings-sidebar]');
+    if (!active || !sidebar || sidebar.clientHeight === 0) return;
+    const row = active.getBoundingClientRect();
+    const bounds = sidebar.getBoundingClientRect();
+    if (row.bottom > bounds.bottom) sidebar.scrollTop += row.bottom - bounds.bottom;
+    else if (row.top < bounds.top) sidebar.scrollTop -= bounds.top - row.top;
   }, [currentTo]);
   return (
     <nav aria-label="Settings sections">
-      <div
-        ref={track}
-        className="hidden max-w-full flex-wrap gap-1 rounded-xl bg-[var(--bg-segment-track)] p-1 sm:flex"
-      >
-        {TABS.map((tab) => {
-          const active = isActive(tab, pathname);
-          return (
-            <Link
-              key={tab.to}
-              to={tab.to}
-              aria-current={active ? 'page' : undefined}
-              className={cn(
-                'whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition-colors',
-                active
-                  ? 'bg-[var(--bg-segment-active)] font-medium text-[var(--text-primary)]'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-              )}
+      <div ref={track} className="hidden flex-col gap-4 md:flex">
+        {groups.map((group, index) => (
+          <section key={group.label} aria-labelledby={`settings-group-${index}`}>
+            <h2
+              id={`settings-group-${index}`}
+              className="mb-1 px-3 text-xs font-medium text-[var(--text-muted)]"
             >
-              {tab.label}
-              {waitingOn(tab) > 0 && (
-                <>
-                  <span
-                    aria-hidden="true"
-                    data-suggestions-badge=""
-                    className="ml-1.5 inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[0.6875rem] font-semibold leading-[1.125rem] text-[var(--accent-foreground)]"
-                  >
-                    {waitingOn(tab)}
-                  </span>
-                  <span className="sr-only">
-                    , {waitingOn(tab) === 1 ? '1 suggestion' : `${waitingOn(tab)} suggestions`}{' '}
-                    waiting
-                  </span>
-                </>
-              )}
-            </Link>
-          );
-        })}
+              {group.label}
+            </h2>
+            <ul className="flex flex-col gap-0.5">
+              {group.tabs.map((tab) => {
+                const active = isActive(tab, pathname);
+                return (
+                  <li key={tab.to}>
+                    <Link
+                      to={tab.to}
+                      activeOptions={{ exact: tab.exact }}
+                      aria-current={active ? 'page' : undefined}
+                      className={cn(
+                        'relative flex min-w-0 items-center rounded-md px-3 py-1 text-sm transition-colors',
+                        FOCUS_RING,
+                        active
+                          ? 'bg-[var(--bg-control-hover)] font-semibold text-[var(--text-primary)] before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-[var(--accent-bright)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-control-hover)] hover:text-[var(--text-primary)]',
+                      )}
+                    >
+                      {tab.label}
+                      {waitingOn(tab) > 0 && (
+                        <>
+                          <span
+                            aria-hidden="true"
+                            data-suggestions-badge=""
+                            className="ml-1.5 inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[0.6875rem] font-semibold leading-[1.125rem] text-[var(--accent-foreground)]"
+                          >
+                            {waitingOn(tab)}
+                          </span>
+                          <span className="sr-only">
+                            ,{' '}
+                            {waitingOn(tab) === 1
+                              ? '1 suggestion'
+                              : `${waitingOn(tab)} suggestions`}{' '}
+                            waiting
+                          </span>
+                        </>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
       </div>
       <select
         aria-label="Settings section"
         value={current.to}
         onChange={(event) => void navigate({ to: event.target.value })}
-        className="h-11 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-control)] px-3 text-sm sm:hidden"
+        className={cn(
+          'h-11 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-control)] px-3 text-sm md:hidden',
+          FOCUS_RING,
+        )}
       >
-        {TABS.map((tab) => (
-          <option key={tab.to} value={tab.to}>
-            {tab.label}
-            {waitingOn(tab) > 0 ? ` (${waitingOn(tab)})` : ''}
-          </option>
+        {groups.map((group) => (
+          <optgroup key={group.label} label={group.label}>
+            {group.tabs.map((tab) => (
+              <option key={tab.to} value={tab.to}>
+                {tab.label}
+                {waitingOn(tab) > 0
+                  ? ` (${waitingOn(tab)} ${waitingOn(tab) === 1 ? 'suggestion' : 'suggestions'} waiting)`
+                  : ''}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
     </nav>
@@ -231,7 +272,7 @@ export function SettingsLayout() {
   const { pathname } = useLocation();
   return (
     // The header stays put (in the desktop app it is also the window's title bar: it drags the window and clears the
-    // traffic lights); everything under it scrolls, with the section tabs stuck to the top.
+    // traffic lights); the page scrolls below it, independently of the section sidebar.
     <div className="flex h-dvh flex-col overflow-hidden bg-[var(--bg-settings)] text-[var(--text-primary)]">
       <SkipLink />
       <header data-settings-titlebar className="shrink-0">
@@ -248,39 +289,43 @@ export function SettingsLayout() {
         </div>
       </header>
 
-      {/* One scroll area. On wide windows the profile column beside it stays put (it scrolls on its own only when
-          the window is too short for it); on narrow ones it splits around the page: profile above, help below. */}
+      {/* The sidebar has its own scroll on short windows; the page remains the outer scroll area. */}
       <div data-settings-scroll className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto grid w-full max-w-[75rem] grid-cols-1 gap-8 px-4 pt-4 sm:px-6 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-x-10">
-          <div
+        <div className="mx-auto grid w-full max-w-[75rem] grid-cols-1 gap-6 px-4 pt-4 sm:px-6 md:grid-cols-[14rem_minmax(0,1fr)] md:gap-x-8">
+          <aside
             data-settings-sidebar
-            className="contents lg:sticky lg:top-0 lg:col-start-1 lg:row-start-1 lg:flex lg:max-h-[calc(100dvh-5rem)] lg:flex-col lg:gap-8 lg:self-start lg:overflow-y-auto lg:pb-6 lg:pt-1"
+            aria-label="Settings navigation and help"
+            className="contents md:sticky md:top-0 md:flex md:max-h-[calc(100dvh-5rem)] md:flex-col md:gap-6 md:self-start md:overflow-y-auto md:px-1 md:pb-6 md:pt-1"
           >
-            <section aria-label="Your profile" className="order-1">
+            <section aria-label="Your profile">
               <Identity />
             </section>
-            <aside
+            <SectionNav pathname={pathname} />
+            <section
               aria-label="Shortcuts and help"
-              className="order-3 flex flex-col gap-6 pb-16 lg:pb-0"
+              className="order-last flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-4 pb-8 md:order-none md:pb-0"
             >
-              <ShortcutsCard />
-              <Card title="Need help?">
-                <p className="text-sm text-[var(--text-muted)]">
+              <Shortcuts />
+              <details>
+                <summary
+                  className={cn(
+                    'cursor-pointer rounded-md text-sm text-[var(--text-secondary)]',
+                    FOCUS_RING,
+                  )}
+                >
+                  Need help?
+                </summary>
+                <p className="mt-3 text-sm leading-relaxed text-[var(--text-muted)]">
                   Pi Local runs your agents on this computer. Their conversations and memory stay
                   here, in each agent's own folder.
                 </p>
-              </Card>
-            </aside>
-          </div>
+              </details>
+            </section>
+          </aside>
 
-          <div className="order-2 min-w-0 lg:col-start-2 lg:row-start-1">
-            <div className="sticky top-0 z-20 -mx-1 bg-[var(--bg-settings)] px-1 pb-3 pt-1">
-              <SectionNav pathname={pathname} />
-            </div>
-            <main id="main-content" tabIndex={-1} className="mt-5 pb-16 outline-none">
-              <Outlet />
-            </main>
-          </div>
+          <main id="main-content" tabIndex={-1} className="min-w-0 pb-16 outline-none">
+            <Outlet />
+          </main>
         </div>
       </div>
     </div>

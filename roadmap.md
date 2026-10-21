@@ -8,10 +8,12 @@ A proposal to review, not a commitment. Each item is described in
 - v0.1.0 and v0.2.0 are published.
 - v0.3 trust/control is published as [v0.3.2](https://github.com/ncecere/pi-local/releases/tag/v0.3.2), with public
   assets and immutable-source smoke verified. v0.3.0/v0.3.1 remain unchanged, unpublished packaging attempts.
-- v0.4's implementation, independent reviews, browser QA, full source gate and cold-cache packaging preflight pass;
-  final main CI and publication/asset checks remain. Optional embeddings and a dedicated Concierge judgment
-  recommendation are deferred. See [v0.4 verification](docs/qa/v0.4.md) for actual coverage and limits.
-- [v0.5 planning](docs/plans/v0.5.md) is ready; implementation starts after v0.4 releases.
+- [v0.4.0](https://github.com/ncecere/pi-local/releases/tag/v0.4.0) is published; public assets and immutable-source
+  smoke are verified. Optional embeddings and a dedicated Concierge judgment recommendation are deferred. See
+  [v0.4 verification](docs/qa/v0.4.md) for scope and limits. The [v0.4.1 settings/chrome UX patch](docs/qa/v0.4.1.md)
+  is published with verified assets and immutable-tag layout smoke.
+- [v0.5 foundations](docs/plans/v0.5.md) are in isolated implementation: portable locking, runtime environment and
+  process ownership first. Windows/Linux product support is not yet claimed.
 - Only the user decides when to launch v1.0.
 
 The tables below retain proposal scope; release notes and verification records identify what actually ships.

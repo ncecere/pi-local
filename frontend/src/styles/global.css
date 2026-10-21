@@ -203,28 +203,40 @@
   }
 }
 
-/* The desktop app on macOS (data-shell, public/shell-init.js): the window has a hidden, inset title bar. The sidebar's
-   header steps right of the traffic lights and drags the window (Wails' --wails-draggable). */
+/* The macOS inset traffic lights sit below the 40px Wails drag region's midpoint. Use a shared
+   54px chrome row (32px controls at y=11, centre 27) in both sidebar states, not padded 42px trays.
+   InvisibleTitleBarHeight configures dragging, not traffic-light placement. Browser pills are unchanged. */
+html[data-shell="desktop-mac"] {
+  --native-titlebar-height: 54px;
+}
+html[data-shell="desktop-mac"] :is([data-titlebar], [data-chat-titlebar]) {
+  height: var(--native-titlebar-height);
+  flex-shrink: 0;
+  --wails-draggable: drag;
+}
 html[data-shell="desktop-mac"] [data-titlebar] {
   padding-left: 80px;
-  --wails-draggable: drag;
 }
 html[data-shell="desktop-mac"] [data-titlebar] :is(a, button) {
   --wails-draggable: no-drag;
 }
-
-/* The sidebar collapsed, in the desktop app: its controls move into the title bar row, right of the traffic lights
-   and level with them (as Safari's do), and the strip above the page drags the window. */
 html[data-shell="desktop-mac"] [data-floating-controls] {
   --wails-draggable: no-drag;
 }
-html[data-shell="desktop-mac"] [data-sidebar="closed"] [data-floating-controls] {
-  top: 4px;
+html[data-shell="desktop-mac"] [data-chat-titlebar] [data-floating-controls] {
+  top: 11px;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  --wails-draggable: no-drag;
 }
-html[data-shell="desktop-mac"] [data-floating-controls="left"] {
+html[data-shell="desktop-mac"] [data-chat-titlebar] [data-floating-controls="left"] {
   left: 80px;
 }
+/* The native header itself reserves the controls' strip; do not reserve it a second time below. */
 html[data-shell="desktop-mac"] [data-banners] {
+  padding-top: 0;
   --wails-draggable: drag;
 }
 html[data-shell="desktop-mac"] [data-banners] :is(a, button, input) {

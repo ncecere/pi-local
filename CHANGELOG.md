@@ -2,6 +2,14 @@
 
 Each version's section is its release notes on GitHub.
 
+## 0.4.1
+
+- **Settings navigation:** grouped sections in a compact left sidebar instead of two rows of tabs. Narrow windows
+  use one section picker. Profile, keyboard shortcuts and help no longer crowd the page.
+- **macOS window controls:** aligned sidebar controls in expanded and collapsed layouts, without nested toolbar
+  pills. Documents and Activity keep their own positions and styling.
+- **Accessibility:** exactly one current settings section, preserved suggestion badges and visible keyboard focus.
+
 ## 0.4.0
 
 Learning, knowledge and connections.
