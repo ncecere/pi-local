@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -329,7 +330,7 @@ func (s *Store) build(d *draft) (next *time.Time, err error) {
 		return nil, bad("invalid_message", "The message is 1 to 32,000 characters.")
 	}
 	if d.name == "" {
-		d.name = strings.SplitN(d.message, "\n", 2)[0]
+		d.name = strings.TrimSpace(strings.SplitN(d.message, "\n", 2)[0])
 	}
 	if r := []rune(d.name); len(r) > maxNameChars {
 		d.name = string(r[:maxNameChars-1]) + "…"
@@ -392,13 +393,49 @@ func (s *Store) Create(ctx context.Context, agentID, madeBy, originThread string
 	return sc, err
 }
 
-// Validate checks a first schedule without saving or firing anything.
-func (s *Store) Validate(in Input) error {
+// Prepare returns the exact, fully normalized first-schedule configuration to show
+// for approval. Timing is unambiguous: at is UTC RFC3339 with millisecond precision
+// (the database's precision); the unused timing field is nil. Next-fire calculation
+// is intentionally not part of the configuration: it depends on the insertion time.
+func (s *Store) Prepare(in Input) (Input, error) {
+	d, _, err := s.prepare(in)
+	if err != nil {
+		return Input{}, err
+	}
+	return canonicalInput(d), nil
+}
+
+func canonicalInput(d draft) Input {
+	in := Input{Name: &d.name, Timezone: &d.tz, Message: &d.message,
+		ThreadMode: &d.threadMode, MissedPolicy: &d.missed, Paused: &d.paused}
+	if d.at != nil {
+		at := d.at.UTC().Format(time.RFC3339Nano)
+		in.At = &at
+	} else {
+		in.Cron = &d.cronExpr
+	}
+	if d.threadID != "" {
+		in.ThreadID = &d.threadID
+	}
+	return in
+}
+
+func (s *Store) prepare(in Input) (draft, *time.Time, error) {
 	d := draft{tz: "UTC", threadMode: "new", missed: "run_once"}
 	if err := s.apply(&d, in); err != nil {
-		return err
+		return d, nil, err
 	}
-	_, err := s.build(&d)
+	if d.at != nil {
+		t := d.at.UTC().Truncate(time.Millisecond)
+		d.at = &t
+	}
+	next, err := s.build(&d)
+	return d, next, err
+}
+
+// Validate checks a first schedule without saving or firing anything.
+func (s *Store) Validate(in Input) error {
+	_, err := s.Prepare(in)
 	return err
 }
 
@@ -406,10 +443,18 @@ type executor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-// InsertApproved inserts the person's approved first schedule in the agent creation transaction.
-// It uses the ordinary schedule validation and insertion, and does not fire before commit.
+// InsertApproved inserts only an already canonical, fully approved configuration.
+// Validation may refuse an expired one-shot, but must never change approved semantics.
+// No helper here opens another DB connection while tx is held.
 func (s *Store) InsertApproved(ctx context.Context, tx *sql.Tx, agentID string, in Input) error {
-	_, err := s.insert(ctx, tx, agentID, "user", "", in)
+	d, next, err := s.prepare(in)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(in, canonicalInput(d)) {
+		return bad("noncanonical_schedule", "The approved schedule is not canonical; prepare and review a new proposal.")
+	}
+	_, err = s.insertDraft(ctx, tx, agentID, "user", "", d, next)
 	return err
 }
 
@@ -417,11 +462,7 @@ func (s *Store) insert(ctx context.Context, db executor, agentID, madeBy, origin
 	if db == s.db && !s.agents.Exists(agentID) {
 		return "", ErrNotFound
 	}
-	d := draft{tz: "UTC", threadMode: "new", missed: "run_once"}
-	if err := s.apply(&d, in); err != nil {
-		return "", err
-	}
-	next, err := s.build(&d)
+	d, next, err := s.prepare(in)
 	if err != nil {
 		return "", err
 	}
@@ -430,13 +471,17 @@ func (s *Store) insert(ctx context.Context, db executor, agentID, madeBy, origin
 			return "", err
 		}
 	}
+	return s.insertDraft(ctx, db, agentID, madeBy, originThread, d, next)
+}
+
+func (s *Store) insertDraft(ctx context.Context, db executor, agentID, madeBy, originThread string, d draft, next *time.Time) (string, error) {
 	id := newID("sc_")
 	now := s.now().UnixMilli()
 	var at any
 	if d.at != nil {
 		at = d.at.UnixMilli()
 	}
-	_, err = db.ExecContext(ctx, `INSERT INTO schedules (id, agent_id, name, once, at, cron, timezone, message, thread_mode, thread_id, origin_thread_id, made_by, missed_policy, paused, next_fire_at, created_at, updated_at)
+	_, err := db.ExecContext(ctx, `INSERT INTO schedules (id, agent_id, name, once, at, cron, timezone, message, thread_mode, thread_id, origin_thread_id, made_by, missed_policy, paused, next_fire_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, agentID, d.name, boolInt(d.at != nil), at, nullable(d.cronExpr), d.tz, d.message, d.threadMode, nullable(d.threadID),
 		nullable(originThread), madeBy, d.missed, boolInt(d.paused), next.UnixMilli(), now, now)
@@ -451,11 +496,17 @@ func boolInt(b bool) int {
 }
 
 func (s *Store) apply(d *draft, in Input) error {
+	if in.At != nil && strings.TrimSpace(*in.At) != "" && in.Cron != nil && strings.TrimSpace(*in.Cron) != "" {
+		return bad("invalid_when", "A schedule is a one-time time (at) or a cron expression, not both.")
+	}
 	if in.Name != nil {
 		d.name = *in.Name
 	}
-	if in.Timezone != nil && *in.Timezone != "" {
-		d.tz = *in.Timezone
+	if in.Timezone != nil {
+		d.tz = strings.TrimSpace(*in.Timezone)
+		if d.tz == "" {
+			d.tz = "UTC"
+		}
 	}
 	if in.Message != nil {
 		d.message = *in.Message

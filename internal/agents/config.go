@@ -657,19 +657,32 @@ func ParseConfig(raw []byte) (Config, error) {
 
 // writeConfig replaces agent.yaml atomically (a reader never sees half a file).
 func writeConfig(dir string, c Config) error {
+	raw, err := encodeConfig(c)
+	if err != nil {
+		return err
+	}
+	return writeConfigBytes(dir, raw)
+}
+
+func encodeConfig(c Config) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString("# Pi Local agent. Edit in the app, or here while the app is closed.\n")
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	if err := enc.Encode(c); err != nil {
-		return err
+		return nil, err
 	}
+	return buf.Bytes(), nil
+}
+
+// writeConfigBytes durably replaces the file before a DB materialization record may be cleared.
+func writeConfigBytes(dir string, raw []byte) error {
 	tmp, err := os.CreateTemp(dir, ".agent.yaml.*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(buf.Bytes()); err != nil {
+	if _, err := tmp.Write(raw); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -680,7 +693,10 @@ func writeConfig(dir string, c Config) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), filepath.Join(dir, configFile))
+	if err := os.Rename(tmp.Name(), filepath.Join(dir, configFile)); err != nil {
+		return err
+	}
+	return syncConfigDir(dir)
 }
 
 // checkFolder cleans the project folder and checks it is one: absolute, an existing directory, and not the whole disk

@@ -178,32 +178,20 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 			if schedule.AgentID != nil || schedule.ThreadID != nil {
 				return nil, builderRefuse("A first schedule cannot move agents or choose another conversation.")
 			}
-			// Make every schedule default visible before approval.
-			tz, mode, missed, paused := "UTC", "new", "run_once", false
-			if schedule.Timezone == nil {
-				schedule.Timezone = &tz
-			}
-			if schedule.ThreadMode == nil {
-				schedule.ThreadMode = &mode
-			}
-			if schedule.MissedPolicy == nil {
-				schedule.MissedPolicy = &missed
-			}
-			if schedule.Paused == nil {
-				schedule.Paused = &paused
-			}
 			if schedule.Name == nil {
 				name := cfg.Name
 				schedule.Name = &name
 			}
-			if *schedule.ThreadMode == "this" {
+			if schedule.ThreadMode != nil && *schedule.ThreadMode == "this" {
 				h := sha256.Sum256([]byte(caller + "\x00" + in.Key))
 				thread := "builder-" + hex.EncodeToString(h[:8])
 				schedule.ThreadID = &thread
 			}
-			if err := a.Schedules.Validate(*schedule); err != nil {
+			prepared, err := a.Schedules.Prepare(*schedule)
+			if err != nil {
 				return nil, builderRefuse("%s", err)
 			}
+			schedule = &prepared
 		}
 		yamlBytes, err := yaml.Marshal(cfg)
 		if err != nil {
@@ -231,6 +219,9 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 		return nil, builderRefuse("This agent is not yours to update.")
 	}
 	if state == "done" {
+		if err := a.Agents.RecoverPending(ctx); err != nil {
+			return nil, builderRefuse("%s", err)
+		}
 		return map[string]any{"agentId": target, "status": "done"}, nil
 	}
 	var status, tool, args string
@@ -261,14 +252,6 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 			if _, err := tx.ExecContext(ctx, `INSERT INTO agent_creators (agent_id,creator_id,request_key) VALUES (?,?,?)`, target, caller, in.Key); err != nil {
 				return err
 			}
-		} else {
-			var revision int
-			if err := tx.QueryRowContext(ctx, `SELECT revision FROM agents WHERE id = ?`, target).Scan(&revision); err != nil {
-				return err
-			}
-			if revision != proposal.Revision+1 {
-				return builderRefuse("The agent changed after this proposal. Start a new tool call and review the new configuration.")
-			}
 		}
 		if proposal.Schedule != nil {
 			if err := a.Schedules.InsertApproved(ctx, tx, target, *proposal.Schedule); err != nil {
@@ -281,9 +264,13 @@ func (a *API) BuilderCall(ctx context.Context, caller, action string, raw json.R
 	if proposal.Tool == "create_agent" {
 		_, err = a.Agents.CreatePrepared(ctx, target, cfg, commit)
 	} else {
-		_, err = a.Agents.UpdatePrepared(ctx, target, func(c *agents.Config) { *c = cfg }, commit)
+		_, err = a.Agents.UpdatePrepared(ctx, target, proposal.Revision, func(c *agents.Config) { *c = cfg }, commit)
 	}
 	if err != nil {
+		var outcome *agents.SaveOutcomeError
+		if errors.As(err, &outcome) {
+			return nil, builderRefuse("%s", err)
+		}
 		return nil, builderRefuse("Nothing was saved: %s", err)
 	}
 	if proposal.Schedule != nil {

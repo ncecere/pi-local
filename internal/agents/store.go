@@ -85,6 +85,9 @@ type Store struct {
 	agents    map[string]*Agent
 	listeners []func(Change)
 
+	// Fault-injection boundaries for crash/recovery tests; nil in production.
+	updateBoundary func(string) error
+
 	// MCPExists says whether the app's catalog has an MCP server (set by the app).
 	MCPExists func(slug string) bool
 
@@ -201,6 +204,11 @@ func Open(ctx context.Context, db *sql.DB, root string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db, root: root, agents: map[string]*Agent{}}
+	// Resolve committed config writes before reading any live agent.yaml. Recovery
+	// errors are fatal, never the ordinary unreadable-agent skip below.
+	if err := s.recoverPending(ctx); err != nil {
+		return nil, err
+	}
 	rows, err := db.QueryContext(ctx, `SELECT id, dir, revision, created_at, updated_at, last_used_at, COALESCE(pi_durable_version, '') FROM agents`)
 	if err != nil {
 		return nil, err
@@ -414,17 +422,25 @@ func (s *Store) CreatePrepared(ctx context.Context, id string, cfg Config, commi
 
 // Update changes an agent's config through fn and bumps its revision (a running agent restarts with it).
 func (s *Store) Update(ctx context.Context, id string, fn func(*Config)) (*Agent, error) {
-	return s.UpdatePrepared(ctx, id, fn, nil)
+	return s.UpdatePrepared(ctx, id, 0, fn, nil)
 }
 
-// UpdatePrepared records related app.db state atomically with the revision change.
-func (s *Store) UpdatePrepared(ctx context.Context, id string, fn func(*Config), commit func(*sql.Tx) error) (*Agent, error) {
+// UpdatePrepared records the config, revision and related app.db state atomically.
+// expectedRevision (zero for a normal human Update) is checked under writeMu before
+// any filesystem mutation. commit must not call a DB-backed helper outside tx.
+func (s *Store) UpdatePrepared(ctx context.Context, id string, expectedRevision int, fn func(*Config), commit func(*sql.Tx) error) (_ *Agent, err error) {
 	// Changes are serialized; the checks run without the read lock (checking a model asks the catalog, which may ask
 	// which agents use a model).
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	current, err := s.Get(id)
 	if err != nil {
+		return nil, err
+	}
+	if expectedRevision != 0 && current.Revision != expectedRevision {
+		return nil, invalid("stale_revision", "The agent changed after this proposal. Start a new tool call and review the new configuration.")
+	}
+	if err := s.recoverPending(ctx); err != nil {
 		return nil, err
 	}
 	cfg := current.Config
@@ -454,26 +470,43 @@ func (s *Store) UpdatePrepared(ctx context.Context, id string, fn func(*Config),
 	if len(cfg.CanCall) == 0 {
 		cfg.CanCall = nil
 	}
-	now := time.Now()
-	if err := writeConfig(current.Dir, cfg); err != nil {
+	raw, err := encodeConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
+	now := time.Now()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		_ = writeConfig(current.Dir, current.Config)
 		return nil, err
 	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE agents SET revision = revision + 1, updated_at = ? WHERE id = ?`, now.UnixMilli(), id)
-	if err == nil && commit != nil {
-		err = commit(tx)
-	}
-	if err == nil {
-		err = tx.Commit()
-	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = &SaveOutcomeError{Err: errors.Join(err, fmt.Errorf("rollback: %w", rollbackErr))}
+		}
+	}()
+	result, err := tx.ExecContext(ctx, `UPDATE agents SET revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?`, now.UnixMilli(), id, current.Revision)
 	if err != nil {
-		_ = writeConfig(current.Dir, current.Config)
 		return nil, err
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		return nil, errors.Join(err, errors.New("agent revision changed"))
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_config_materializations (agent_id, revision, config) VALUES (?, ?, ?)`, id, current.Revision+1, raw); err != nil {
+		return nil, err
+	}
+	if err := s.boundary("prepared"); err != nil {
+		return nil, err
+	}
+	if commit != nil {
+		if err := commit(tx); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.boundary("precommit"); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, &SaveOutcomeError{Err: err}
 	}
 	s.mu.Lock()
 	a, ok := s.agents[id]
@@ -486,7 +519,11 @@ func (s *Store) UpdatePrepared(ctx context.Context, id string, fn func(*Config),
 	a.UpdatedAt = time.UnixMilli(now.UnixMilli())
 	out := copyOf(a)
 	s.mu.Unlock()
+	materializeErr := s.materialize(ctx, id, current.Dir, out.Revision, raw)
 	s.notify(Change{AgentID: id, Agent: copyOf(out)})
+	if materializeErr != nil {
+		return out, &SaveOutcomeError{Committed: true, Err: materializeErr}
+	}
 	return out, nil
 }
 
