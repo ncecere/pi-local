@@ -126,6 +126,31 @@ type Catalog struct {
 	closed   chan struct{}
 	// OnLogin is told how a sign-in command is doing (its output as it comes, and when it ends).
 	OnLogin func(LoginStatus)
+	// OnAuth is told when a server's sign-in ends, and when it is signed out (the activity log).
+	OnAuth func(AuthEvent)
+}
+
+// AuthEvent is a server's sign-in or sign-out, ended.
+type AuthEvent struct {
+	Slug string
+	Name string
+	// Action: sign_in (an OAuth sign-in, or the server's own sign-in command) or sign_out.
+	Action string
+	// Outcome: ok, error or cancelled.
+	Outcome string
+	// Error says why a sign-in failed (short).
+	Error string
+}
+
+func (c *Catalog) authEnded(slug, action, outcome, errText string) {
+	if c.OnAuth == nil {
+		return
+	}
+	name := slug
+	if s, err := c.Get(context.Background(), slug); err == nil {
+		name = s.Name
+	}
+	c.OnAuth(AuthEvent{Slug: slug, Name: name, Action: action, Outcome: outcome, Error: errText})
 }
 
 // New makes the catalog.
@@ -723,6 +748,7 @@ func (c *Catalog) SignOut(ctx context.Context, slug string) (*Server, error) {
 	s, err := c.Get(ctx, slug)
 	if err == nil {
 		c.OnChange(slug, s)
+		c.authEnded(slug, "sign_out", "ok", "")
 	}
 	return s, err
 }

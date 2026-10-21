@@ -2,6 +2,7 @@ import type { RequestListener } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { AgentDoc, type Conversation, createRegistry, type Extension, Harness, type HarnessSettings, type ModelRef, type Storage, type ToolRegistration } from "@earendil-works/pi-durable";
+import { ActivityReporter, ToolAudit } from "./audit.ts";
 import { Approvals, parseApprovalPolicy } from "./approvals.ts";
 import { redactArguments } from "./redact.ts";
 import { assistantAgent } from "./assistant.ts";
@@ -242,7 +243,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	for (const extension of extensions) registry.install(extension);
 	// Asks (or refuses) as the agent's approval rules and profile say; selected last, so it sees the arguments other
 	// hooks settled on and a call another hook blocks is never put to a person.
-	let asking: Extension[] = [];
+	const asking: Extension[] = [];
 	// MCP servers: the template's, and those apps gave threads (installed before resuming, so resumed runs find their tools).
 	const mcp = new AgentMcp(config.modelEnv, (ext) => registry.install(ext));
 	for (const ext of mcp.extensions) registry.install(ext);
@@ -305,10 +306,17 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	// Selected when the policy asks or refuses anything (the platform always sends the built-in rules, so it does), or
 	// while a request it made is pending. A policy pushed later (POST /approvals/policy) only takes effect in an agent
 	// that has it selected.
-	if (approvals.active() || approvals.pending().length > 0) {
-		asking = [approvals.extension()];
-		registry.install(asking[0]!);
+	if (approvals.active() || approvals.pending().length > 0) asking.push(approvals.extension());
+	// The audit log: each tool call that ends is reported to the platform (audit.ts). It only watches, so it is selected
+	// last, after the approvals, and is always there when there is a platform to tell.
+	const activity =
+		env.PLATFORM_GATEWAY_URL && env.PLATFORM_KEY ? new ActivityReporter(gatewayPost(env.PLATFORM_GATEWAY_URL, env.PLATFORM_KEY)) : undefined;
+	if (activity) {
+		const audit = new ToolAudit(activity, { approvalFor: (conversationId, callId) => approvals.forCall(conversationId, callId), threadOf: async (conversationId) => (await threads.threadOf(conversationId)) ?? (await approvals.placeOf(conversationId).catch(() => undefined))?.threadId });
+		audit.bind(harness);
+		asking.push(audit.extension());
 	}
+	for (const extension of asking) registry.install(extension);
 	// pi keeps the model and extensions a conversation was created with (pi.agent). A thread begun before the agent's
 	// model changed would keep asking for the old one, which this runtime no longer has (its turns would end unanswered,
 	// no_model), and one begun before an extension was added would run without it (a guard, say). So the runtime moves
@@ -408,6 +416,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 			closing = true;
 			approvals.close();
 			await harness.close(ctx).catch(() => {});
+			await activity?.stop();
 			await usage?.flush();
 			await choices?.flush();
 			await mcp.close();

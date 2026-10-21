@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ncecere/pi-local/internal/activity"
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/elicitations"
@@ -55,6 +56,11 @@ type Peer struct {
 	Description string `json:"description,omitempty"`
 	Kind        string `json:"kind,omitempty"`
 	Via         string `json:"via"`
+}
+
+// Activity is the audit log, which runtimes report their tool calls to.
+type Activity interface {
+	RecordTools(agentID string, items []activity.ToolItem) int
 }
 
 // Approvals keeps tool calls waiting for a person.
@@ -104,6 +110,8 @@ type Handler struct {
 	Usage     Usage
 	Asks      Asks
 	Approvals Approvals
+	// Activity: tool calls that ended, batched (nil: not offered).
+	Activity  Activity
 	OAuth     OAuth
 	Schedules *schedules.Store
 	// Web: search and page reading for agents (nil: not offered).
@@ -216,6 +224,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case h.Activity != nil && r.Method == http.MethodPost && r.URL.Path == "/activity":
+		var body struct {
+			Items []activity.ToolItem `json:"items"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		ok(w, map[string]int{"recorded": h.Activity.RecordTools(agentID, body.Items)})
 	case h.Approvals != nil && r.Method == http.MethodPost && r.URL.Path == "/approvals/report":
 		var report approvals.Report
 		if !decode(w, r, &report) {
