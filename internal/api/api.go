@@ -25,6 +25,7 @@ import (
 
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/approvals"
+	"github.com/ncecere/pi-local/internal/backup"
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/judge"
@@ -88,6 +89,11 @@ type API struct {
 	// OpenURL opens a web page in the person's browser (the desktop app, whose web view can't open windows). Nil: the
 	// UI is in a browser already.
 	OpenURL func(url string) error
+	// Backups: backups of the data folder, and restoring them.
+	Backups *backup.Service
+	// Restart quits the app so that it starts again (a restore is applied at the next start); nil: it can't, and the
+	// person is asked to quit and open it.
+	Restart func()
 	// KeepAlive is how often an idle event stream gets a comment (default 15 s).
 	KeepAlive time.Duration
 
@@ -145,6 +151,7 @@ func (a *API) Handler() http.Handler {
 	a.judgeRoutes(m)
 	a.chatSettingsRoutes(m)
 	a.alwaysRoutes(m)
+	a.backupRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
 	if os.Getenv("PI_LOCAL_TRACE") == "1" {

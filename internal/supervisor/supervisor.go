@@ -627,6 +627,25 @@ func (s *Supervisor) Stop(id string) {
 	s.setStatus(id, st, Asleep, "")
 }
 
+// Quiesce stops an agent's runtime (gracefully: work in flight stays pending in its storage) and keeps it stopped
+// while fn runs, so fn may read the agent's storage, which a running runtime holds open exclusively. Anything that
+// would wake the agent waits until fn returns. It reports whether the agent was awake; the caller wakes it again
+// (Wake) when it should be.
+func (s *Supervisor) Quiesce(id string, fn func() error) (wasAwake bool, err error) {
+	st := s.state(id)
+	st.lock.Lock()
+	defer st.lock.Unlock()
+	s.mu.Lock()
+	p := st.proc
+	s.mu.Unlock()
+	if p != nil && p.alive() {
+		wasAwake = true
+		s.stopProc(st, p)
+		s.setStatus(id, st, Asleep, "")
+	}
+	return wasAwake, fn()
+}
+
 // Forget stops an agent and drops what the supervisor knows of it (the agent was deleted).
 func (s *Supervisor) Forget(id string) {
 	s.Stop(id)
