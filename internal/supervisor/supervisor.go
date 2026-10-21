@@ -150,7 +150,7 @@ type proc struct {
 	tree     process.Tree
 	cleanup  sync.Once
 	stdout   io.ReadCloser
-	stdin    io.WriteCloser
+	stdin    *process.InputPipe
 	base     string
 	token    string
 	key      string
@@ -463,7 +463,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 		return nil, err
 	}
 	p.stdout = stdout
-	if p.stdin, err = cmd.StdinPipe(); err != nil {
+	if p.stdin, err = process.NewInputPipe(cmd); err != nil {
 		p.close()
 		return nil, err
 	}
@@ -476,6 +476,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 		p.close()
 		return nil, &StartError{AgentID: id, Code: -1, Message: "could not run node: " + err.Error()}
 	}
+	p.stdin.Started()
 	stdout.Started(p.tree.Done(), nil, process.OutputDrainGrace)
 	ready := make(chan int, 1)
 	readDone := make(chan struct{})
@@ -503,7 +504,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 	go func() {
 		err := p.tree.Wait()
 		<-readDone
-		p.exitCode = cmd.ProcessState.ExitCode()
+		p.exitCode = p.tree.ExitCode()
 		if err != nil && p.exitCode == -1 {
 			p.exitCode = -1
 		}
@@ -623,12 +624,6 @@ func (p *proc) close() {
 		}
 		if p.tree != nil {
 			p.tree.Close()
-		} else if p.cmd != nil {
-			// A refusal before cmd.Start leaves StdinPipe's child end open;
-			// stdout is independently owned and closed below on every path.
-			if f, ok := p.cmd.Stdin.(io.Closer); ok {
-				f.Close()
-			}
 		}
 		if p.stdout != nil {
 			p.stdout.Close()
@@ -643,12 +638,16 @@ func (s *Supervisor) kill(p *proc) {
 	}
 }
 
-// stopProc stops a runtime gracefully (SIGTERM to its process group: work in flight stays pending in storage), then
-// kills it after the grace period. Called with the agent's lock held.
+// stopProc gives the runtime its opt-in stdin EOF watchdog and Unix SIGTERM,
+// then escalates after grace. MCP's stdin policy remains JSON/null, not EOF.
+// Called with the agent's lock held.
 func (s *Supervisor) stopProc(st *agentState, p *proc) {
 	s.mu.Lock()
 	p.stopping = true
 	s.mu.Unlock()
+	if p.stdin != nil {
+		p.stdin.Close()
+	}
 	_ = p.tree.GracefulStop(s.opts.StopGrace)
 	<-p.done
 	p.close()
@@ -1054,8 +1053,8 @@ func (s *Supervisor) PID(id string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.agents[id]
-	if !ok || st.proc == nil || !st.proc.alive() || st.proc.cmd.Process == nil {
+	if !ok || st.proc == nil || !st.proc.alive() || st.proc.tree == nil {
 		return 0
 	}
-	return st.proc.cmd.Process.Pid
+	return st.proc.tree.PID()
 }
