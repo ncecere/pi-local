@@ -152,6 +152,11 @@ make dev-web         # UI with hot reload on :5191, talking to run-server
 make check           # go vet, gofmt and every test (Go, runtime, frontend)
 ```
 
+The headless server is an **unauthenticated development/test tool**, not a service to expose or use with sensitive
+agents. Loopback does not stop another local process—including an agent's network-enabled shell—from calling its
+management API or answering approval cards. Use scratch data, in-memory secrets and fake services. The packaged Wails
+app does not expose this loopback HTTP server.
+
 The Go tests run the real runtime against fake model providers (OpenAI and Anthropic wire formats), fake MCP servers
 (stdio and OAuth) and a scripted model that calls tools, and they never touch the real keychain.
 
