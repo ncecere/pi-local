@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type RequestListener, type Server, type ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type Conversation, type ConversationDocToken, type ConversationId, type DocumentWatch, type Harness, type JsonObject, LiveDoc } from "@earendil-works/pi-durable";
+import { type Conversation, type ConversationDocToken, type ConversationId, type DocumentWatch, type Harness, type JsonObject, LiveDoc, type UserInput } from "@earendil-works/pi-durable";
 import { abortBackground, type LiveWork, liveWork, olderThan, reportBackground } from "./background.ts";
 import { type Approvals, type DecisionInput, waitingThreads } from "./approvals.ts";
 import type { ThreadStore } from "./threads.ts";
@@ -22,6 +22,10 @@ import {
 	parsePage,
 	USER_ENTRY,
 	type UserEntryData,
+	attachmentBlock,
+	type ChatAttachment,
+	MAX_ATTACHMENTS,
+	parseAttachments,
 } from "./view.ts";
 
 /** The documents an agent exposes to apps, by kind, with their bounds (define.ts, exposedDocuments). */
@@ -45,6 +49,11 @@ export type RuntimeOptions = {
 	token: string;
 	info: { agentId: string; name: string; model: string };
 	/** Prepares a thread before a message (its MCP servers), after it exists. */
+	/**
+	 * The model's copy of a message with files: its text (with the block naming them), and whatever the agent adds,
+	 * such as the images for a model that sees them. Without it, the text alone.
+	 */
+	inputFor?: (threadId: string, text: string, attachments: readonly ChatAttachment[]) => Promise<UserInput>;
 	/** choice: the model ("provider/modelId", "" the agent's own) and thinking level ("" the default) the person chose. */
 	beforeMessage?: (threadId: string, conversation: Conversation, text: string, choice: MessageChoice) => Promise<void>;
 	/** A message was submitted to the thread (its reply's end is reported to the platform). */
@@ -216,24 +225,39 @@ export function createRuntimeServer(options: RuntimeOptions): {
 				whenBusy?: unknown;
 				model?: unknown;
 				thinking?: unknown;
+				attachments?: unknown;
 			};
 			const text = typeof body.text === "string" ? body.text.trim() : "";
 			const requestId = typeof body.requestId === "string" ? body.requestId : undefined;
-			if (text.length === 0 || text.length > 32_000) return fail(response, 400, "invalid_text", "text is required (at most 32,000 characters)");
+			const attachments = parseAttachments(body.attachments);
+			if (attachments === undefined) {
+				return fail(response, 400, "invalid_attachments", `attachments is a list of at most ${MAX_ATTACHMENTS} files ({path, name, size, mediaType}, paths inside the workspace)`);
+			}
+			// A message is text, files, or both.
+			if ((text.length === 0 && attachments.length === 0) || text.length > 32_000) return fail(response, 400, "invalid_text", "text is required (at most 32,000 characters)");
 			if (requestId !== undefined && !THREAD_ID.test(requestId)) return fail(response, 400, "invalid_request_id", "requestId must be 1-64 letters, digits, dashes or underscores");
 			// While a reply runs: a follow-up waits for it to end; a steer joins it after its current tool round.
 			const whenBusy = body.whenBusy ?? "followUp";
 			if (whenBusy !== "followUp" && whenBusy !== "steer") return fail(response, 400, "invalid_when_busy", "whenBusy must be followUp or steer");
 			// The platform (the only caller) says who sent the message, and whether the model is told (shared threads).
 			const author = parseAuthor(body.author);
-			const conversation = await threads.ensure(threadId, text);
+			const conversation = await threads.ensure(threadId, text || attachments.map((file) => file.name).join(", "));
 			const choice: MessageChoice = {
 				model: typeof body.model === "string" ? body.model.trim() : "",
 				thinking: typeof body.thinking === "string" ? body.thinking.trim() : "",
 			};
 			await options.beforeMessage?.(threadId, conversation, text, choice);
-			const data: UserEntryData = { text, at: Date.now(), ...(author === undefined ? {} : { author }), ...(requestId === undefined ? {} : { requestId }) };
-			const content = author !== undefined && body.announceAuthor === true ? `${speakerLine(author)}\n${text}` : text;
+			const data: UserEntryData = {
+				text,
+				at: Date.now(),
+				...(author === undefined ? {} : { author }),
+				...(requestId === undefined ? {} : { requestId }),
+				...(attachments.length > 0 ? { attachments } : {}),
+			};
+			// The model reads the text, then the block naming the files; the agent may add the images themselves.
+			const spoken = author !== undefined && body.announceAuthor === true ? `${speakerLine(author)}\n${text}` : text;
+			const written = [spoken, attachmentBlock(attachments)].filter((part) => part !== "").join("\n\n");
+			const content: UserInput = options.inputFor ? await options.inputFor(threadId, written, attachments) : written;
 			const submission = await conversation.submit(
 				{
 					type: "input",

@@ -25,7 +25,10 @@ import { AgentOwnedElsewhereError, openSqliteAgentStorage } from "./storage/sqli
 import { gatewayCall, gatewayPost, ThreadStatusReporter } from "./thread-status.ts";
 import { ThreadStore } from "./threads.ts";
 import { memoryExtension } from "./memory.ts";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ImageContent, ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
+import { DEFAULT_IMAGE_LIMITS } from "@earendil-works/pi-durable/tools";
+import { imageProcessor } from "./images.ts";
+import type { ChatAttachment } from "./view.ts";
 import { ModelChoices } from "./model-choices.ts";
 import { personExtension, TodoDoc } from "./person.ts";
 import { parseWebTools, webExtension } from "./web.ts";
@@ -118,7 +121,9 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const workspaceDir = config.modelEnv.WORKSPACE_DIR;
 	const workspaceTools = parseWorkspaceTools(config.modelEnv.WORKSPACE_TOOLS);
 	if (workspaceTools.length > 0 && !workspaceDir) throw new AgentDefinitionError("WORKSPACE_TOOLS needs WORKSPACE_DIR");
-	const workspace = workspaceExtension(workspaceTools);
+	const workspaceTemp = workspaceDir ? (config.modelEnv.WORKSPACE_TEMP_DIR ?? `${workspaceDir.replace(/\/$/, "")}/../tmp`) : undefined;
+	const workspace = workspaceExtension(workspaceTools, workspaceTemp ? { convertedDir: `${workspaceTemp.replace(/\/$/, "")}/converted` } : {});
+	const workspaceEnv = workspaceDir ? createWorkspaceEnv({ root: workspaceDir, tempDir: workspaceTemp!, processEnv: config.modelEnv }) : undefined;
 	// Tool preselection (fast judgments): with deferred tools (many MCP tools), the app may judge which ones a message
 	// needs, and they are loaded before the model runs, as tool_search would (small models often skip tool_search).
 	const pickTools =
@@ -258,14 +263,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 			settings: harnessSettings,
 			...(workspaceDir
 				? {
-						env: (() => {
-							const env = createWorkspaceEnv({
-								root: workspaceDir,
-								tempDir: config.modelEnv.WORKSPACE_TEMP_DIR ?? `${workspaceDir.replace(/\/$/, "")}/../tmp`,
-								processEnv: config.modelEnv,
-							});
-							return () => env;
-						})(),
+						env: () => workspaceEnv!,
 					}
 				: {}),
 			conversationCreated: async (tx, conversation) => {
@@ -279,6 +277,8 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	if (documents.some((doc) => doc.definition.scope === "session")) await harness.commit((tx) => createSessionDocuments(tx, documents), ctx);
 
 	const current: ModelRef = { provider: model.provider, modelId: model.modelId };
+	// The model each thread's latest message runs on (the person's choice, or the agent's): what attached images suit.
+	const usedModel = new Map<string, ModelRef>();
 	const threads = new ThreadStore(harness, () => ({ model: current, extensions: base() }));
 	threadStore = threads;
 	// Calls to the template's MCP servers through the platform name their thread, so the platform can say who they are for.
@@ -347,7 +347,32 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 				});
 			}
 			await align(conversation, selection, use, thinkingOf(choice.thinking));
+			usedModel.set(threadId, use);
 			if (pickTools) await preselect(conversation, selection, text).catch((error: unknown) => logError("tool preselection:", (error as Error).message));
+		},
+		// Attached images, for a model that sees them: in the message itself (resized to fit), not only named.
+		inputFor: async (threadId, text, attachments) => {
+			const images = attachments.filter(isImageFile).slice(0, MAX_INLINE_IMAGES);
+			if (images.length === 0 || workspaceEnv === undefined) return text;
+			const ref = usedModel.get(threadId) ?? current;
+			const target = models.getModel(ref.provider, ref.modelId);
+			if (target !== undefined && !target.input.includes("image")) {
+				return `${text}\n(The model answering can't see images: ${images.map((file) => file.name).join(", ")} ${images.length === 1 ? "is" : "are"} only named here.)`;
+			}
+			const resize = target?.inputLimits?.images?.resize;
+			const limits = {
+				maxWidth: resize?.maxWidth ?? DEFAULT_IMAGE_LIMITS.maxWidth,
+				maxHeight: resize?.maxHeight ?? DEFAULT_IMAGE_LIMITS.maxHeight,
+				maxBytes: resize?.maxBytes ?? DEFAULT_IMAGE_LIMITS.maxBytes,
+			};
+			const parts: (TextContent | ImageContent)[] = [{ type: "text", text }];
+			for (const file of images) {
+				const bytes = await workspaceEnv.readBinaryFile(file.path, ctx);
+				if (!bytes.ok) continue;
+				const prepared = await imageProcessor.prepare(bytes.value, imageTypeOf(file), limits).catch(() => undefined);
+				if (prepared) parts.push({ type: "image", data: prepared.data, mimeType: prepared.mimeType });
+			}
+			return parts.length > 1 ? parts : text;
 		},
 		approvals,
 		afterMessage: status ? (threadId, submissionId) => status.watch(threadId, submissionId) : undefined,
@@ -373,6 +398,19 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 }
 
 /** Whether a conversation's stored agent already has this model and exactly this extension selection. */
+/** At most this many attached images go in a message itself; the rest are only named (the agent may read them). */
+const MAX_INLINE_IMAGES = 5;
+const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp" };
+
+function imageTypeOf(file: ChatAttachment): string {
+	if (file.mediaType.startsWith("image/")) return file.mediaType;
+	return IMAGE_TYPES[file.path.split(".").pop()?.toLowerCase() ?? ""] ?? "";
+}
+
+function isImageFile(file: ChatAttachment): boolean {
+	return Object.values(IMAGE_TYPES).includes(imageTypeOf(file));
+}
+
 /** A chosen thinking level for pi ("" or unknown: none, the model's default). */
 function thinkingOf(level: string): ModelThinkingLevel | null {
 	return level === "off" || level === "low" || level === "medium" || level === "high" ? level : null;

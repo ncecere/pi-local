@@ -78,7 +78,7 @@ type AgentThread = {
 | `GET /api/agents/{a}/threads` | `AgentThread[]`, newest activity first. From the app's own index: **never starts the runtime.** |
 | `GET /api/agents/{a}/threads/{t}` | The runtime's `ChatView` (`runtime/src/lib/view.ts`), passed through. Starts the runtime if it is asleep. `?limit=&before=` pages. |
 | `GET /api/agents/{a}/threads/{t}/events` | SSE from the runtime, passed through: `view` events (the whole ChatView), or with `?format=delta&v=1` a `snapshot` then changes (`runtime/src/lib/delta.ts`). `Last-Event-ID` is forwarded. Starts the runtime. |
-| `POST /api/agents/{a}/threads/{t}/messages` | Body `{text, requestId, whenBusy?: "followUp" \| "steer", modelId?, thinking?}`, at most 32,000 characters. `modelId`/`thinking`: see [Model per conversation](#model-per-conversation-v02). `202 {submissionId}`. Creates the thread on first use: the app records the thread *before* relaying, and removes the record if the runtime refuses. |
+| `POST /api/agents/{a}/threads/{t}/messages` | Body `{text, requestId, whenBusy?: "followUp" \| "steer", modelId?, thinking?, attachments?}` (`attachments`: see [Attachments](#attachments)), at most 32,000 characters. `modelId`/`thinking`: see [Model per conversation](#model-per-conversation-v02). `202 {submissionId}`. Creates the thread on first use: the app records the thread *before* relaying, and removes the record if the runtime refuses. |
 | `POST /api/agents/{a}/threads/{t}/stop` | `202 {ok: true}` |
 | `PATCH /api/agents/{a}/threads/{t}` | Body `{title}` (1–200 chars, one line). Answers `AgentThread`. Stored by the app; doesn't start the runtime. |
 | `DELETE /api/agents/{a}/threads/{t}` | Deletes it in the runtime (starting it if needed) and in the index. Answers `{ok: true}`. |
@@ -309,12 +309,24 @@ thread's view, `ChatView.approvals` lists its pending requests and a tool call c
 |---|---|
 | `POST /api/agents/{a}/attachments?name=<file name>` | Body: the file's bytes (any Content-Type; at most 100 MiB; send an ArrayBuffer, never a Blob). Saved in the workspace under `attachments/<YYYY-MM-DD>/<name>` (a ` (2)` suffix when the name is taken). `201 {path, name, size, mediaType}` (`path` relative to the workspace). `409 no_read_tool` when the agent doesn't have the `read` tool (it couldn't open it). |
 
-The composer sends the message with a line per file after the text:
+A message carries its files (v0.2): upload each, then send `attachments: [{path, name, size, mediaType}]` (the upload's
+answers) with the message, at most 20. The text may then be empty (`""`); a conversation begun that way is named
+after the files. `400 invalid_attachments` for more files or a path outside the workspace.
 
-```
-Attached files (in your workspace):
-- attachments/2026-10-20/report.pdf (120 KB)
-```
+- The transcript's user message has `attachments` (the same objects) and the person's `text` alone.
+- The model reads the text, then a line per file:
+
+  ```
+  Attached files (in your workspace):
+  - attachments/2026-10-20/report.pdf (120 KB)
+  ```
+
+  Messages sent before v0.2 have this block in their `text` (the app shows it as attachments too).
+- Images (PNG, JPEG, GIF, WebP, BMP; up to 5 a message) go in the message itself when the model answering takes images,
+  resized to fit its limits. A model without image input is told it can't see them.
+- The `read` tool opens PDF, Word (`.docx`), Excel (`.xlsx`) and PowerPoint (`.pptx`) files as Markdown: pages,
+  headings, lists and tables, sheets as tables, slides with their notes. A scanned PDF has no text; `read` says so.
+  Images too large for the model are resized rather than refused.
 
 ## MCP servers (Phase 5)
 

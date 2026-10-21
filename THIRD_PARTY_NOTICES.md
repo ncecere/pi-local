@@ -30,3 +30,14 @@ prompt and the project-instruction loading of the pi coding agent,
 > WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 > COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 > OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Bundled into the agent runtime
+
+`runtime/dist/runtime.mjs` bundles its npm dependencies; esbuild keeps their license comments in
+`runtime.mjs.LEGAL.txt`. Three are worth naming for what they do in it:
+
+- [unpdf](https://github.com/unjs/unpdf) (MIT), with Mozilla's [PDF.js](https://github.com/mozilla/pdf.js)
+  (Apache-2.0): reading PDF files as text.
+- [fflate](https://github.com/101arrowz/fflate) (MIT): opening Word, Excel and PowerPoint files.
+- [Photon](https://github.com/silvia-odwyer/photon) (Apache-2.0), its WebAssembly inlined: resizing images for the
+  model.

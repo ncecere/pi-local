@@ -153,6 +153,8 @@ type view struct {
 		Text       string `json:"text"`
 		Error      string `json:"error"`
 		StopReason string `json:"stopReason"`
+		// A user message's files.
+		Attachments []struct{ Path, Name string } `json:"attachments"`
 	} `json:"messages"`
 	Partial *struct {
 		Text string `json:"text"`

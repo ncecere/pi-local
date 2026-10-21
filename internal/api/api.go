@@ -4,17 +4,20 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/user"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -749,17 +752,41 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 		return
 	}
 	var msg struct {
-		Text     string  `json:"text"`
-		ModelID  *string `json:"modelId"`
-		Thinking *string `json:"thinking"`
+		Text        string  `json:"text"`
+		ModelID     *string `json:"modelId"`
+		Thinking    *string `json:"thinking"`
+		Attachments []struct {
+			Path string `json:"path"`
+			Name string `json:"name"`
+		} `json:"attachments"`
 	}
 	if json.Unmarshal(body, &msg) != nil {
 		fail(w, http.StatusBadRequest, "invalid_request", "invalid JSON")
 		return
 	}
-	if strings.TrimSpace(msg.Text) == "" || utf8.RuneCountInString(msg.Text) > maxMessageChars {
+	// Files sent with it (uploaded first): inside the workspace, at most 20.
+	if len(msg.Attachments) > maxAttachments {
+		fail(w, http.StatusBadRequest, "invalid_attachments", fmt.Sprintf("A message can carry at most %d files.", maxAttachments))
+		return
+	}
+	for _, f := range msg.Attachments {
+		if !safeWorkspacePath(f.Path) {
+			fail(w, http.StatusBadRequest, "invalid_attachments", "An attachment's path is a file inside the agent's workspace.")
+			return
+		}
+	}
+	// Text, files, or both.
+	if (strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0) || utf8.RuneCountInString(msg.Text) > maxMessageChars {
 		fail(w, http.StatusBadRequest, "invalid_text", "A message is 1 to 32,000 characters.")
 		return
+	}
+	title := msg.Text
+	if strings.TrimSpace(title) == "" {
+		names := make([]string, 0, len(msg.Attachments))
+		for _, f := range msg.Attachments {
+			names = append(names, cmp.Or(f.Name, filepath.Base(f.Path)))
+		}
+		title = strings.Join(names, ", ")
 	}
 	modelID, thinking, good := a.conversationChoice(w, r, ag, t, msg.ModelID, msg.Thinking)
 	if !good {
@@ -773,7 +800,7 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	}
 	// Recorded before relaying, so the thread is listed (and busy) from the first instant, even if the runtime is
 	// still starting; taken away again if the runtime refuses the first message.
-	createdNow, err := a.Threads.Sending(r.Context(), ag.ID, t, msg.Text, nil)
+	createdNow, err := a.Threads.Sending(r.Context(), ag.ID, t, title, nil)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "internal", "could not record the conversation")
 		return
@@ -801,6 +828,21 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(answer)
+}
+
+const maxAttachments = 20
+
+// safeWorkspacePath: a path relative to the workspace that stays in it (the runtime checks again, following links).
+func safeWorkspacePath(p string) bool {
+	if p == "" || len(p) > 1000 || strings.ContainsRune(p, 0) || filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) {
+		return false
+	}
+	for _, part := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // conversationChoice is the model and thinking level a message runs with. A message may change them (modelId,

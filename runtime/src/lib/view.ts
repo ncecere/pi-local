@@ -15,7 +15,11 @@ export const AUTHOR_KINDS: ReadonlySet<string> = new Set(["user", "service_accou
  * the speaker) plus `data`, what the transcript shows: the text as sent, when, and by whom.
  */
 export const USER_ENTRY = "pdp.user";
-export type UserEntryData = { text: string; at: number; author?: Author; requestId?: string };
+export type UserEntryData = { text: string; at: number; author?: Author; requestId?: string; attachments?: ChatAttachment[] };
+/** A file sent with a message: saved in the agent's workspace (path relative to it). */
+export type ChatAttachment = { path: string; name: string; size: number; mediaType: string };
+/** The most files one message may carry. */
+export const MAX_ATTACHMENTS = 20;
 
 /** The chat view the platform relays to clients: transcript plus the reply in progress. */
 export type ChatView = {
@@ -100,7 +104,7 @@ export type ChatUsage = { input: number; output: number; cacheRead: number; cach
 
 /** `at`: Unix milliseconds (a user message's sending, an assistant reply's start). */
 export type ChatMessage =
-	| { id: string; role: "user"; text: string; author?: Author; at?: number; requestId?: string }
+	| { id: string; role: "user"; text: string; author?: Author; at?: number; requestId?: string; attachments?: ChatAttachment[] }
 	| {
 			id: string;
 			role: "assistant";
@@ -157,6 +161,8 @@ export function buildMessages(entries: readonly EntryRecord[], approvals?: Reado
 				if (data.author !== undefined) converted.author = data.author;
 				// The sender's request ID: a client matches what it sent to the transcript by it, not by the text.
 				if (data.requestId !== undefined) converted.requestId = data.requestId;
+				// The files it carried (the model's copy names them in its text).
+				if (data.attachments !== undefined && data.attachments.length > 0) converted.attachments = data.attachments;
 			}
 			messages.push(converted);
 		});
@@ -184,8 +190,10 @@ export function liveParts(live: Readonly<LiveState> | undefined): Pick<ChatView,
 /** A pdp.user entry's data, read defensively (it is stored JSON). */
 function userData(value: unknown): Partial<UserEntryData> | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
-	const { text, at, author, requestId } = value as Record<string, unknown>;
+	const { text, at, author, requestId, attachments } = value as Record<string, unknown>;
 	const out: Partial<UserEntryData> = {};
+	const files = parseAttachments(attachments);
+	if (files !== undefined && files.length > 0) out.attachments = files;
 	if (typeof text === "string") out.text = text;
 	if (typeof requestId === "string") out.requestId = requestId;
 	if (typeof at === "number") out.at = at;
@@ -328,4 +336,49 @@ export function pageView(view: ChatView, page: MessagePage): ChatView {
 	while (start > 0 && all[start]?.role === "tool") start--;
 	const { earlierCursor: _, ...rest } = view;
 	return { ...rest, messages: all.slice(start, end), ...(start > 0 ? { earlierCursor: messageCursor(all[start]!.id) } : {}) };
+}
+
+/** A message's attachments, checked (undefined when the value is not a list of them). */
+export function parseAttachments(value: unknown): ChatAttachment[] | undefined {
+	if (value === undefined || value === null) return [];
+	if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS) return undefined;
+	const out: ChatAttachment[] = [];
+	for (const item of value) {
+		if (typeof item !== "object" || item === null) return undefined;
+		const { path, name, size, mediaType } = item as Record<string, unknown>;
+		if (typeof path !== "string" || !safeRelative(path)) return undefined;
+		const file = {
+			path,
+			name: typeof name === "string" && name.trim() ? name.slice(0, 255) : (path.split("/").pop() ?? path),
+			size: typeof size === "number" && Number.isFinite(size) && size >= 0 ? Math.floor(size) : 0,
+			mediaType: typeof mediaType === "string" ? mediaType.slice(0, 100) : "",
+		};
+		out.push(file);
+	}
+	return out;
+}
+
+/** A path inside the workspace as written: relative, no "..", no NUL, not too long. */
+function safeRelative(path: string): boolean {
+	if (path === "" || path.length > 1000 || path.includes("\0") || path.startsWith("/") || /^[A-Za-z]:/.test(path)) return false;
+	return !path.split(/[\\/]/).includes("..");
+}
+
+/** The block the model reads after the text: `Attached files (in your workspace):` and a line per file. */
+export function attachmentBlock(files: readonly ChatAttachment[]): string {
+	if (files.length === 0) return "";
+	return ["Attached files (in your workspace):", ...files.map((file) => `- ${file.path} (${formatBytes(file.size)})`)].join("\n");
+}
+
+/** "512 B", "120 KB", "4.2 MB" (1 KB = 1024 B), as the app writes sizes. */
+export function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	const units = ["KB", "MB", "GB"];
+	let value = bytes / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return `${value < 10 ? Math.round(value * 10) / 10 : Math.round(value)} ${units[unit]}`;
 }

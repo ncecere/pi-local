@@ -1,11 +1,15 @@
-import { mkdirSync, realpathSync } from "node:fs";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { mkdir, mkdtemp, realpath, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import { defineExtension, type Extension } from "@earendil-works/pi-durable";
 import { err, type ExecutionEnv, FileError, ok } from "@earendil-works/pi-durable/env";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
+import { DocumentError, documentKindOf, documentToMarkdown, MAX_DOCUMENT_BYTES } from "./documents.ts";
+import { imageProcessor } from "./images.ts";
 
 /** The workspace tools an agent may have (WORKSPACE_TOOLS, comma-separated). */
 export const WORKSPACE_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
@@ -151,11 +155,16 @@ export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 	}) as ExecutionEnv;
 }
 
+export type WorkspaceExtensionOptions = {
+	/** Where `read` keeps PDF and Office files it converted to text (in the agent's temp directory). */
+	convertedDir?: string;
+};
+
 /** The workspace tools an agent was given, as an extension (`workspace`), or undefined for none. */
-export function workspaceExtension(tools: readonly WorkspaceToolName[]): Extension | undefined {
+export function workspaceExtension(tools: readonly WorkspaceToolName[], options: WorkspaceExtensionOptions = {}): Extension | undefined {
 	if (tools.length === 0) return undefined;
 	const make: Record<WorkspaceToolName, () => unknown> = {
-		read: () => createReadTool(),
+		read: () => createDocumentReadTool(options.convertedDir),
 		write: () => createWriteTool(),
 		edit: () => createEditTool(),
 		bash: () => createBashTool(),
@@ -171,4 +180,62 @@ export function parseWorkspaceTools(raw: string | undefined): WorkspaceToolName[
 		if (!(WORKSPACE_TOOL_NAMES as readonly string[]).includes(name)) throw new Error(`Unknown workspace tool "${name}" in WORKSPACE_TOOLS`);
 	}
 	return [...new Set(names)] as WorkspaceToolName[];
+}
+
+/**
+ * pi's `read` (text files, and images, resized to fit the model), which also reads PDF, Word, Excel and PowerPoint
+ * files: converted to Markdown once (kept in `convertedDir` by the file's path, size and time), then read like a text
+ * file, with the same offset, limit and truncation. Without `convertedDir` (no temp directory) they are converted
+ * into the environment's own temp directory each time.
+ */
+export function createDocumentReadTool(convertedDir?: string) {
+	const inner = createReadTool({ images: imageProcessor });
+	const execute = inner.execute.bind(inner) as (args: ReadArgs, api: ToolExecutionApi, context: Context) => Promise<ToolResult>;
+	return {
+		...inner,
+		description: `${inner.description} Also reads PDF, Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files, as text.`,
+		execute: async (args: ReadArgs, api: ToolExecutionApi, context: Context) => {
+			const kind = documentKindOf(args.path);
+			if (kind === undefined || api.env === undefined) return execute(args, api, context);
+			const env = api.env;
+			const info = await env.fileInfo(args.path, context);
+			if (!info.ok) return execute(args, api, context); // the read tool says why (missing, outside the workspace)
+			if (info.value.size > MAX_DOCUMENT_BYTES) return errorResult(`${args.path} is larger than ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB, too large to read`);
+			const key = createHash("sha256").update(`${info.value.path}\0${info.value.size}\0${info.value.mtimeMs}`).digest("hex").slice(0, 24);
+			let dir = convertedDir;
+			if (dir === undefined) {
+				const temp = await env.createTempDir("converted-", context);
+				if (!temp.ok) return errorResult(`${args.path} could not be converted: ${temp.error.message}`);
+				dir = temp.value;
+			}
+			const converted = join(dir, `${key}.md`);
+			if (!existsSync(converted)) {
+				const bytes = await env.readBinaryFile(args.path, context);
+				if (!bytes.ok) return execute(args, api, context);
+				let markdown: string;
+				try {
+					markdown = await documentToMarkdown(bytes.value, kind, basename(args.path));
+				} catch (error) {
+					return errorResult(error instanceof DocumentError ? `${error.message}.` : `${args.path} could not be read: ${(error as Error).message}`);
+				}
+				await mkdir(dir, { recursive: true });
+				const tmp = `${converted}.${process.pid}.tmp`;
+				await writeFile(tmp, markdown, { mode: 0o600 });
+				await rename(tmp, converted);
+			}
+			const result = await execute({ ...args, path: converted }, api, context);
+			// Its notes (truncation, "use offset=…") name the converted copy: the agent should go on with the original.
+			return {
+				...result,
+				output: result.output.map((part) => (part.type === "text" && typeof part.text === "string" ? { ...part, text: part.text.split(converted).join(args.path) } : part)),
+			};
+		},
+	};
+}
+
+type ReadArgs = { path: string; offset?: number; limit?: number };
+type ToolResult = { output: { type: string; text?: string }[]; isError?: boolean; details?: unknown } & Record<string, unknown>;
+
+function errorResult(text: string): ToolResult {
+	return { output: [{ type: "text", text }], isError: true };
 }
