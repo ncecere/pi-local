@@ -259,7 +259,12 @@ func (st Status) alertText(level int) string {
 		}
 		return msg + " It keeps running."
 	}
-	return fmt.Sprintf("%s used %d%% of its %s budget for %s.", st.Name, WarnPercent, money(st.MonthlyUSD), st.MonthName)
+	// What it has used now, which may be past 80% already (one reply can cost more than a step).
+	used := int(math.Floor(st.Percent))
+	if used < WarnPercent {
+		used = WarnPercent
+	}
+	return fmt.Sprintf("%s used %d%% of its %s budget for %s.", st.Name, used, money(st.MonthlyUSD), st.MonthName)
 }
 
 // Evaluate looks at an agent's budget and the app's after it used its model, and sends a `budget` event the first

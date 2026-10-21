@@ -144,7 +144,7 @@ func TestEachLevelIsAnnouncedOncePerMonthAndLimit(t *testing.T) {
 	if got := f.levels(); len(got) != 2 || got[0] != 80 || got[1] != 100 {
 		t.Fatalf("levels: %v", got)
 	}
-	if m := f.events[0].Message; m != "Hardac used 80% of its $10 budget for October." {
+	if m := f.events[0].Message; m != "Hardac used 85% of its $10 budget for October." { // what it used, past 80%
 		t.Fatalf("80%% message: %q", m)
 	}
 	if m := f.events[1].Message; m != "Hardac reached its $10 budget for October. It is stopped until you raise it." {
