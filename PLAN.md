@@ -493,7 +493,7 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
 - **Edit and branch:** edit-and-resend as a fork at the entry (`conversation.fork(entryId)`) into a new thread
   linked to its parent.
 
-### Phase 8: Ship (in progress)
+### Phase 8: Ship ✅ done 2026-10-21 (v0.1.0)
 - **Decided:** no Apple Developer ID for now (ad-hoc signing, and the README explains "Open Anyway"); releases on
   GitHub Releases with auto-update; Apple Silicon only; Windows and Linux after macOS.
 - **Done:**
@@ -539,9 +539,10 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
     lock; the MCP probe flushes results over 64 KiB; agent folders are stored relative to the data folder
   - MCP: elicitation (servers ask the person mid-call), sign-in commands for local servers, env values edited one at
     a time; external links open in the browser
-- **Left:**
-  - later: Developer ID signing and notarization (`SIGN_IDENTITY`, `notarytool`), a crash and log bundle export
-- **Then:** Windows and Linux.
+- **Released:** v0.1.0 (2026-10-21), on GitHub Releases with signed auto-updates.
+- **Next:** see [roadmap.md](roadmap.md) for the plan from v0.2 on, and [suggested-features.md](suggested-features.md)
+  for every proposed feature and the decisions made about them. Code signing moves to v1.0; Windows and Linux are
+  v0.5.
 
 ### (Original Phase 8 notes)
 - macOS signing and notarization, auto-update, the upgrade check across app versions, crash and log bundle export.
