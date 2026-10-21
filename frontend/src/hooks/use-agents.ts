@@ -4,6 +4,7 @@ import {
   type AgentApprovals,
   type AgentBudget,
   type AgentMcpServer,
+  type AgentSecurity,
   type AgentTemplate,
   type AgentThread,
   type AgentWorkspaceInput,
@@ -259,6 +260,7 @@ export function useUpdateAgent() {
       mcp?: AgentMcpServer[];
       schedules?: { agentMade: boolean };
       web?: WebTools;
+      security?: AgentSecurity;
       /** null removes the agent's budget. */
       budget?: AgentBudget | null;
     }) => api.patch<Agent>(agentPath(id), body),

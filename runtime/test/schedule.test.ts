@@ -124,7 +124,7 @@ describe("the schedule tools", () => {
 		await agent.send("t1", "Remind me to check the deploy tomorrow at nine");
 		await agent.settled("t1");
 
-		expect(await selection(agent, "t1")).toEqual(["assistant", "pdp-schedules"]);
+		expect(await selection(agent, "t1")).toEqual(["assistant", "pdp-schedules", "pdp-scrub"]);
 		expect(gw.seen[0]).toEqual({
 			method: "POST",
 			path: "/schedules",
@@ -198,7 +198,7 @@ describe("the schedule tools", () => {
 			const { agent } = await start(definition, environment, model);
 			await agent.send("t1", "Hello");
 			await agent.settled("t1");
-			expect(await selection(agent, "t1")).toEqual(["assistant"]);
+			expect(await selection(agent, "t1")).toEqual(["assistant", "pdp-scrub"]);
 			expect((seen[0]!.messages.at(-1) as { isError?: boolean }).isError).toBe(true);
 		}
 		expect(gw.seen).toEqual([]);
@@ -214,7 +214,7 @@ describe("the schedule tools", () => {
 		const { agent } = await start(custom, env(gw.url), model);
 		await agent.send("t1", "Hello");
 		await agent.settled("t1");
-		expect(await selection(agent, "t1")).toEqual(["acme", "pdp-schedules"]);
+		expect(await selection(agent, "t1")).toEqual(["acme", "pdp-schedules", "pdp-scrub"]);
 		expect(gw.seen).toEqual([{ method: "GET", path: "/schedules", auth: `Bearer ${KEY}`, body: undefined }]);
 		expect(lastText(seen[0]!)).toBe("You have no schedules.");
 	});

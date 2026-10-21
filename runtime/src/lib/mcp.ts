@@ -3,6 +3,7 @@ import type { Context } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolAnnotations, ToolInfo } from "./approval-rules.ts";
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
+import { serverSecrets } from "./scrub.ts";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { McpClient, type McpFetch, type McpTransport, StdioTransport, StreamableHttpTransport, toLlmContent } from "@earendil-works/pi-mcp";
 import {
@@ -410,6 +411,8 @@ export class AgentMcp {
 	private readonly connections: Connection[] = [];
 	private readonly threadExts = new Map<string, { key: string; extension: Extension; connections: Connection[] }>();
 	private toolSearch: Extension | undefined;
+	/** The secret values of the servers apps gave each thread (headers, env), for scrubbing by value (scrub.ts). */
+	private readonly threadSecrets = new Map<string, string[]>();
 	/** What the approval rules know of each tool (by its registered name): that it is MCP's, its own name and annotations. */
 	private readonly info = new Map<string, ToolInfo>();
 	/** The thread a conversation belongs to (set once the threads are known); the template's proxied tool calls name it. */
@@ -449,6 +452,11 @@ export class AgentMcp {
 			const annotations = cleanAnnotations(tool.annotations);
 			this.info.set(toolName(prefix, server.slug, tool.name), { mcp: true, toolName: tool.name, ...(annotations === undefined ? {} : { annotations }) });
 		}
+	}
+
+	/** The secret values of the servers apps gave threads, so a tool's output never carries them (the template's are in MCP_SERVERS). */
+	secretValues(): string[] {
+		return [...this.threadSecrets.values()].flat();
 	}
 
 	/** What is known of a tool for the approval rules: undefined for a tool that isn't an MCP server's. */
@@ -510,6 +518,7 @@ export class AgentMcp {
 	}
 
 	private async installThread(threadId: string, servers: McpServerConfig[]): Promise<Extension | undefined> {
+		this.threadSecrets.set(threadId, servers.flatMap(serverSecrets));
 		const key = JSON.stringify(servers.map((s) => [s.slug, s.url, s.headers ?? {}]));
 		const current = this.threadExts.get(threadId);
 		if (current?.key === key) return current.extension;

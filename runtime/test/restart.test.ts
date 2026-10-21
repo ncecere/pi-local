@@ -133,7 +133,7 @@ describe("the test kit's restart helper", () => {
 		// The child selects the caller's extensions, guard included, but not the subagent tool itself.
 		const parent = (await second.agent.threads.get("t"))!;
 		const childId = await childOf(second, parent.id);
-		expect((await second.harness.snapshot(AgentDoc, childId as never, ctx))?.extensions).toEqual(["assistant", "notes", "guard"]);
+		expect((await second.harness.snapshot(AgentDoc, childId as never, ctx))?.extensions).toEqual(["assistant", "notes", "guard", "pdp-scrub"]);
 		// Declared documents exist in a subagent's conversation too.
 		expect(await second.harness.snapshot(Ledger, childId as never, ctx)).toEqual({ calls: {} });
 	});

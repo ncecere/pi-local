@@ -104,6 +104,19 @@ describe("stdio MCP servers", () => {
 		expect(result?.isError).toBeFalsy();
 		expect(result?.text).toContain("echo: hello");
 		expect(result?.text).toContain(`cwd: ${realpathSync(dir)}`);
+		// The server's own env value is a secret the runtime hides by value (scrub.ts); it still reached the server.
+		expect(result?.text).toContain("value: [redacted secret]");
+		expect(result?.text).not.toContain("resolved-secret");
+	}, 20_000);
+
+	it("shows a stdio server's env value when the agent's secret scrubbing is off", async () => {
+		const dir = await tempAgentDir(cleanup);
+		const server = stdioServer(dir, { tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object", properties: { text: { type: "string" } } } }] });
+		const agent = await startTestAgent(undefined, { env: { MCP_SERVERS: JSON.stringify([server]), SCRUB_SECRETS: "false" } });
+		cleanup.push(() => agent.close());
+		agent.model.reply(toolCall("mcp__fx__echo", { text: "hello" }), answer("done"));
+		await agent.send("t1", "use the tool");
+		const result = (await agent.settled("t1")).messages.find((m) => m.role === "tool");
 		expect(result?.text).toContain("value: resolved-secret");
 	}, 20_000);
 });

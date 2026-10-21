@@ -92,6 +92,9 @@ type Options struct {
 	// Refuse, when set, is asked before each start whether the agent may run on this runtime (the storage version
 	// check): a non-nil error refuses the start with that error.
 	Refuse func(agentID string) error
+	// RedactLog, when set, makes the function that cleans each line a runtime writes to its log, given the runtime's whole
+	// environment (so it can hide its own secret values). Without it, lines are written as they come.
+	RedactLog func(env map[string]string) func(string) string
 
 	IdleTimeout   time.Duration // default 10 min
 	BackgroundMax time.Duration // default 2 h
@@ -437,6 +440,9 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if s.opts.RedactLog != nil {
+		logs.redact = s.opts.RedactLog(env)
+	}
 	cmd.Stderr = logs
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -914,6 +920,8 @@ type logFile struct {
 	size int64
 	tail []byte
 	buf  []byte
+	// redact cleans each line before it is written (secrets never reach the log or the tail).
+	redact func(string) string
 }
 
 const maxLogBytes = 5 << 20
@@ -968,7 +976,11 @@ func (l *logFile) Write(b []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		l.writeLocked([]byte(time.Now().Format("2006-01-02T15:04:05.000 ") + string(l.buf[:i+1])))
+		line := string(l.buf[:i+1])
+		if l.redact != nil {
+			line = l.redact(strings.TrimSuffix(line, "\n")) + "\n"
+		}
+		l.writeLocked([]byte(time.Now().Format("2006-01-02T15:04:05.000 ") + line))
 		l.buf = l.buf[i+1:]
 	}
 	return len(b), nil
@@ -978,6 +990,9 @@ func (l *logFile) Write(b []byte) (int, error) {
 func (l *logFile) Line(line string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.redact != nil {
+		line = l.redact(line)
+	}
 	l.writeLocked([]byte(time.Now().Format("2006-01-02T15:04:05.000 ") + line + "\n"))
 }
 

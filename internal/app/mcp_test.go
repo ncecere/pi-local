@@ -53,13 +53,13 @@ func TestAStdioMCPServer(t *testing.T) {
 		t.Fatal("an env value was written to app.db")
 	}
 
-	// An agent using it: the tool runs in the agent's workspace, with the secret env.
+	// An agent using it: the tool runs in the agent's workspace, with the secret env (its value is hidden in the result).
 	scripted(t, h)
 	agent := h.agentOn("Toolsmith", "script/s1", map[string]any{"mcp": []map[string]any{{"server": "fixture"}}})
 	v := h.sendAndWait(agent, "t1", `CALL:mcp__fixture__echo:{"text":"hi"}`, "r1")
 	reply := lastReply(v)
 	ws, _ := filepath.EvalSymlinks(filepath.Join(h.app.cfg.DataDir, "agents", agent, "workspace"))
-	if !strings.Contains(reply, "echo: hi") || !strings.Contains(reply, "value: from-the-keychain") || !strings.Contains(reply, "cwd: "+ws) {
+	if !strings.Contains(reply, "echo: hi") || !strings.Contains(reply, "value: [redacted secret]") || strings.Contains(reply, "from-the-keychain") || !strings.Contains(reply, "cwd: "+ws) {
 		t.Fatalf("the MCP tool's answer: %q (workspace %s)", reply, ws)
 	}
 
@@ -265,9 +265,10 @@ func TestOneEnvValueOrHeaderCanBeChangedShownOrRemoved(t *testing.T) {
 	h.mustDo("POST", "/api/mcp/servers/fixture/reveal", map[string]string{"kind": "env", "name": "NOPE"}, 404)
 	h.mustDo("POST", "/api/mcp/servers/nope/reveal", map[string]string{"kind": "env", "name": "TOKEN"}, 404)
 
-	// The server runs with the changed value (an agent's copy restarts with it).
+	// The server runs with the changed value (an agent's copy restarts with it). Its secrets are hidden from tool results
+	// unless the agent's scrubbing is off, as it is here, to see the value.
 	scripted(t, h)
-	agent := h.agentOn("Toolsmith", "script/s1", map[string]any{"mcp": []map[string]any{{"server": "fixture"}}})
+	agent := h.agentOn("Toolsmith", "script/s1", map[string]any{"mcp": []map[string]any{{"server": "fixture"}}, "security": map[string]any{"scrubSecrets": false}})
 	if reply := lastReply(h.sendAndWait(agent, "t1", `CALL:mcp__fixture__echo:{"text":"hi"}`, "r1")); !strings.Contains(reply, "value: second") {
 		t.Fatalf("the tool saw: %q", reply)
 	}

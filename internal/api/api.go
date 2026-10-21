@@ -400,6 +400,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"mcp":              mcpChoices(ag.Config.MCP),
 		"schedules":        ag.Config.Schedules,
 		"budget":           ag.Config.Budget,
+		"security":         map[string]any{"scrubSecrets": ag.Config.Security.Scrub()},
 	}
 }
 
@@ -508,6 +509,8 @@ type agentInput struct {
 	Schedules    *agents.AgentSchedules `json:"schedules"`
 	Web          *agents.WebTools       `json:"web"`
 	Memory       *agents.MemorySettings `json:"memory"`
+	// Security: {scrubSecrets} (true when left out).
+	Security *agents.Security `json:"security"`
 	// Budget: {monthlyUsd, onExceed} sets the agent's monthly budget, null removes it, absent leaves it.
 	Budget json.RawMessage `json:"budget"`
 }
@@ -566,6 +569,9 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.Memory != nil {
 		c.Memory = *in.Memory
+	}
+	if in.Security != nil {
+		c.Security = *in.Security
 	}
 	if in.MCP != nil {
 		c.MCP = *in.MCP

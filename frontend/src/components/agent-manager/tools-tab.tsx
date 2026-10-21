@@ -314,6 +314,8 @@ function ToolsForm({
 
       <WebPanel agent={agent} />
 
+      <SecretsPanel agent={agent} />
+
       <Panel
         title="Approvals"
         description="Tools that ask you first. The call waits, even while the agent sleeps, until you approve or deny it in the conversation."
@@ -597,6 +599,64 @@ function WebPanel({ agent }: { agent: Agent }) {
           'fetch',
           'Read web pages',
           'Open a link and read the page as text: ones you send, or ones it finds.',
+        )}
+        {update.error && <ErrorNotice>{errorMessage(update.error)}</ErrorNotice>}
+      </div>
+    </Panel>
+  );
+}
+
+/**
+ * Hiding secrets from the model, saved as soon as it is switched. On by default;
+ * off for an agent that has to handle tokens (docs/api.md, "Hiding secrets").
+ */
+function SecretsPanel({ agent }: { agent: Agent }) {
+  const id = useId();
+  const update = useUpdateAgent();
+  const saved = agent.security?.scrubSecrets ?? true;
+  // While a change saves, the switch shows it.
+  const on = update.isPending ? (update.variables?.security?.scrubSecrets ?? saved) : saved;
+  return (
+    <Panel
+      title="Secrets"
+      description="Passwords, API keys and tokens that its tools return are replaced with [redacted secret] before the model sees them and before they are saved."
+    >
+      <div className="flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-6">
+          <div className="min-w-0">
+            <p id={`${id}-label`} className="text-sm font-medium">
+              Hide secrets from the model
+            </p>
+            <p id={`${id}-hint`} className="mt-0.5 text-xs text-[var(--text-muted)]">
+              Covers command output, files it reads, web pages, MCP results and your answers to its
+              questions. It also hides the keys Pi Local gave it: its model key and its MCP servers'
+              keys. Logs are always cleaned.
+            </p>
+          </div>
+          <Switch
+            checked={on}
+            disabled={update.isPending}
+            aria-labelledby={`${id}-label`}
+            aria-describedby={`${id}-hint`}
+            onCheckedChange={(next) =>
+              saveAgentChange(agent, () =>
+                update.mutateAsync({ id: agent.id, security: { scrubSecrets: next } }),
+              )
+            }
+          />
+        </div>
+        {!on && (
+          <p
+            role="note"
+            className="flex gap-2 rounded-lg border border-[var(--warning)]/45 bg-[var(--warning)]/[0.08] px-3 py-2 text-xs text-[var(--text-primary)]"
+          >
+            <TriangleAlert
+              className="mt-px size-3.5 shrink-0 text-[var(--warning)]"
+              aria-hidden="true"
+            />
+            Off: the model sees whatever its tools return, secrets included, and conversations keep
+            it. Turn this off only for an agent that has to handle tokens.
+          </p>
         )}
         {update.error && <ErrorNotice>{errorMessage(update.error)}</ErrorNotice>}
       </div>

@@ -16,6 +16,7 @@ export type {
   AgentMcpServer,
   AgentMemory,
   AgentRef,
+  AgentSecurity,
   AgentStatus,
   AgentTemplate,
   AgentThread,

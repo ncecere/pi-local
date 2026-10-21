@@ -101,7 +101,7 @@ describe("the default composition", () => {
 		expect(result).toMatchObject({ role: "tool", name: "get_time", isError: false });
 		expect(result?.role === "tool" && result.text).toMatch(/\(UTC\)$/);
 		const conversation = (await agent.agent.threads.get("a"))!;
-		expect((await agent.harness.snapshot(durable.AgentDoc, conversation.id, ctx))?.extensions).toEqual(["assistant"]);
+		expect((await agent.harness.snapshot(durable.AgentDoc, conversation.id, ctx))?.extensions).toEqual(["assistant", "pdp-scrub"]);
 		expect(system).toContain("Be terse.");
 	});
 });

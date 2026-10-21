@@ -97,7 +97,20 @@ type Config struct {
 	Memory MemorySettings `yaml:"memory,omitempty"`
 	// Budget: a monthly limit on what the agent may spend on its model (nil: none).
 	Budget *Budget `yaml:"budget,omitempty"`
+	// Security: whether what its tools return is cleaned of secrets before the model sees it and before it is saved.
+	Security Security `yaml:"security,omitempty"`
 }
+
+// Security is an agent's secret handling. `scrubSecrets` (on unless false) replaces what looks like a credential in
+// the output of its tools, and the secret values the app gave it (its model key, its MCP servers' keys), with
+// "[redacted secret]" before the model sees them and before they are saved. Turn it off for an agent that has to
+// handle tokens. Logs are cleaned either way. The default isn't written to agent.yaml.
+type Security struct {
+	ScrubSecrets *bool `yaml:"scrubSecrets,omitempty" json:"scrubSecrets"`
+}
+
+// Scrub reports whether tool output is scrubbed of secrets (the default).
+func (s Security) Scrub() bool { return s.ScrubSecrets == nil || *s.ScrubSecrets }
 
 // Budget is an agent's monthly spending limit, counted from the usage and prices in the app (this calendar month, priced
 // models only). OnExceed says what happens at the limit: "stop" refuses the agent's new work until the next month or a
@@ -385,6 +398,10 @@ func (c *Config) Normalize() {
 	c.Instructions = strings.TrimSpace(c.Instructions)
 	if c.Kind == "" {
 		c.Kind = "assistant"
+	}
+	// Scrubbing is the default: `scrubSecrets: true` written by hand is the same as nothing.
+	if c.Security.Scrub() {
+		c.Security.ScrubSecrets = nil
 	}
 	// Rules written by hand have no ID yet; they get the same one on every load.
 	for i := range c.Approvals.Rules {

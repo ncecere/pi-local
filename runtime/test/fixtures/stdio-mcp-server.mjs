@@ -11,6 +11,8 @@ if (process.env.FIXTURE_CRASH === "1") {
 	process.exit(1);
 }
 process.stderr.write("fixture: started\n");
+// FIXTURE_LOG_VALUE=1: it also logs its FIXTURE_VALUE to stderr, which the runtime writes to the agent's log.
+if (process.env.FIXTURE_LOG_VALUE === "1") process.stderr.write(`fixture: value ${process.env.FIXTURE_VALUE}\n`);
 
 const tools = [
 	{ name: "echo", description: "Echo the text back", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },

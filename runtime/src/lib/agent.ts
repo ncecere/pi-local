@@ -4,6 +4,7 @@ import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { AgentDoc, type Conversation, createRegistry, type Extension, Harness, type HarnessSettings, type ModelRef, type Storage, type ToolRegistration } from "@earendil-works/pi-durable";
 import { Approvals, parseApprovalPolicy } from "./approvals.ts";
 import { redactArguments } from "./redact.ts";
+import { Scrubber, scrubEnabled } from "./scrub.ts";
 import { assistantAgent } from "./assistant.ts";
 import { PLATFORM_PERSON_WAIT_KINDS } from "./background.ts";
 import {
@@ -239,18 +240,25 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const storage = options.storage ?? (await openSqliteAgentStorage({ path: config.storagePath })).storage;
 
 	const registry = createRegistry();
-	for (const extension of extensions) registry.install(extension);
+	// Secret scrubbing (SCRUB_SECRETS, on unless the agent's `security.scrubSecrets` is off): what tools return is cleaned
+	// before the model sees it and before it is stored (scrub.ts). Its extension is selected last, after the approvals;
+	// the tools of every extension installed here also clean what they report while they run.
+	const scrubber = scrubEnabled(config.modelEnv) ? new Scrubber(config.modelEnv, () => mcp.secretValues()) : undefined;
+	const scrubbing: Extension[] = scrubber ? [scrubber.extension()] : [];
+	const protect = (extension: Extension): Extension => (scrubber ? scrubber.protect(extension) : extension);
+	for (const extension of extensions) registry.install(protect(extension));
+	for (const extension of scrubbing) registry.install(extension);
 	// Asks (or refuses) as the agent's approval rules and profile say; selected last, so it sees the arguments other
 	// hooks settled on and a call another hook blocks is never put to a person.
 	let asking: Extension[] = [];
 	// MCP servers: the template's, and those apps gave threads (installed before resuming, so resumed runs find their tools).
-	const mcp = new AgentMcp(config.modelEnv, (ext) => registry.install(ext));
-	for (const ext of mcp.extensions) registry.install(ext);
+	const mcp = new AgentMcp(config.modelEnv, (ext) => registry.install(protect(ext)));
+	for (const ext of mcp.extensions) registry.install(protect(ext));
 	await mcp.restore().catch((error: unknown) => logError("thread MCP servers:", (error as Error).message));
 
 	// The default selection is what a conversation gets when nothing chose for it (one a tool creates, for instance):
 	// the agent's extensions and the template's MCP servers, never another thread's servers.
-	const base = (): Extension[] => [...extensions, ...mcp.extensions, ...asking];
+	const base = (): Extension[] => [...extensions, ...mcp.extensions, ...asking, ...scrubbing];
 	const harnessSettings: HarnessSettings = Object.defineProperties({}, {
 		...Object.getOwnPropertyDescriptors(settings),
 		extensions: { get: base, enumerable: true },
@@ -318,7 +326,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const align = (conversation: Conversation, selection: readonly Extension[], use: ModelRef = current, thinking?: ModelThinkingLevel | null) =>
 		conversation.configure({ model: use, extensions: [...selection], ...(thinking === undefined ? {} : { thinkingLevel: thinking }) }, ctx);
 	for (const record of await threads.list()) {
-		const selection = [...extensions, ...mcp.installed(record.threadId), ...asking];
+		const selection = [...extensions, ...mcp.installed(record.threadId), ...asking, ...scrubbing];
 		const stored = await harness.snapshot(AgentDoc, record.conversationId as never, ctx);
 		const chosen = ModelChoices.catalogIdOf(stored?.model);
 		const use = chosen && choices ? await choices.ref(chosen).catch(() => current) : current;
@@ -356,7 +364,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 				logError(`MCP servers of thread ${threadId}:`, (error as Error).message);
 				return mcp.extensions;
 			});
-			const selection = [...extensions, ...servers, ...asking];
+			const selection = [...extensions, ...servers, ...asking, ...scrubbing];
 			// The person's choice for this conversation; a model that can't be loaded answers with the agent's own.
 			let use = current;
 			if (choice.model && choices) {

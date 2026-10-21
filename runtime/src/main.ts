@@ -11,6 +11,9 @@ if (process.argv[2] === "version") {
 	const { runMcpProbe } = await import("./lib/probe.ts");
 	await runMcpProbe();
 } else {
+	// Logs are cleaned of credentials and of this runtime's own secrets, whatever the agent's switch says (scrub.ts).
+	const { installLogScrubbing } = await import("./lib/scrub.ts");
+	installLogScrubbing(process.env);
 	const { runAgentProcess } = await import("@pdp/runtime");
 	const { agentFromEnv } = await import("@pdp/runtime/kinds");
 	await runAgentProcess(agentFromEnv);

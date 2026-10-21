@@ -74,6 +74,12 @@ export interface Agent {
    */
   web?: WebTools;
   /**
+   * Secret handling: with `scrubSecrets` (the default) credentials in what its tools return become
+   * `[redacted secret]` before the model sees them and before they are saved. Absent from an older
+   * backend (read as on).
+   */
+  security?: AgentSecurity;
+  /**
    * Its memory: on unless `off`; it sees the person's basics and preferences, plus the categories in `share`.
    * Absent from an older backend (read as on, sharing nothing more).
    */
@@ -194,6 +200,11 @@ export interface RouteResult {
   confidence: number;
   alternatives: { agentId: string; probability: number }[];
   model: string;
+}
+
+/** An agent's secret handling (`PATCH /api/agents/{id}` takes `security: {scrubSecrets}`). */
+export interface AgentSecurity {
+  scrubSecrets: boolean;
 }
 
 /** An agent's web tools (read-only: they change nothing). */

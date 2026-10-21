@@ -944,6 +944,48 @@ them. On by default; Settings → Models turns it off (every conversation then u
   longer be used (its model turned off) falls back to the agent's model at the next message, and is cleared.
 - Usage is counted under the model that answered.
 
+## Hiding secrets (v0.3)
+
+What an agent's tools return is cleaned **in the runtime** before the model sees it and before it is stored, so a token a
+command printed or a server returned never reaches the model, the transcript or the screen. Two kinds of value become
+`[redacted secret]`:
+
+- **What looks like a credential**, by the rules of the approvals view (`runtime/src/lib/redact.ts`, `redactText`; the Go
+  side is `RedactText` in `internal/agents/redact.go`; both read the cases in `internal/agents/testdata/redact-text.json`):
+  known token prefixes (`sk-`, `ghp_`, `xoxb-`, `AKIA`, `pdp…`), a JWT, a PEM private key, an Authorization, Cookie or
+  bearer value, a password in a URL, the value of `password=`, `api_key:`, `"token": "…"` and the like (a flag, a number,
+  empty or a placeholder such as `$KEY` is left), and a long random-looking word (32-512 base64 characters with upper and
+  lower case and digits). Hashes, UUIDs, git SHAs, long paths, identifiers and prose are left alone. A word judged by its
+  parts when it holds `=`, `?`, `&`, `@` or `:` (`SHA=<hash>`, a URL's query), and a path only for a known token shape.
+- **The runtime's own secrets, found by value**: its model key (`MODEL_API_KEY`), the provider's extra headers
+  (`MODEL_HEADERS`), its gateway key (`PLATFORM_KEY`, `MODEL_USAGE_KEY`, `MCP_KEY`), and every env and header value of its
+  MCP servers (the app keeps them as secrets), including the servers apps give a thread. At least 6 characters; not a flag,
+  a number, a path, a URL without a password or a media type; also as JSON-escaped or URL-encoded. The values are never
+  listed in a message, a log or a setting.
+
+Where: the tool task's `afterTool` hook (every tool's final result: MCP results, `bash`, `read`, web fetch and search,
+`ask_person` answers, subagents', a program's nested calls) and, for a tool still running, what it reports on the way
+(a command's streamed output, details, diagnostics), so a secret never shows on screen while it runs. Text parts only;
+images and other parts pass through. Output, details, structured output and diagnostic messages are all cleaned. A
+secret split across two streamed chunks is caught when the result settles. The extension is `pdp-scrub`, selected last in
+every conversation (after the approvals).
+
+**The switch.** `agent.yaml` `security: {scrubSecrets: true}`; on unless `false`, and the default isn't written. `Agent`
+gains `security: {scrubSecrets: boolean}` (`PATCH /api/agents/{id}` with `{security: {scrubSecrets}}`; left out, it
+leaves the setting). The app passes it as `SCRUB_SECRETS=true|false` in the runtime's environment (a change restarts the
+runtime, as any configuration change does; a runtime without the variable scrubs). Settings → Agents → an agent → Tools →
+Secrets: "Hide secrets from the model". Off is for an agent that has to handle tokens; its transcript then keeps them.
+It only covers what tools return: a message you type, or what the model writes in a tool call, is not changed.
+
+**Logs** are cleaned whatever the switch says, twice: the runtime formats each `console.*` line and cleans it like a tool
+result (`installLogScrubbing`), and the app cleans every line it writes to `agents/<id>/logs/runtime.log`, hiding the
+runtime's secret values and applying `RedactText` (`agents.LogRedactor`, the supervisor's `RedactLog`). Marks in logs and
+diagnostics read `[redacted, N characters]` or `[redacted secret]`.
+
+**The approvals view agrees.** An approval's `arguments` redact a credential inside a longer string too (a command with
+`Authorization: Bearer …` reads `Authorization: [redacted, N characters]`), with the same rules; its marks keep their
+length.
+
 ## Backups and diagnostics (v0.3)
 
 ### Backups
@@ -1042,7 +1084,7 @@ recent-errors.txt                 the problem lines of those, and each failed ag
 
 Everything free-form is redacted with the approvals rules (`internal/agents/redact.go`, the Go side of
 `runtime/src/lib/redact.ts`): a value whose key names a credential, a token-looking word, an Authorization or Cookie
-line, a bearer token, a password in a URL, a PEM private key become `[redacted, N characters]`. Conversations, memory
+line, a bearer token, a password in a URL, a PEM private key become `[redacted, N characters]` (the rules also hide a credential inside a longer line, and the runtime's own secret values in logs, see Hiding secrets). Conversations, memory
 and files are never included. The app's own log is its recent `slog` lines (kept in memory, 2,000 lines).
 
 | Route | Answer |

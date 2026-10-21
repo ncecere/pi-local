@@ -70,7 +70,7 @@ describe("the library owns the extension selection", () => {
 		let agent = await startTestAgent(definition, { model: one });
 		await agent.send("t", "time?");
 		expect(blocked(await resultOf(agent, "t", "c1"))).toBe(true);
-		expect(await selection(agent, "t")).toEqual(["assistant", "guard"]);
+		expect(await selection(agent, "t")).toEqual(["assistant", "guard", "pdp-scrub"]);
 
 		// Another model, and the template now has an MCP server (its tools are defined, never connected here).
 		const two = fakeModel({ provider: "two", modelId: "m2" });
@@ -79,7 +79,7 @@ describe("the library owns the extension selection", () => {
 		agent = await agent.restart({ model: two, env: { MCP_SERVERS: mcpServers } });
 		await agent.send("t", "time now?");
 		expect(blocked(await resultOf(agent, "t", "c2"))).toBe(true);
-		expect(await selection(agent, "t")).toEqual(["assistant", "guard", "mcp"]);
+		expect(await selection(agent, "t")).toEqual(["assistant", "guard", "mcp", "pdp-scrub"]);
 		const reply = (await agent.settled("t")).messages.at(-1);
 		expect(reply?.role === "assistant" && reply.model).toEqual({ provider: "two", id: "m2" });
 
@@ -96,7 +96,7 @@ describe("the library owns the extension selection", () => {
 		agent = track(await agent.restart({ env: { MCP_THREADS_URL: `${failing}/thread-mcp`, MCP_KEY: "k" } }));
 		await agent.send("t", "still?");
 		expect(blocked(await resultOf(agent, "t", "c4"))).toBe(true);
-		expect(await selection(agent, "t")).toEqual(["assistant", "guard"]);
+		expect(await selection(agent, "t")).toEqual(["assistant", "guard", "pdp-scrub"]);
 
 		// A new thread gets it too.
 		two.reply(toolCall("get_time", {}, { id: "c5" }), "fifth");

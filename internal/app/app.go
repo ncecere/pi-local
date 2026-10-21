@@ -21,6 +21,7 @@ import (
 	"os/user"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -305,6 +306,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		},
 		OnStarted:    a.started,
 		Refuse:       a.refuse,
+		RedactLog:    agents.LogRedactor,
 		IdleTimeout:  cfg.IdleTimeout,
 		ReapInterval: cfg.ReapInterval,
 		StopGrace:    cfg.StopGrace,
@@ -531,6 +533,8 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	if len(webTools) > 0 {
 		env["WEB_TOOLS"] = strings.Join(webTools, ",")
 	}
+	// Secret scrubbing of what tools return (on unless the agent's agent.yaml turns it off); logs are always cleaned.
+	env["SCRUB_SECRETS"] = strconv.FormatBool(ag.Config.Security.Scrub())
 	// ask_person, notify_person and todo.
 	env["PERSON_TOOLS"] = "on"
 	// Memory: the "about you" and "your notes" sections and the remember / recall / forget tools (on unless off).
