@@ -16,12 +16,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TestNativeExecEntryAuthority uses a runtime-free target. A shell/Go target
-// cannot establish the exec-entry FD invariant: its startup may open its own FDs
-// or silently close inherited ones before the test gets control.
-func TestNativeExecEntryAuthority(t *testing.T) {
-	f := nativeSetup(t)
-	payload := filepath.Join(f.p.Workspace, "exec-authority-probe")
+// buildExecAuthorityProbe checks the static executable contract independently
+// of bwrap admission, so fixture-only detector controls can run on native Linux.
+func buildExecAuthorityProbe(t *testing.T, payload string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cc := exec.CommandContext(ctx, "cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -57,6 +55,70 @@ func TestNativeExecEntryAuthority(t *testing.T) {
 	if !entryFound {
 		t.Fatal("native fixture does not enter at its raw-syscall _start")
 	}
+}
+
+// These standalone controls never inspect PID 1. Only own synthetic descriptors
+// are inspected. All native PID-1 memory probes retain namespace preconditions.
+func TestExecAuthorityDetectorControls(t *testing.T) {
+	if os.Getenv("PI_LOCAL_SANDBOX_NATIVE_TESTS") != "1" {
+		t.Skip("native raw-syscall detector controls not opted in")
+	}
+	payload := filepath.Join(t.TempDir(), "exec-authority-probe")
+	buildExecAuthorityProbe(t, payload)
+	for _, control := range []struct {
+		name, arg string
+		inherited bool
+		want      int
+	}{
+		{"no-inherited-fd", "", false, 14},
+		{"low-inherited-fd", "", true, 12},
+		{"high-fd-above-both-lowered-limits", "--high-fd-control", false, 12},
+		{"known-stdio-only", "--self-stdio-control", false, 0},
+		{"each-stdio-role-required", "--self-missing-stdio-control", false, 54},
+		{"extra-synthetic-pipe", "--self-pipe-control", false, 49},
+		{"extra-synthetic-eventfd", "--self-eventfd-control", false, 49},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var args []string
+			if control.arg != "" {
+				args = append(args, control.arg)
+			}
+			cmd := exec.CommandContext(ctx, payload, args...)
+			// Explicit supplied authority: null stdin/stderr, one stdout pipe.
+			var stdout bytes.Buffer
+			cmd.Stdout = &stdout
+			if control.inherited {
+				file, err := os.Open(os.DevNull)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer file.Close()
+				cmd.ExtraFiles = []*os.File{file}
+			}
+			err := cmd.Run()
+			code := 0
+			if err != nil {
+				exit, ok := err.(*exec.ExitError)
+				if !ok {
+					t.Fatalf("control execution failed: %v", err)
+				}
+				code = exit.ExitCode()
+			}
+			if code != control.want {
+				t.Fatalf("same detector: got assertion %d (%s), want %d", code, execAuthorityAssertion(code), control.want)
+			}
+		})
+	}
+}
+
+// A shell/Go target cannot establish the exec-entry FD invariant: startup may
+// open its own FDs or silently close inherited ones before the test gets control.
+func TestNativeExecEntryAuthority(t *testing.T) {
+	f := nativeSetup(t)
+	payload := filepath.Join(f.p.Workspace, "exec-authority-probe")
+	buildExecAuthorityProbe(t, payload)
 
 	// Seed unrelated non-CLOEXEC input descriptors in the outer driver. These
 	// belong ONLY to this disposable fixture. Inode identities, never secret
@@ -127,7 +189,7 @@ func TestNativeExecEntryAuthority(t *testing.T) {
 
 func execAuthorityAssertion(code int) string {
 	return map[int]string{
-		10: "getrlimit unavailable", 11: "FD limit outside complete bounded scan",
+		10: "getrlimit unavailable", 11: "FD limit outside bounded initial scan",
 		12: "inherited FD at exec entry", 13: "unexpected F_GETFD result",
 		14: "invalid fixture arguments", 15: "invalid fixture identity", 16: "fixture path bound",
 		17: "PID namespace identity unavailable", 18: "proc does not name the fixture PID namespace",
@@ -143,8 +205,11 @@ func execAuthorityAssertion(code int) string {
 		46: "fixture secret memfd retained by PID 1", 47: "handoff memfd retained by PID 1",
 		48: "directory authority retained by PID 1", 49: "unrecognized authority retained by PID 1",
 		50: "PID 1 FD identity unavailable", 51: "invalid pipe identity",
-		52: "invalid eventfd identity", 53: "invalid null device identity",
+		53: "invalid null device identity",
 		54: "PID 1 stdio not inspected", 55: "success marker write failed",
+		56: "self FD enumeration unavailable", 57: "self FD enumeration bound or read failure",
+		58: "supplied stdio unavailable", 59: "PID 1 stdio differs from supplied fixture authority",
+		60: "high-FD lowered-limit control setup failed", 61: "synthetic endpoint control setup failed",
 		125: "candidate setup refused",
 	}[code]
 }

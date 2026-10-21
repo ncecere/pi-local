@@ -3,13 +3,11 @@
 package linuxsandbox
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -416,30 +414,18 @@ exec /bin/sleep 60
 			var stderr synchronizedBuffer
 			cmd.Stderr = &stderr
 			if err := cmd.Start(); err != nil {
+				_ = pipe.Close()
 				t.Fatal(err)
 			}
-			defer func() { _ = cmd.Process.Kill() }()
-			type readiness struct {
-				pid int
-				err error
-			}
-			ready := make(chan readiness, 1)
-			go func() {
-				scanner := bufio.NewScanner(pipe)
-				for scanner.Scan() {
-					fields := strings.Fields(scanner.Text())
-					if len(fields) == 2 && fields[0] == "escaped-ready" {
-						pid, err := strconv.Atoi(fields[1])
-						ready <- readiness{pid, err}
-						_, _ = io.Copy(io.Discard, pipe)
-						return
-					}
+			owned := ownFixtureCommand(cmd, pipe)
+			defer func() {
+				if err := owned.close(); err != nil {
+					t.Error(err)
 				}
-				ready <- readiness{err: fmt.Errorf("no readiness marker")}
 			}()
 			escapedPID := 0
 			select {
-			case r := <-ready:
+			case r := <-owned.ready:
 				if r.err != nil || r.pid <= 1 {
 					t.Fatal("fixture did not provide escaped descendant readiness")
 				}
@@ -455,15 +441,15 @@ exec /bin/sleep 60
 				t.Fatal("did not observe minimum escaped namespace tree")
 			}
 			var handles []int
-			defer func() {
-				for _, fd := range handles {
-					_ = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0)
-					unix.Close(fd)
-				}
-			}()
 			escapedCount, initCount := 0, 0
 			escapedGroup, escapedSession, initGroup, initSession := 0, 0, 0, 0
 			for _, pid := range pids {
+				// Retain the handle before ANY identity/session assertion can fail.
+				fd, err := retainFixturePIDFD(owned, pid)
+				if err != nil {
+					t.Fatal(err)
+				}
+				handles = append(handles, fd)
 				nsPID, err := namespacePID(pid)
 				if err != nil {
 					t.Fatal(err) // Do not silently lose a previously observed child.
@@ -485,11 +471,6 @@ exec /bin/sleep 60
 						escapedGroup, escapedSession = group, session
 					}
 				}
-				fd, err := unix.PidfdOpen(pid, 0)
-				if err != nil {
-					t.Fatal(err)
-				}
-				handles = append(handles, fd)
 			}
 			if escapedCount != 1 || initCount != 1 {
 				t.Fatal("escaped setsid descendant or namespace init missing from observed pidfd set")
@@ -499,15 +480,70 @@ exec /bin/sleep 60
 			if escapedGroup == initGroup || escapedSession == initSession {
 				t.Fatal("escaped descendant did not leave the original sandbox group/session")
 			}
-			if err := cmd.Process.Kill(); err != nil {
+			if err := owned.killAndWait(); err != nil {
 				t.Fatal(err)
 			}
-			_ = cmd.Wait()
 			for _, fd := range handles {
 				poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 				n, err := unix.Poll(poll, 5000)
 				if err != nil || n != 1 || poll[0].Revents&unix.POLLIN == 0 {
 					t.Fatalf("escaped descendant survived namespace teardown: poll=%v err=%v", poll, err)
+				}
+			}
+		})
+	}
+}
+
+// Called only for a discovered fixture descendant (or our single owned root in
+// fault-injection tests), never an arbitrary host PID.
+func retainFixturePIDFD(owned *fixtureCommand, pid int) (int, error) {
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return -1, err
+	}
+	owned.retained = append(owned.retained, func() {
+		_ = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0)
+		_ = unix.Close(fd)
+	})
+	return fd, nil
+}
+
+func TestFixtureCleanupAfterPartialPIDFDCollection(t *testing.T) {
+	for _, failure := range []string{"identity-assertion", "collection-error"} {
+		t.Run(failure, func(t *testing.T) {
+			owned := startCleanupFixture(t)
+			var captured []int
+			injected := errors.New("injected identity assertion")
+			err := func() error {
+				defer func() {
+					if err := owned.close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				for i := 0; i < 2; i++ {
+					fd, err := retainFixturePIDFD(owned, owned.cmd.Process.Pid)
+					if err != nil {
+						return err
+					}
+					captured = append(captured, fd)
+				}
+				if failure == "identity-assertion" {
+					return injected
+				}
+				// Invalid PID cannot acquire authority or create untracked descendants.
+				_, err := retainFixturePIDFD(owned, -1)
+				return err
+			}()
+			if err == nil || len(captured) != 2 {
+				t.Fatalf("fault was not reached: %v", err)
+			}
+			if failure == "identity-assertion" && !errors.Is(err, injected) {
+				t.Fatal(err)
+			}
+			assertFixtureClosed(t, owned)
+			for _, fd := range captured {
+				if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != unix.EBADF {
+					t.Fatalf("partial pidfd collection leaked: %v", err)
 				}
 			}
 		})

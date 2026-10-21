@@ -10,72 +10,96 @@ import (
 	"testing"
 )
 
-// fixtureDescendants reads every task's children, not just the thread-group
-// leader. Limits are refusal bounds, never silent truncation. A disappeared
-// children file is accepted only after confirming that task/process is gone;
-// disappearing tasks force a fresh task listing to catch reparented children.
+// Two complete bounded inventories must agree, including task identities and
+// child edges, not merely the final PID set. Successful reads can race task exit
+// and reparenting too. Refuse instability rather than trusting a partial tree.
+// This is bounded revalidation, not an atomic proc snapshot; fixture readiness
+// must also precede collection. No authority is inferred from arbitrary host PIDs.
 func fixtureDescendants(proc string, root int) ([]int, error) {
-	var out []int
-	queue := []int{root}
-	seen := map[int]bool{root: true}
-	for len(queue) > 0 {
-		pid := queue[0]
-		queue = queue[1:]
-		process := filepath.Join(proc, strconv.Itoa(pid))
-		stable := false
-		for attempt := 0; attempt < 3; attempt++ {
-			tasks, err := os.ReadDir(filepath.Join(process, "task"))
+	return fixtureDescendantsRead(proc, root, os.ReadFile)
+}
+
+func fixtureDescendantsRead(proc string, root int, read func(string) ([]byte, error)) ([]int, error) {
+	inventory := func() ([]int, string, error) {
+		var out, queue []int
+		queue = append(queue, root)
+		seen := map[int]bool{root: true}
+		var records []string
+		for len(queue) > 0 {
+			pid := queue[0]
+			queue = queue[1:]
+			process := filepath.Join(proc, strconv.Itoa(pid))
+			taskDir := filepath.Join(process, "task")
+			tasks, err := os.ReadDir(taskDir)
 			if err != nil {
 				if os.IsNotExist(err) && fixturePathGone(process) {
-					stable = true
-					break
+					records = append(records, fmt.Sprintf("%d:gone", pid))
+					continue
 				}
-				return nil, fmt.Errorf("fixture task listing failed")
+				return nil, "", fmt.Errorf("fixture task listing failed")
 			}
 			if len(tasks) == 0 || len(tasks) > 256 {
-				return nil, fmt.Errorf("unexpected fixture task count")
+				return nil, "", fmt.Errorf("unexpected fixture task count")
 			}
-			raced := false
+			var names []string
 			for _, task := range tasks {
 				if n, err := strconv.Atoi(task.Name()); err != nil || n <= 0 || !task.IsDir() {
-					return nil, fmt.Errorf("unexpected fixture task")
+					return nil, "", fmt.Errorf("unexpected fixture task")
 				}
-				taskPath := filepath.Join(process, "task", task.Name())
-				raw, err := os.ReadFile(filepath.Join(taskPath, "children"))
+				names = append(names, task.Name())
+				raw, err := read(filepath.Join(taskDir, task.Name(), "children"))
 				if err != nil {
-					if os.IsNotExist(err) && (fixturePathGone(taskPath) || fixturePathGone(process)) {
-						raced = true
-						continue
-					}
-					return nil, fmt.Errorf("fixture children read failed")
+					return nil, "", fmt.Errorf("fixture children read failed or raced")
 				}
 				if len(raw) > 4096 {
-					return nil, fmt.Errorf("fixture children list too large")
+					return nil, "", fmt.Errorf("fixture children list too large")
 				}
-				for _, s := range strings.Fields(string(raw)) {
-					n, err := strconv.Atoi(s)
+				var children []int
+				for _, text := range strings.Fields(string(raw)) {
+					n, err := strconv.Atoi(text)
 					if err != nil || n <= 1 || n == root {
-						return nil, fmt.Errorf("unexpected fixture descendant")
+						return nil, "", fmt.Errorf("unexpected fixture descendant")
 					}
+					children = append(children, n)
 					if seen[n] {
-						continue // shared lists and reparenting can repeat a PID
+						continue
 					}
 					seen[n] = true
 					out = append(out, n)
 					queue = append(queue, n)
 					if len(out) > 32 {
-						return nil, fmt.Errorf("fixture tree too large")
+						return nil, "", fmt.Errorf("fixture tree too large")
 					}
 				}
+				sort.Ints(children)
+				records = append(records, fmt.Sprintf("%d/%s:%v", pid, task.Name(), children))
 			}
-			if !raced {
-				stable = true
-				break
+			// Re-list even after every read succeeded. A departing worker may have
+			// reparented a child to a task whose children file we already read.
+			after, err := os.ReadDir(taskDir)
+			if err != nil || len(after) != len(names) {
+				return nil, "", fmt.Errorf("fixture task inventory changed")
+			}
+			for i, task := range after {
+				if task.Name() != names[i] || !task.IsDir() {
+					return nil, "", fmt.Errorf("fixture task inventory changed")
+				}
 			}
 		}
-		if !stable {
-			return nil, fmt.Errorf("fixture task tree did not stabilize")
-		}
+		sort.Strings(records)
+		sort.Ints(out)
+		return out, strings.Join(records, "\n"), nil
+	}
+	out, first, err := inventory()
+	if err != nil {
+		return nil, err
+	}
+	_, second, err := inventory()
+	if err != nil {
+		return nil, err
+	}
+	if first != second {
+		return nil, fmt.Errorf("fixture tree did not stabilize across complete inventories")
 	}
 	return out, nil
 }
@@ -149,5 +173,59 @@ func TestFixtureDescendantsRefusesOversizedTree(t *testing.T) {
 	}
 	if _, err := fixtureDescendants(proc, 100); err == nil {
 		t.Fatal("oversized tree accepted")
+	}
+}
+
+func TestFixtureDescendantsRefusesWorkerExitAfterSuccessfulRead(t *testing.T) {
+	proc := t.TempDir()
+	writeFixtureChildren(t, proc, 100, 100, "")
+	writeFixtureChildren(t, proc, 100, 110, "")
+	injected := false
+	_, err := fixtureDescendantsRead(proc, 100, func(path string) ([]byte, error) {
+		raw, err := os.ReadFile(path)
+		if err == nil && strings.HasSuffix(path, "/100/task/110/children") && !injected {
+			injected = true
+			// Worker spawns 102 AFTER its successful empty read, then exits. The
+			// child reparents to the leader, whose successful read already happened.
+			writeFixtureChildren(t, proc, 102, 102, "")
+			writeFixtureChildren(t, proc, 100, 100, "102")
+			if err := os.RemoveAll(filepath.Join(proc, "100/task/110")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return raw, err
+	})
+	if !injected || err == nil {
+		t.Fatalf("successful-read exit/reparent race accepted: injected=%v err=%v", injected, err)
+	}
+}
+
+func TestFixtureDescendantsRevalidatesPreviouslyReadProcesses(t *testing.T) {
+	proc := t.TempDir()
+	writeFixtureChildren(t, proc, 100, 100, "101")
+	writeFixtureChildren(t, proc, 101, 101, "")
+	injected := false
+	_, err := fixtureDescendantsRead(proc, 100, func(path string) ([]byte, error) {
+		raw, err := os.ReadFile(path)
+		if err == nil && strings.HasSuffix(path, "/101/task/101/children") && !injected {
+			injected = true
+			writeFixtureChildren(t, proc, 102, 102, "")
+			writeFixtureChildren(t, proc, 100, 100, "101 102")
+		}
+		return raw, err
+	})
+	if !injected || err == nil {
+		t.Fatalf("late child creation accepted: injected=%v err=%v", injected, err)
+	}
+}
+
+func writeFixtureChildren(t *testing.T, proc string, pid, tid int, children string) {
+	t.Helper()
+	dir := filepath.Join(proc, strconv.Itoa(pid), "task", strconv.Itoa(tid))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "children"), []byte(children), 0600); err != nil {
+		t.Fatal(err)
 	}
 }
