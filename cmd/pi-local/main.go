@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/ncecere/pi-local/frontend"
 	"github.com/ncecere/pi-local/internal/app"
+	"github.com/ncecere/pi-local/internal/host"
 	"github.com/ncecere/pi-local/internal/runtimeenv"
 	"github.com/ncecere/pi-local/internal/update"
 	runtimebundle "github.com/ncecere/pi-local/runtime"
@@ -241,7 +243,17 @@ func setup(ctx context.Context, dataDir string) (*app.App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("writing the agent runtime: %w", err)
 	}
-	core, err := app.New(ctx, app.Config{DataDir: dataDir, Runtime: rt, TrustedHumanConfirmations: true})
+	// This is the embedded Wails entrypoint, not the headless HTTP server.
+	// Wails' external dev-server override is not a trusted native transport;
+	// conservatively deny it even in production builds that ignore that override.
+	transport := host.EmbeddedNative
+	if os.Getenv("FRONTEND_DEVSERVER_URL") != "" {
+		transport = host.DevHTTP
+	}
+	// Compatibility policy is not isolation proof; Windows/Linux remain denied
+	// pending actual private WebView transport verification.
+	policy := host.HumanConfirmationPolicy(runtime.GOOS, transport)
+	core, err := app.New(ctx, app.Config{DataDir: dataDir, Runtime: rt, TrustedHumanConfirmations: policy.TrustedHumanConfirmations})
 	if err != nil {
 		return nil, err
 	}

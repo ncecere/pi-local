@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +39,7 @@ import (
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
+	"github.com/ncecere/pi-local/internal/host"
 	"github.com/ncecere/pi-local/internal/judge"
 	"github.com/ncecere/pi-local/internal/knowledge"
 	"github.com/ncecere/pi-local/internal/mcp"
@@ -84,6 +84,9 @@ type Config struct {
 	KnowledgeInterval time.Duration
 	// OpenFile opens (or reveals) a knowledge file the person clicked; nil: the system's opener (tests give their own).
 	OpenFile func(path string, reveal bool) error
+	// Opener supplies the host's URL/path boundary; nil uses host.New().
+	// OpenFile, when set, still takes precedence for knowledge files.
+	Opener host.Opener
 }
 
 // App is a running Pi Local.
@@ -330,7 +333,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		OAuthURL:    gatewayURL + "/mcp/oauth",
 		Key:         appKey,
 		Scratch:     filepath.Join(cfg.DataDir, "mcp-scratch"),
-		OpenBrowser: func(u string) error { return a.Reveal(u) },
+		OpenBrowser: a.OpenURL,
 	}
 	a.MCP.TrustedHumanConfirmations = cfg.TrustedHumanConfirmations
 	a.MCP.SetProber(a.mcpProber)
@@ -866,21 +869,29 @@ func (a *App) About() map[string]any {
 	}
 }
 
-// RevealFile shows a file selected in the Finder (on Linux, its folder in the file manager).
-func (a *App) RevealFile(path string) error {
-	if goruntime.GOOS == "linux" {
-		return exec.Command("xdg-open", filepath.Dir(path)).Start()
+func (a *App) hostOpener() host.Opener {
+	if a.cfg.Opener != nil {
+		return a.cfg.Opener
 	}
-	return exec.Command("open", "-R", path).Start()
+	return host.New()
 }
 
-// Reveal opens a folder in the Finder (or the system's file manager).
+// OpenURL opens a validated external http(s) URL, including MCP sign-in pages.
+func (a *App) OpenURL(raw string) error { return a.hostOpener().OpenURL(raw) }
+
+// RevealFile shows a file selected in the Finder (on Linux, its containing folder).
+func (a *App) RevealFile(path string) error { return a.hostOpener().RevealFile(path) }
+
+// Reveal opens a local folder. Legacy callers also passed MCP sign-in URLs;
+// keep that dispatch explicit, including malformed/unsupported URL schemes so
+// they fail URL validation rather than being treated as filesystem paths.
 func (a *App) Reveal(path string) error {
-	opener := "open"
-	if goruntime.GOOS == "linux" {
-		opener = "xdg-open"
+	if i := strings.IndexByte(path, ':'); i > 0 && !filepath.IsAbs(path) {
+		if u, err := url.Parse(path[:i+1]); err == nil && u.Scheme != "" {
+			return a.OpenURL(path)
+		}
 	}
-	return exec.Command(opener, path).Start()
+	return a.hostOpener().OpenPath(path)
 }
 
 // catalogChanged: a provider or one of its models changed. Awake agents on it restart with the change (their

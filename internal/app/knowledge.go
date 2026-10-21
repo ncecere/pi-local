@@ -6,8 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
-	"os/exec"
-	goruntime "runtime"
 	"slices"
 	"strings"
 	"time"
@@ -155,14 +153,5 @@ func (a *App) OpenFile(path string, reveal bool) error {
 	if reveal {
 		return a.RevealFile(path)
 	}
-	opener := "open"
-	if goruntime.GOOS == "linux" {
-		opener = "xdg-open"
-	}
-	cmd := exec.Command(opener, path)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() { _ = cmd.Wait() }()
-	return nil
+	return a.hostOpener().OpenPath(path)
 }
