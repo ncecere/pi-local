@@ -145,6 +145,20 @@ describe("workspace tools in an agent", () => {
 		expect(result?.text).not.toContain("sk-must-not-leak");
 	}, 20_000);
 
+	it("keeps the process's own environment out of bash (the real runtime gets its keys there)", async () => {
+		process.env.PI_LOCAL_TEST_LEAK = "sk-process-env-leak";
+		try {
+			const { agent } = await agentWith("bash", {});
+			agent.model.reply(toolCall("bash", { command: "echo leak=[$PI_LOCAL_TEST_LEAK] path=[${PATH:+set}]" }), answer("done"));
+			await agent.send("t1", "go");
+			const [result] = await toolResults(agent, "t1");
+			expect(result?.text).toContain("leak=[]");
+			expect(result?.text).toContain("path=[set]");
+		} finally {
+			delete process.env.PI_LOCAL_TEST_LEAK;
+		}
+	}, 20_000);
+
 	it("only has the tools it was given", async () => {
 		const { agent } = await agentWith("read");
 		agent.model.reply(toolCall("bash", { command: "echo hi" }), answer("done"));

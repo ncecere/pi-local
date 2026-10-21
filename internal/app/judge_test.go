@@ -127,3 +127,27 @@ func TestFastJudgmentsRouteMessagesAndPreselectTools(t *testing.T) {
 		t.Fatal("preselection off still preloaded a tool")
 	}
 }
+
+// The settings form lists the service's models with what was typed, before it is saved.
+func TestFastJudgmentsListModelsWithTheTypedAddressAndKey(t *testing.T) {
+	h := start(t, t.TempDir(), Config{})
+	defer h.close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer typed-key" {
+			w.WriteHeader(401)
+			return
+		}
+		w.Write([]byte(`{"models":[{"name":"jev-1.14.0"}]}`))
+	}))
+	defer srv.Close()
+	got := decodeInto[[]string](t, h.mustDo("POST", "/api/settings/judgments/models", map[string]string{"url": srv.URL, "apiKey": "typed-key"}, 200))
+	if len(got) != 1 || got[0] != "jev-1.14.0" {
+		t.Fatalf("models: %v", got)
+	}
+	// Nothing was saved.
+	if s := string(h.mustDo("GET", "/api/settings/judgments", nil, 200)); strings.Contains(s, srv.URL) || strings.Contains(s, `"hasKey":true`) {
+		t.Fatalf("saved by listing: %s", s)
+	}
+	h.mustDo("POST", "/api/settings/judgments/models", map[string]string{"url": srv.URL, "apiKey": "wrong"}, 502)
+	h.mustDo("POST", "/api/settings/judgments/models", map[string]string{"url": "ftp://x"}, 400)
+}

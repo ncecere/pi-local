@@ -187,3 +187,15 @@ func TestAttachments(t *testing.T) {
 		t.Fatalf("the agent reading the attachment: %q", reply)
 	}
 }
+
+// A command never sees the runtime's environment: its model key, its gateway key, its MCP servers' secrets.
+func TestBashDoesNotSeeTheRuntimesKeys(t *testing.T) {
+	h := start(t, t.TempDir(), Config{})
+	defer h.close()
+	agent := toolsAgent(t, h, []string{"bash"}, []string{})
+	v := h.sendAndWait(agent, "t1", "RUN:echo model=[$MODEL_API_KEY] platform=[$PLATFORM_KEY] gw=[$PLATFORM_GATEWAY_URL] n=$(env | grep -c -E 'KEY|TOKEN|SECRET|PLATFORM_|MODEL_') home=[${HOME:+set}]", "r1")
+	out := strings.Join(toolResults(v), "\n")
+	if !strings.Contains(out, "model=[] platform=[] gw=[] n=0") || !strings.Contains(out, "home=[set]") {
+		t.Fatalf("the command's environment: %q", out)
+	}
+}

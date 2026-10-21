@@ -118,7 +118,7 @@ func Parse(raw []byte) (*Template, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&t); err != nil {
-		return nil, bad("invalid_template", "This isn't a Pi Local template: %s", strings.TrimPrefix(err.Error(), "yaml: "))
+		return nil, bad("invalid_template", "%s", importProblem(err))
 	}
 	return &t, t.check()
 }
@@ -348,4 +348,19 @@ func LocalTimezone() string {
 		}
 	}
 	return "UTC"
+}
+
+var yamlLine = regexp.MustCompile(`line (\d+)`)
+var unknownField = regexp.MustCompile(`field (\S+) not found`)
+
+// importProblem says why a file isn't a template, for people (not the YAML parser's words).
+func importProblem(err error) string {
+	msg := err.Error()
+	if m := unknownField.FindStringSubmatch(msg); m != nil {
+		return fmt.Sprintf("This isn't a Pi Local template: it has a setting Pi Local doesn't know (%s).", m[1])
+	}
+	if m := yamlLine.FindStringSubmatch(msg); m != nil {
+		return fmt.Sprintf("This isn't a Pi Local template: it can't be read (a problem near line %s).", m[1])
+	}
+	return "This isn't a Pi Local template: it can't be read."
 }

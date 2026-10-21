@@ -44,5 +44,8 @@ jobs:
           time macOS will refuse to open it: open System Settings → Privacy & Security, scroll to "Pi Local was blocked",
           and choose **Open Anyway**. After that it opens normally, and updates itself from here.
           NOTES
+          # What's new: this version's section of CHANGELOG.md, when it has one.
+          awk -v v="$VERSION" '$0 ~ "^## " { on = ($2 == v) ; next } on' CHANGELOG.md > changes.md || true
+          if [ -s changes.md ]; then printf '\n## What'"'"'s new\n' >> notes.md; cat changes.md >> notes.md; fi
           gh release create "$GITHUB_REF_NAME" --title "Pi Local $VERSION" --notes-file notes.md \
             "dist/macos/$NAME.zip" "dist/macos/$NAME.zip.sig" "dist/macos/$NAME.dmg" dist/macos/SHA256SUMS

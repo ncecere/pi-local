@@ -231,11 +231,28 @@ func (s *Service) Ask(ctx context.Context, state any, questions map[string]Quest
 	return out.Answers, out.Model, nil
 }
 
-// Models lists the models the service offers (GET /v1/models).
+// Models lists the models the service offers (GET /v1/models), at the saved address with the saved key.
 func (s *Service) Models(ctx context.Context) ([]string, error) {
+	return s.ModelsAt(ctx, "", "")
+}
+
+// ModelsAt lists the models at an address and with a key not saved yet (the settings form's), each falling back to
+// the saved one when empty.
+func (s *Service) ModelsAt(ctx context.Context, address, apiKey string) ([]string, error) {
 	st := s.Settings()
-	key, _ := s.secrets.Get(keyName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, st.URL+"/v1/models", nil)
+	base := st.URL
+	if address = strings.TrimRight(strings.TrimSpace(address), "/"); address != "" {
+		p, err := url.Parse(address)
+		if err != nil || (p.Scheme != "https" && p.Scheme != "http") || p.Host == "" {
+			return nil, bad("invalid_url", "The service address must start with https:// (or http:// on your own network).")
+		}
+		base = address
+	}
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		key, _ = s.secrets.Get(keyName)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
 	if err != nil {
 		return nil, bad("invalid_url", "The service address can't be used.")
 	}

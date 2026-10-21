@@ -197,6 +197,9 @@ func (c *Catalog) Setup(ctx context.Context, in SetupInput) (*SetupResult, error
 		}
 	}
 	available, err := c.Discover(ctx, provider.ID)
+	if err == nil && preset.KeyCheckPath != "" {
+		err = c.checkKey(ctx, provider.ID, base+preset.KeyCheckPath, preset.Name)
+	}
 	if err != nil {
 		// A new provider whose models can't be listed (a wrong key, nothing answering) isn't kept.
 		if created {
@@ -242,4 +245,35 @@ func (c *Catalog) Setup(ctx context.Context, in SetupInput) (*SetupResult, error
 	}
 	available, _ = c.Discover(ctx, provider.ID) // with "added" marked
 	return &SetupResult{Provider: provider, Available: available, DefaultModel: c.DefaultModel(ctx)}, nil
+}
+
+// checkKey asks an endpoint that needs a valid key: refused (401, 403) is a wrong key; anything else (the service
+// down, a changed endpoint) doesn't stop the setup, since the model list already answered.
+func (c *Catalog) checkKey(ctx context.Context, providerID, target, name string) error {
+	p, err := c.Provider(ctx, providerID)
+	if err != nil {
+		return err
+	}
+	kind, ok := KindByID(p.Kind)
+	if !ok {
+		return nil
+	}
+	key, headers, err := c.credentials(p.ID)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil
+	}
+	authenticate(req, kind, key, headers)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return bad("invalid_key", "%s didn't accept this key. Check it and paste it again.", name)
+	}
+	return nil
 }

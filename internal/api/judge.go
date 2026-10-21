@@ -12,6 +12,7 @@ func (a *API) judgeRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/settings/judgments", a.judgeSettings)
 	m.HandleFunc("PUT /api/settings/judgments", a.saveJudgeSettings)
 	m.HandleFunc("GET /api/settings/judgments/models", a.judgeModels)
+	m.HandleFunc("POST /api/settings/judgments/models", a.judgeModelsAt)
 	m.HandleFunc("POST /api/settings/judgments/test", a.testJudge)
 	m.HandleFunc("POST /api/route", a.routeMessage)
 }
@@ -40,6 +41,23 @@ func (a *API) saveJudgeSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, st)
+}
+
+// judgeModelsAt lists the models with the form's address and key, before they are saved ({url?, apiKey?}).
+func (a *API) judgeModelsAt(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		URL    string `json:"url"`
+		APIKey string `json:"apiKey"`
+	}
+	if r.ContentLength != 0 && !decodeBody(w, r, &in) {
+		return
+	}
+	names, err := a.Judge.ModelsAt(r.Context(), in.URL, in.APIKey)
+	if err != nil {
+		judgeFailure(w, err)
+		return
+	}
+	ok(w, names)
 }
 
 func (a *API) judgeModels(w http.ResponseWriter, r *http.Request) {

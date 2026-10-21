@@ -32,6 +32,10 @@ func TestAgentsAskNotifyAndKeepAChecklist(t *testing.T) {
 	if reply := lastReply(h.waitReply(agent, "t1")); !strings.Contains(reply, "They answered: Tuesday") {
 		t.Fatalf("answer: %q", reply)
 	}
+	// The step's details say what happened, for the app.
+	if v := string(h.mustDo("GET", "/api/agents/"+agent+"/threads/t1", nil, 200)); !strings.Contains(v, `"outcome":"answered"`) || !strings.Contains(v, `"answer":"Tuesday"`) {
+		t.Fatalf("the step's details: %.600s", v)
+	}
 	// Declined yes/no.
 	h.mustDo("POST", "/api/agents/"+agent+"/threads/t2/messages", map[string]string{"text": `CALL:ask_person:{"question":"Delete the draft?","yes_no":true}`, "requestId": "r1"}, 202)
 	eventually(t, 30*time.Second, "the yes/no", func() bool {
