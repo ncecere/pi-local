@@ -52,7 +52,7 @@ type Agent = {
 | Route | Answer |
 |---|---|
 | `GET /api/agents` | `Agent[]`, newest first. Never starts a runtime. |
-| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. `templates` are the New agent gallery's starting points, the same list as `GET /api/templates` (see [Templates](#templates-and-web-tools-v02)): the built-ins Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner and Coding, then the person's own. `triage` is retired: no longer offered, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
+| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. `templates` are the New agent gallery's starting points, the same list as `GET /api/templates` (see [Templates](#templates-and-web-tools-v02)): the built-ins Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner, Coding, Agent builder and Concierge, then the person's own. `triage` is retired: no longer offered, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
 | `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?, web?}` (`workspace`: see [Workspace tools](#workspace-tools-approvals-and-attachments-phase-4)). `templateId` is a template's ID: the agent starts from it (its kind, instructions, tools, approvals, web tools and first schedule), and the body's own fields win; an empty `instructions` keeps the template's. `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`, `invalid_workspace_folder`. A `coding` agent made without `workspace.tools` gets `["read", "write", "edit", "bash"]`. |
 | `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?, memory?, budget?}` (later phases add more; `memory`: see [Memory](#memory-v02); `budget`: see [Budgets](#budgets-v03), `null` removes it). Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
 | `DELETE /api/agents/{id}` | Stops its runtime and moves its folder to the OS trash (or deletes it). Answers `{ok: true}`. |
@@ -342,6 +342,60 @@ thread. Live events: `event: team`, `data: {teamId, deleted, team?}`.
 
 In a conversation, an `ask_agent` tool call's `details` (ChatMessage tool results / ChatTool) are
 `{agentId, agentName, threadId}`, so the UI can link to the asked agent's conversation.
+
+## Agent builder and Concierge (v0.4)
+
+The **Agent builder** template explicitly enables `builder: true` in `agent.yaml`. Other templates and existing
+agents stay off. `Agent.builder` reports this capability; `POST /api/agents` and `PATCH /api/agents/{id}` accept
+`{builder: boolean}`. The agent's Tools tab has **Build agents** with an explanation. Saving, exporting and importing
+a template preserves its explicit builder setting; it does not preserve creator ownership or grant access to other agents.
+
+Only opted-in runtimes get `create_agent` and `update_agent`. Their top-level arguments are:
+
+```ts
+{
+  agent?: string; // required for update_agent: an ID returned by create_agent
+  templateId?: string;
+  name?: string; // required for create_agent
+  description?: string;
+  instructions?: string;
+  modelId?: string; // existing provider/model; never a credential or provider setup
+  workspace?: {tools: ("read" | "write" | "edit" | "bash")[]; folder?: string; sandbox?: boolean; network?: boolean};
+  schedule?: {name?: string; message: string; at?: string; cron?: string; timezone?: string;
+              threadMode?: "new" | "this"; missedPolicy?: "skip" | "run_once"; paused?: boolean};
+}
+```
+
+Creation uses the same template application, defaults, validation and agent store as the dialog. Updates preserve
+omitted fields, and may change **only agents this builder created**, never itself or unrelated agents. An explicit
+schedule adds one schedule (it does not replace existing schedules); a selected template's first schedule is included
+when no explicit schedule is supplied. Schedules use the existing schedule store, with agent creation, ownership
+and the durable completion record in one app.db transaction. A failure rolls back the agent row, ownership and
+schedule and cleans up its new folder. No setup commands are run. Knowledge, skills, credentials, setup scripts and
+other unknown fields fail explicitly; they are not silently ignored or promised as configured.
+
+Both tools **always require human approval**, even under Trusting, an empty Custom list, or an allow rule. A deny
+rule may still refuse a call outright; it cannot authorize a mutation. The
+existing approval card shows the full, defaulted `agent.yaml`, target ID, revision and first schedule without preview
+clipping (proposals over 128 KiB are refused). There is no Always allow option. The gateway verifies a matching,
+approved snapshot before applying anything. An update is refused if the agent changed after the proposal.
+
+Runtime gateway routes (runtime bearer key, caller inferred from authentication):
+
+| Route | Answer |
+|---|---|
+| `POST /builder/prepare` | `{key, approvalId, tool: "create_agent" \| "update_agent", configuration}` → immutable `{tool, agentId, yaml, schedule?, revision}`. Requires builder capability and, for updates, ownership. |
+| `POST /builder/apply` | `{key}` → `{agentId, status: "done"}` after matching human approval. Capability and ownership checked again. Replay returns the same result without another agent or schedule. |
+
+Keys are scoped to the caller and conversation/tool task, persisted in `builder_requests`; reusing a key with a
+different proposal is refused. `agent_creators` records ownership on successful creation. Completion and creation
+commit together, so a crash/replay cannot create a second agent. Responses contain configuration/model references,
+never model or gateway credentials. These scoped routes do not expose the UI's general management API to runtimes.
+
+The **Concierge** template is a helpful front door: it uses the existing `list_agents` and `ask_agent` tools only
+when available, among the person's explicit **Can ask** and team permissions. It grants no all-agent access. With no
+callees (or no calling tools), its instructions explain **Can ask** setup and offer direct help. It does not route
+models or change model settings. The existing everyday templates remain available.
 
 ## Workspace tools, approvals and attachments (Phase 4)
 

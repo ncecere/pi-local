@@ -324,6 +324,15 @@ func (s *Store) Get(id string) (*Agent, error) {
 
 // Create makes a new agent: its folder, agent.yaml and row.
 func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
+	return s.CreatePrepared(ctx, newID(), cfg, nil)
+}
+
+// NewID reserves an unpredictable ID for a durable, approved creation proposal.
+func NewID() string { return newID() }
+
+// CreatePrepared uses Create's validation, folders and notifications. commit records related
+// app.db state atomically with the agent row; it must not call another DB-backed store.
+func (s *Store) CreatePrepared(ctx context.Context, id string, cfg Config, commit func(*sql.Tx) error) (*Agent, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	cfg.Normalize()
@@ -333,7 +342,12 @@ func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
 	if err := s.checkModel(cfg.Model); err != nil {
 		return nil, err
 	}
-	id := newID()
+	if !ValidID(id) {
+		return nil, invalid("invalid_id", "Invalid agent ID.")
+	}
+	if s.Exists(id) {
+		return nil, invalid("id_taken", "This agent already exists.")
+	}
 	canCall, err := s.checkCanCall(id, cfg.CanCall)
 	if err != nil {
 		return nil, err
@@ -345,6 +359,7 @@ func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
 	dir := filepath.Join(s.root, id)
 	for _, sub := range []string{"workspace", "tmp", "logs"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+			os.RemoveAll(dir)
 			return nil, err
 		}
 	}
@@ -353,8 +368,20 @@ func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	now := time.Now()
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO agents (id, dir, revision, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
-		id, s.storedDir(dir), now.UnixMilli(), now.UnixMilli()); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO agents (id, dir, revision, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`, id, s.storedDir(dir), now.UnixMilli(), now.UnixMilli())
+	if err == nil && commit != nil {
+		err = commit(tx)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
 		os.RemoveAll(dir)
 		return nil, err
 	}
@@ -369,6 +396,11 @@ func (s *Store) Create(ctx context.Context, cfg Config) (*Agent, error) {
 
 // Update changes an agent's config through fn and bumps its revision (a running agent restarts with it).
 func (s *Store) Update(ctx context.Context, id string, fn func(*Config)) (*Agent, error) {
+	return s.UpdatePrepared(ctx, id, fn, nil)
+}
+
+// UpdatePrepared records related app.db state atomically with the revision change.
+func (s *Store) UpdatePrepared(ctx context.Context, id string, fn func(*Config), commit func(*sql.Tx) error) (*Agent, error) {
 	// Changes are serialized; the checks run without the read lock (checking a model asks the catalog, which may ask
 	// which agents use a model).
 	s.writeMu.Lock()
@@ -408,7 +440,21 @@ func (s *Store) Update(ctx context.Context, id string, fn func(*Config)) (*Agent
 	if err := writeConfig(current.Dir, cfg); err != nil {
 		return nil, err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE agents SET revision = revision + 1, updated_at = ? WHERE id = ?`, now.UnixMilli(), id); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		_ = writeConfig(current.Dir, current.Config)
+		return nil, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `UPDATE agents SET revision = revision + 1, updated_at = ? WHERE id = ?`, now.UnixMilli(), id)
+	if err == nil && commit != nil {
+		err = commit(tx)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		_ = writeConfig(current.Dir, current.Config)
 		return nil, err
 	}
 	s.mu.Lock()

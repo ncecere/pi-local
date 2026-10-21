@@ -127,6 +127,22 @@ describe('Tools tab: approval rules', () => {
   });
 });
 
+describe('Tools tab: builder capability', () => {
+  it('is off by default and saves only an explicit opt-in', async () => {
+    const backend = fakeBackend({
+      'PATCH /api/agents/ag_rex': () => ({ ...agent(), builder: true }),
+    });
+    view = await renderWithQuery(<ToolsTab agent={agent()} />);
+    const toggle = document.querySelector(
+      '[aria-labelledby$="-builder-label"]',
+    ) as HTMLButtonElement;
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(document.body.textContent).toContain('Every creation or update asks for your approval');
+    await click(toggle);
+    expect(backend.calls.find((call) => call.method === 'PATCH')?.body).toEqual({ builder: true });
+  });
+});
+
 describe('Tools tab: profiles', () => {
   it("shows the agent's profile; the tools list belongs to Custom", async () => {
     fakeBackend();

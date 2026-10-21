@@ -259,6 +259,7 @@ export function useUpdateAgent() {
       approvals?: AgentApprovals;
       mcp?: AgentMcpServer[];
       schedules?: { agentMade: boolean };
+      builder?: boolean;
       web?: WebTools;
       security?: AgentSecurity;
       /** null removes the agent's budget. */

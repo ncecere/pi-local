@@ -19,6 +19,7 @@ import {
 	resolveExtensions,
 	resolveSettings,
 } from "./define.ts";
+import { agentBuilder, builderEnabled } from "./agent-builder.ts";
 import { agentCallsExtension } from "./agent-calls.ts";
 import { AgentMcp } from "./mcp.ts";
 import { scheduleExtension } from "./schedule.ts";
@@ -187,8 +188,11 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 			: undefined;
 	// Asking other agents (AGENT_CALLS, with the gateway): the app decides who may be asked (agent-calls.ts).
 	const calling = config.modelEnv.AGENT_CALLS === "true" && !!config.modelEnv.PLATFORM_GATEWAY_URL && !!config.modelEnv.PLATFORM_KEY;
+	const builder = builderEnabled(config.modelEnv) ? agentBuilder({ gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL!, key: config.modelEnv.PLATFORM_KEY! }) : undefined;
+	approvals.prepareBuilder = builder?.prepare;
 	const extensions = [
 		...resolveExtensions(definition, context),
+		...(builder ? [builder.extension] : []),
 		...(workspace ? [workspace] : []),
 		...(web ? [web] : []),
 		...(memory ? [memory] : []),

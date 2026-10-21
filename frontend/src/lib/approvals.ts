@@ -281,7 +281,8 @@ export function suggestRule(
 }
 
 /** Whether the card offers "Approve and always allow this": not for what a built-in or an ask rule, or the agent's own code, asked. */
-export function canAlwaysAllow(approval: { source?: string }): boolean {
+export function canAlwaysAllow(approval: { source?: string; tool?: string }): boolean {
+  if (approval.tool === 'create_agent' || approval.tool === 'update_agent') return false;
   return (
     approval.source !== 'builtin' && approval.source !== 'rule' && approval.source !== 'author'
   );
@@ -378,6 +379,15 @@ export function argumentsView(tool: string, args: unknown): ArgumentsView {
   if (args === undefined || args === null || (record && Object.keys(record).length === 0))
     return { kind: 'none' };
   const name = tool.toLowerCase();
+  if (name === 'create_agent' || name === 'update_agent') {
+    return {
+      kind: 'fields',
+      entries: Object.entries(record ?? {}).map(([key, value]) => [
+        key === 'yaml' ? 'Complete agent.yaml' : key,
+        typeof value === 'string' ? value : JSON.stringify(value, null, 2),
+      ]),
+    };
+  }
   const command = commandOf(args);
   if (
     command !== null &&

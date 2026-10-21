@@ -380,32 +380,7 @@ func nullable[T comparable](v T) any {
 
 // Create makes a schedule for an agent (madeBy "user" or "agent"; an agent's own are limited).
 func (s *Store) Create(ctx context.Context, agentID, madeBy, originThread string, in Input) (*Schedule, error) {
-	if !s.agents.Exists(agentID) {
-		return nil, ErrNotFound
-	}
-	d := draft{tz: "UTC", threadMode: "new", missed: "run_once"}
-	if err := s.apply(&d, in); err != nil {
-		return nil, err
-	}
-	next, err := s.build(&d)
-	if err != nil {
-		return nil, err
-	}
-	if madeBy == "agent" {
-		if err := s.agentLimits(ctx, agentID, d); err != nil {
-			return nil, err
-		}
-	}
-	id := newID("sc_")
-	now := s.now().UnixMilli()
-	var at any
-	if d.at != nil {
-		at = d.at.UnixMilli()
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO schedules (id, agent_id, name, once, at, cron, timezone, message, thread_mode, thread_id, origin_thread_id, made_by, missed_policy, paused, next_fire_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, agentID, d.name, boolInt(d.at != nil), at, nullable(d.cronExpr), d.tz, d.message, d.threadMode, nullable(d.threadID),
-		nullable(originThread), madeBy, d.missed, boolInt(d.paused), next.UnixMilli(), now, now)
+	id, err := s.insert(ctx, s.db, agentID, madeBy, originThread, in)
 	if err != nil {
 		return nil, err
 	}
@@ -415,6 +390,57 @@ func (s *Store) Create(ctx context.Context, agentID, madeBy, originThread string
 		s.OnChange(id, sc)
 	}
 	return sc, err
+}
+
+// Validate checks a first schedule without saving or firing anything.
+func (s *Store) Validate(in Input) error {
+	d := draft{tz: "UTC", threadMode: "new", missed: "run_once"}
+	if err := s.apply(&d, in); err != nil {
+		return err
+	}
+	_, err := s.build(&d)
+	return err
+}
+
+type executor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// InsertApproved inserts the person's approved first schedule in the agent creation transaction.
+// It uses the ordinary schedule validation and insertion, and does not fire before commit.
+func (s *Store) InsertApproved(ctx context.Context, tx *sql.Tx, agentID string, in Input) error {
+	_, err := s.insert(ctx, tx, agentID, "user", "", in)
+	return err
+}
+
+func (s *Store) insert(ctx context.Context, db executor, agentID, madeBy, originThread string, in Input) (string, error) {
+	if db == s.db && !s.agents.Exists(agentID) {
+		return "", ErrNotFound
+	}
+	d := draft{tz: "UTC", threadMode: "new", missed: "run_once"}
+	if err := s.apply(&d, in); err != nil {
+		return "", err
+	}
+	next, err := s.build(&d)
+	if err != nil {
+		return "", err
+	}
+	if madeBy == "agent" {
+		if err := s.agentLimits(ctx, agentID, d); err != nil {
+			return "", err
+		}
+	}
+	id := newID("sc_")
+	now := s.now().UnixMilli()
+	var at any
+	if d.at != nil {
+		at = d.at.UnixMilli()
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO schedules (id, agent_id, name, once, at, cron, timezone, message, thread_mode, thread_id, origin_thread_id, made_by, missed_policy, paused, next_fire_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, agentID, d.name, boolInt(d.at != nil), at, nullable(d.cronExpr), d.tz, d.message, d.threadMode, nullable(d.threadID),
+		nullable(originThread), madeBy, d.missed, boolInt(d.paused), next.UnixMilli(), now, now)
+	return id, err
 }
 
 func boolInt(b bool) int {

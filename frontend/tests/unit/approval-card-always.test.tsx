@@ -39,6 +39,25 @@ afterEach(() => {
 const ALWAYS = 'Approve and always allow this';
 
 describe('the approval card: Approve and always allow this', () => {
+  it('shows the entire builder configuration and schedule, never Always allow', async () => {
+    fakeBackend();
+    const yaml = `name: Child\ninstructions: ${'x'.repeat(18_000)}\nTHE END`;
+    view = await renderWithQuery(
+      <ApprovalCard
+        agentId="ag_rex"
+        approval={request({
+          tool: 'create_agent',
+          arguments: { yaml, schedule: { message: 'Do the work', cron: '0 9 * * *' } },
+        })}
+      />,
+    );
+    expect(document.body.textContent).toContain(yaml);
+    expect(document.body.textContent).toContain('Do the work');
+    expect(document.body.textContent).toContain('Create this agent?');
+    expect(buttonByText(ALWAYS)).toBeUndefined();
+    expect(buttonByText('Approve')).toBeDefined();
+  });
+
   it('adds the rule for the command, then approves, and says so', async () => {
     const backend = fakeBackend({
       'POST /api/agents/ag_rex/approval-rules': () => ({ rule: { id: 'r_1' }, rules: [] }),

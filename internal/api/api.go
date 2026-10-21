@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -57,6 +58,7 @@ type Runtimes interface {
 
 // API serves /api.
 type API struct {
+	builderMu sync.Mutex // serialize durable builder proposals and their application
 	DB        *sql.DB
 	Agents    *agents.Store
 	Threads   *threads.Index
@@ -406,6 +408,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"pendingApprovals": a.pendingApprovals(ag.ID),
 		"mcp":              mcpChoices(ag.Config.MCP),
 		"schedules":        ag.Config.Schedules,
+		"builder":          ag.Config.Builder,
 		"budget":           ag.Config.Budget,
 		"security":         map[string]any{"scrubSecrets": ag.Config.Security.Scrub()},
 	}
@@ -503,6 +506,7 @@ func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
 }
 
 type agentInput struct {
+	Builder      *bool                  `json:"builder"`
 	Name         *string                `json:"name"`
 	Description  *string                `json:"description"`
 	TemplateID   *string                `json:"templateId"`
@@ -575,6 +579,9 @@ func (in *approvalsInput) apply(c *agents.Approvals) {
 }
 
 func (in agentInput) apply(c *agents.Config) error {
+	if in.Builder != nil {
+		c.Builder = *in.Builder
+	}
 	if in.Name != nil {
 		c.Name = *in.Name
 	}
@@ -658,6 +665,22 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &in) {
 		return
 	}
+	cfg, tmpl, err := a.prepareAgent(r.Context(), in)
+	if err != nil {
+		agentFailure(w, err)
+		return
+	}
+	ag, err := a.Agents.Create(r.Context(), cfg)
+	if err != nil {
+		agentFailure(w, err)
+		return
+	}
+	a.firstSchedule(r.Context(), ag.ID, tmpl)
+	created(w, a.AgentJSON(ag))
+}
+
+// prepareAgent is shared by the dialog and the builder: template, input and defaults in the same order.
+func (a *API) prepareAgent(ctx context.Context, in agentInput) (agents.Config, *templates.Template, error) {
 	var cfg agents.Config
 	// A template (the gallery's, or the person's own) sets everything first; the request's fields win. An ID that is
 	// only a kind (an older client, or a retired kind) is still a kind.
@@ -673,23 +696,22 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if in.ModelID == nil || *in.ModelID == "" {
-		def := a.Catalog.DefaultModel(r.Context())
+		def := a.Catalog.DefaultModel(ctx)
 		in.ModelID = &def
 	}
 	if err := in.apply(&cfg); err != nil {
-		agentFailure(w, err)
-		return
+		return cfg, tmpl, err
 	}
 	agents.KindDefaults(cfg.Kind, &cfg)
 	// New agents can search and read the web unless the request or the template says otherwise (read-only tools).
 	if in.Web == nil && (tmpl == nil || tmpl.Web == nil) {
 		cfg.Web = agents.WebTools{Search: true, Fetch: true}
 	}
-	ag, err := a.Agents.Create(r.Context(), cfg)
-	if err != nil {
-		agentFailure(w, err)
-		return
-	}
+	cfg.Normalize()
+	return cfg, tmpl, cfg.Validate()
+}
+
+func (a *API) firstSchedule(ctx context.Context, agentID string, tmpl *templates.Template) {
 	// The template's first schedule, in this computer's time zone (editable after).
 	if tmpl != nil && tmpl.Schedule != nil && a.Schedules != nil {
 		sc := tmpl.Schedule
@@ -705,11 +727,10 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 			thread := tmpl.ID + "-" + hex.EncodeToString(b)
 			in.ThreadID = &thread
 		}
-		if _, err := a.Schedules.Create(r.Context(), ag.ID, "user", "", in); err != nil {
-			slog.Warn("making a template's schedule", "agent", ag.ID, "template", tmpl.ID, "err", err)
+		if _, err := a.Schedules.Create(ctx, agentID, "user", "", in); err != nil {
+			slog.Warn("making a template's schedule", "agent", agentID, "template", tmpl.ID, "err", err)
 		}
 	}
-	created(w, a.AgentJSON(ag))
 }
 
 func (a *API) updateAgent(w http.ResponseWriter, r *http.Request, ag *agents.Agent) {

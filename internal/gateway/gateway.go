@@ -105,6 +105,7 @@ type Web interface {
 
 // Handler is the gateway's routes.
 type Handler struct {
+	Builder   func(context.Context, string, string, json.RawMessage) (any, error)
 	Keys      Keys
 	Threads   Threads
 	Usage     Usage
@@ -179,6 +180,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case h.Builder != nil && r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/builder/"):
+		var raw json.RawMessage
+		if !decode(w, r, &raw) {
+			return
+		}
+		data, err := h.Builder(r.Context(), agentID, strings.TrimPrefix(r.URL.Path, "/builder/"), raw)
+		if err != nil {
+			var coded interface {
+				HTTPStatus() int
+				Code() string
+				Error() string
+			}
+			if errors.As(err, &coded) {
+				fail(w, coded.HTTPStatus(), coded.Code(), coded.Error())
+			} else {
+				fail(w, 500, "internal", "The builder request could not be completed.")
+			}
+			return
+		}
+		ok(w, data)
 	case r.Method == http.MethodPost && r.URL.Path == "/threads/sync":
 		var body struct {
 			Threads []threads.Status `json:"threads"`

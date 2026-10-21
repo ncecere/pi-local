@@ -229,6 +229,14 @@ func bounded(raw json.RawMessage) string {
 	return string(raw)
 }
 
+// Builder proposals contain no credential fields and must be shown in full, never truncated.
+func boundedReport(r Report) string {
+	if (r.Tool == "create_agent" || r.Tool == "update_agent") && len(r.Arguments) <= 128<<10 && json.Valid(r.Arguments) {
+		return string(r.Arguments)
+	}
+	return bounded(r.Arguments)
+}
+
 // record writes a report (a new request, or a runtime's word that one was cancelled) and returns the answer.
 func (s *Store) record(ctx context.Context, agentID string, r Report) (Answer, bool) {
 	if !validID(r.ID) || r.Tool == "" || len(r.Tool) > 200 {
@@ -266,7 +274,7 @@ func (s *Store) record(ctx context.Context, agentID string, r Report) (Answer, b
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO approvals (agent_id, id, thread_id, tool, call_id, arguments, summary, status, requested_at, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?) ON CONFLICT (agent_id, id) DO NOTHING`,
-		agentID, r.ID, thread, r.Tool, r.CallID, bounded(r.Arguments), summary, requested, expires)
+		agentID, r.ID, thread, r.Tool, r.CallID, boundedReport(r), summary, requested, expires)
 	if err != nil {
 		slog.Error("recording an approval", "agent", agentID, "err", err)
 		return Answer{}, false

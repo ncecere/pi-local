@@ -49,6 +49,9 @@ export type Verdict =
 
 export const DENIED_MESSAGE = "Not allowed by your approval rules";
 
+/** Agent configuration mutations always need a person's approval, outside configurable profiles and rules. */
+export const isBuilderTool = (name: string) => name === "create_agent" || name === "update_agent";
+
 const MAX_RULES = 500;
 const MAX_ARGS = 10;
 
