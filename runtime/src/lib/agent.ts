@@ -25,6 +25,8 @@ import { AgentOwnedElsewhereError, openSqliteAgentStorage } from "./storage/sqli
 import { gatewayCall, gatewayPost, ThreadStatusReporter } from "./thread-status.ts";
 import { ThreadStore } from "./threads.ts";
 import { memoryExtension } from "./memory.ts";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { ModelChoices } from "./model-choices.ts";
 import { personExtension, TodoDoc } from "./person.ts";
 import { parseWebTools, webExtension } from "./web.ts";
 import { createWorkspaceEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
@@ -214,6 +216,16 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 
 	const created = options.models ? { ...options.models, source: "given", usage: undefined } : createAgentModels(config.modelEnv);
 	const { models, model, usage } = created;
+	// Models the person chose for single conversations (through the platform, loaded when first asked for).
+	const choices =
+		config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
+			? new ModelChoices({
+					models,
+					gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL,
+					key: config.modelEnv.PLATFORM_KEY,
+					usageKey: config.modelEnv.MODEL_USAGE_KEY,
+				})
+			: undefined;
 	log(`model ${model.provider}/${model.modelId} via ${created.source}${definition.name ? `; agent ${definition.name}` : ""}${scheduling ? "; schedules on" : ""}`);
 
 	const storage = options.storage ?? (await openSqliteAgentStorage({ path: config.storagePath })).storage;
@@ -281,13 +293,17 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	// no_model), and one begun before an extension was added would run without it (a guard, say). So the runtime moves
 	// every thread to the agent's model and selection: here, before resuming, for runs a previous process left
 	// unfinished, and before every message (an equal value writes nothing).
-	const align = (conversation: Conversation, selection: readonly Extension[]) => conversation.configure({ model: current, extensions: [...selection] }, ctx);
+	// A conversation the person gave a model of its own (MessageChoice) keeps it, and its thinking level.
+	const align = (conversation: Conversation, selection: readonly Extension[], use: ModelRef = current, thinking?: ModelThinkingLevel | null) =>
+		conversation.configure({ model: use, extensions: [...selection], ...(thinking === undefined ? {} : { thinkingLevel: thinking }) }, ctx);
 	for (const record of await threads.list()) {
 		const selection = [...extensions, ...mcp.installed(record.threadId), ...asking];
 		const stored = await harness.snapshot(AgentDoc, record.conversationId as never, ctx);
-		if (sameSelection(stored, current, selection)) continue;
+		const chosen = ModelChoices.catalogIdOf(stored?.model);
+		const use = chosen && choices ? await choices.ref(chosen).catch(() => current) : current;
+		if (sameSelection(stored, use, selection)) continue;
 		const conversation = await threads.get(record.threadId);
-		if (conversation !== undefined) await align(conversation, selection);
+		if (conversation !== undefined) await align(conversation, selection, use);
 	}
 	// Continue runs, tool calls and queued input left by a previous process.
 	harness.resume();
@@ -314,13 +330,21 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		threads,
 		token: config.token,
 		info: { agentId: config.agentId, name: config.name, model: `${model.provider}/${model.modelId}` },
-		beforeMessage: async (threadId, conversation, text) => {
+		beforeMessage: async (threadId, conversation, text, choice) => {
 			const servers = await mcp.forThread(threadId).catch((error: unknown) => {
 				logError(`MCP servers of thread ${threadId}:`, (error as Error).message);
 				return mcp.extensions;
 			});
 			const selection = [...extensions, ...servers, ...asking];
-			await align(conversation, selection);
+			// The person's choice for this conversation; a model that can't be loaded answers with the agent's own.
+			let use = current;
+			if (choice.model && choices) {
+				use = await choices.ref(choice.model).catch((error: unknown) => {
+					logError(`model ${choice.model} for thread ${threadId}:`, (error as Error).message);
+					return current;
+				});
+			}
+			await align(conversation, selection, use, thinkingOf(choice.thinking));
 			if (pickTools) await preselect(conversation, selection, text).catch((error: unknown) => logError("tool preselection:", (error as Error).message));
 		},
 		approvals,
@@ -339,6 +363,7 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 			approvals.close();
 			await harness.close(ctx).catch(() => {});
 			await usage?.flush();
+			await choices?.flush();
 			await mcp.close();
 			await status?.stop();
 		},
@@ -346,6 +371,11 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 }
 
 /** Whether a conversation's stored agent already has this model and exactly this extension selection. */
+/** A chosen thinking level for pi ("" or unknown: none, the model's default). */
+function thinkingOf(level: string): ModelThinkingLevel | null {
+	return level === "off" || level === "low" || level === "medium" || level === "high" ? level : null;
+}
+
 function sameSelection(stored: { model?: ModelRef; extensions?: unknown } | undefined, model: ModelRef, selection: readonly Extension[]): boolean {
 	if (stored === undefined) return false;
 	if (stored.model?.provider !== model.provider || stored.model?.modelId !== model.modelId) return false;

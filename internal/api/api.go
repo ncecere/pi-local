@@ -138,6 +138,7 @@ func (a *API) Handler() http.Handler {
 	a.templateRoutes(m)
 	a.memoryRoutes(m)
 	a.judgeRoutes(m)
+	a.chatSettingsRoutes(m)
 	a.alwaysRoutes(m)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, http.StatusNotFound, "not_found", "Not found") })
 	a.mux = m
@@ -274,7 +275,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{
 		"user":      map[string]string{"id": "local", "name": localName(), "email": "", "role": "admin"},
 		"csrfToken": "",
-		"features":  map[string]bool{"agentRouting": a.Judge != nil && a.Judge.On("agentRouting"), "messageSearch": a.Search != nil, "folderDialog": a.FolderDialog != nil, "updates": a.Updater != nil && a.Updater.Status().CanInstall},
+		"features":  map[string]bool{"agentRouting": a.Judge != nil && a.Judge.On("agentRouting"), "modelPerConversation": a.Catalog.PerConversation(), "messageSearch": a.Search != nil, "folderDialog": a.FolderDialog != nil, "updates": a.Updater != nil && a.Updater.Status().CanInstall},
 		"platform":  map[string]any{"mode": "local", "account": nil},
 	})
 }
@@ -748,7 +749,9 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 		return
 	}
 	var msg struct {
-		Text string `json:"text"`
+		Text     string  `json:"text"`
+		ModelID  *string `json:"modelId"`
+		Thinking *string `json:"thinking"`
 	}
 	if json.Unmarshal(body, &msg) != nil {
 		fail(w, http.StatusBadRequest, "invalid_request", "invalid JSON")
@@ -756,6 +759,16 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	}
 	if strings.TrimSpace(msg.Text) == "" || utf8.RuneCountInString(msg.Text) > maxMessageChars {
 		fail(w, http.StatusBadRequest, "invalid_text", "A message is 1 to 32,000 characters.")
+		return
+	}
+	modelID, thinking, good := a.conversationChoice(w, r, ag, t, msg.ModelID, msg.Thinking)
+	if !good {
+		return
+	}
+	// The runtime hears the choice with every message ("" is the agent's own model and the default thinking).
+	body, err := withChoice(body, modelID, thinking)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "invalid_request", "invalid JSON")
 		return
 	}
 	// Recorded before relaying, so the thread is listed (and busy) from the first instant, even if the runtime is
@@ -766,6 +779,11 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 		return
 	}
 	defer a.Threads.Sent(ag.ID, t)
+	if a.Catalog.PerConversation() {
+		if err := a.Threads.SetChoice(r.Context(), ag.ID, t, modelID, thinking); err != nil {
+			slog.Warn("recording a conversation's model", "agent", ag.ID, "err", err)
+		}
+	}
 	a.Agents.Touch(r.Context(), ag.ID)
 	resp, err := a.Runtimes.Call(r.Context(), ag.ID, http.MethodPost, "/threads/"+t+"/messages", body, http.Header{"Content-Type": {"application/json"}})
 	if err != nil {
@@ -783,6 +801,55 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request, ag *agents.Age
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(answer)
+}
+
+// conversationChoice is the model and thinking level a message runs with. A message may change them (modelId,
+// thinking: "" for the agent's own model and the default thinking); otherwise the conversation keeps what was chosen
+// before. One chosen before that can no longer be used (a model turned off) falls back to the agent's; with the
+// choice turned off (Settings → Models), every conversation uses the agent's.
+func (a *API) conversationChoice(w http.ResponseWriter, r *http.Request, ag *agents.Agent, t string, model, think *string) (string, string, bool) {
+	if !a.Catalog.PerConversation() {
+		return "", "", true
+	}
+	modelID, thinking := "", ""
+	if prev, err := a.Threads.Get(r.Context(), ag.ID, t); err == nil {
+		modelID, thinking = prev.ModelID, prev.Thinking
+	}
+	if model == nil && think == nil {
+		if m, th, err := a.Catalog.CheckChoice(r.Context(), ag.Config.Model.String(), modelID, thinking); err == nil {
+			return m, th, true
+		}
+		return "", "", true
+	}
+	if model != nil {
+		modelID = strings.TrimSpace(*model)
+	}
+	if think != nil {
+		thinking = strings.TrimSpace(*think)
+	}
+	m, th, err := a.Catalog.CheckChoice(r.Context(), ag.Config.Model.String(), modelID, thinking)
+	if err != nil {
+		var ce *models.ChoiceError
+		if errors.As(err, &ce) {
+			fail(w, http.StatusBadRequest, ce.Code, ce.Message)
+		} else {
+			fail(w, http.StatusInternalServerError, "internal", err.Error())
+		}
+		return "", "", false
+	}
+	return m, th, true
+}
+
+// withChoice puts the choice in a message's body for the runtime (model, thinking), leaving the rest as it was.
+func withChoice(body []byte, modelID, thinking string) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "modelId")
+	fields["model"], _ = json.Marshal(modelID)
+	fields["thinking"], _ = json.Marshal(thinking)
+	return json.Marshal(fields)
 }
 
 // forkThread makes a new thread from this one (edit a message: beforeMessageId; branch: afterMessageId).

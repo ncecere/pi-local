@@ -289,7 +289,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, Notify: a.notifyPerson}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
@@ -831,4 +831,21 @@ func (a *App) notifyPerson(agentID, threadID, title, message string) bool {
 		"title": clip(title, 80), "message": clip(message, 300),
 	})
 	return true
+}
+
+// conversationModelEnv: a model the person chose for one of the agent's conversations, for its runtime. Only while
+// the choice is on, and only a usable catalog model (never the demo one); its usage is counted under its own name.
+func (a *App) conversationModelEnv(ctx context.Context, agentID, modelID string) (map[string]string, error) {
+	if !a.Catalog.PerConversation() {
+		return nil, errors.New("Choosing a conversation's model is turned off (Settings → Models).")
+	}
+	if modelID == "" || modelID == models.DemoModelID {
+		return nil, errors.New("That model can't be chosen for a conversation.")
+	}
+	env, err := a.Catalog.RuntimeEnv(ctx, modelID)
+	if err != nil {
+		return nil, err
+	}
+	env["MODEL_USAGE_URL"] = a.gatewayURL + "/usage?model=" + url.QueryEscape(modelID)
+	return env, nil
 }

@@ -45,7 +45,16 @@ const APIS = {
 } as const;
 type SupportedApi = keyof typeof APIS;
 
-function registerModel(models: MutableModels, env: Env, api: string): AgentModels {
+/**
+ * Registers a model the person chose for a conversation (the same variables as the agent's own model, from the
+ * platform), under a provider of its own: `choice:<catalog provider>`. Registering it again replaces it.
+ */
+export function registerChoice(models: MutableModels, env: Env, providerId: string): { model: ModelRef; usage?: UsageReporter } {
+	const { model, usage } = registerModel(models, { ...env, MODEL_PROVIDER: "catalog" }, required(env, "MODEL_API"), providerId);
+	return { model, usage };
+}
+
+function registerModel(models: MutableModels, env: Env, api: string, providerId = "agent-model"): AgentModels {
 	if (!(api in APIS)) throw new Error(`Unsupported MODEL_API "${api}". Use ${Object.keys(APIS).join(", ")}.`);
 	const baseUrl = required(env, "MODEL_BASE_URL").replace(/\/$/, "");
 	const apiKey = required(env, "MODEL_API_KEY");
@@ -56,7 +65,7 @@ function registerModel(models: MutableModels, env: Env, api: string): AgentModel
 		id: modelId,
 		name: env.MODEL_NAME?.trim() || modelId,
 		api: api as SupportedApi,
-		provider: "agent-model",
+		provider: providerId,
 		baseUrl,
 		reasoning: env.MODEL_REASONING === "true",
 		input: env.MODEL_IMAGES === "true" ? ["text", "image"] : ["text"],
@@ -76,7 +85,7 @@ function registerModel(models: MutableModels, env: Env, api: string): AgentModel
 	const streams = APIS[api as SupportedApi]();
 	models.setProvider(
 		createProvider({
-			id: "agent-model",
+			id: providerId,
 			name: label,
 			baseUrl,
 			auth: { apiKey: { name: "MODEL_API_KEY", resolve: async () => ({ auth: { apiKey }, source: "MODEL_API_KEY" }) } },
@@ -84,7 +93,7 @@ function registerModel(models: MutableModels, env: Env, api: string): AgentModel
 			api: usage ? countingUsage(streams, usage) : streams,
 		}),
 	);
-	return { models, model: { provider: "agent-model", modelId }, source: `${api} (${label})`, usage };
+	return { models, model: { provider: providerId, modelId }, source: `${api} (${label})`, usage };
 }
 
 function positive(value: string | undefined, fallback: number): number {

@@ -58,7 +58,7 @@ Goal: someone new gets value in five minutes, and comes back daily. Releases sta
 | Web search + fetch tools (Brave by default; Tavily, SerpApi, SearXNG) | Most templates and the Researcher need the web. | 4 |
 | Templates gallery with: Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner; template import and export | General starting points that show what the app is for. | 3.2 |
 | Act from notifications (approve, answer) | Approvals and questions without switching apps. | 2 |
-| Model per conversation; thinking controls | Fast vs strong, per question. | 1, 7 |
+| Model per conversation; thinking controls | You pick the model and reasoning effort in the composer, by hand (no automatic routing); can be turned off. | 1, 7 |
 | Fast judgments (optional): settings (service URL, key, pinned models; self-hosted works), the judge component, agent routing, tool preselection | Pick the right agent without asking; small models get the right tools from large MCP servers. Off by default, with fallbacks. | 10 |
 | Attachments as chips; PDF and Office reading; paste images | Real documents in. | 1, 4 |
 | `ask_person`, `notify_person`, `todo` tools | Agents ask instead of guessing, tell you when done, show progress. | 4 |

@@ -145,6 +145,9 @@ func (a *API) getThreadIndexed(w http.ResponseWriter, r *http.Request, ag *agent
 	if err != nil {
 		return
 	}
+	if resp.StatusCode == http.StatusOK {
+		body = withThreadChoice(r.Context(), a, ag.ID, t, body)
+	}
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
@@ -247,4 +250,28 @@ func (a *API) updateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, a.Updater.Status())
+}
+
+// withThreadChoice adds the model and thinking level the person chose for a thread (the app keeps them, not the
+// runtime) to its view: modelId and thinking, "" for the agent's own and the default.
+func withThreadChoice(ctx context.Context, a *API, agentID, threadID string, body []byte) []byte {
+	var wrapped struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(body, &wrapped) != nil || wrapped.Data == nil {
+		return body
+	}
+	modelID, thinking := "", ""
+	if a.Catalog.PerConversation() {
+		if th, err := a.Threads.Get(ctx, agentID, threadID); err == nil {
+			modelID, thinking = th.ModelID, th.Thinking
+		}
+	}
+	wrapped.Data["modelId"], _ = json.Marshal(modelID)
+	wrapped.Data["thinking"], _ = json.Marshal(thinking)
+	out, err := json.Marshal(wrapped)
+	if err != nil {
+		return body
+	}
+	return out
 }

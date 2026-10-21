@@ -110,6 +110,9 @@ type Handler struct {
 	Web Web
 	// Memory: what an agent knows about the person and itself (nil: not offered).
 	Memory Memory
+	// ModelEnv is what a runtime needs to use a model the person chose for a conversation (the same variables as its
+	// own model's); nil: not offered.
+	ModelEnv func(ctx context.Context, agentID, modelID string) (map[string]string, error)
 	// Notify sends the person a notification from an agent (notify_person); false when rate-limited.
 	Notify func(agentID, threadID, title, message string) bool
 	// PickTools: fast-judgment tool preselection (nil: not offered; it answers none when off).
@@ -259,6 +262,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ok(w, map[string]any{"id": e.ID, "expiresAt": e.ExpiresAt})
+	case h.ModelEnv != nil && r.Method == http.MethodGet && r.URL.Path == "/models/env":
+		env, err := h.ModelEnv(r.Context(), agentID, r.URL.Query().Get("id"))
+		if err != nil {
+			fail(w, http.StatusConflict, "model_unavailable", err.Error())
+			return
+		}
+		ok(w, map[string]any{"env": env})
 	case h.Notify != nil && r.Method == http.MethodPost && r.URL.Path == "/person/notify":
 		var body struct {
 			Title    string `json:"title"`

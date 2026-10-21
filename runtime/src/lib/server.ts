@@ -25,6 +25,9 @@ import {
 } from "./view.ts";
 
 /** The documents an agent exposes to apps, by kind, with their bounds (define.ts, exposedDocuments). */
+/** What the person chose for a conversation's message (empty: the agent's own model, the model's default thinking). */
+export type MessageChoice = { model: string; thinking: string };
+
 export type ExposedDocuments = ReadonlyMap<string, { document: ConversationDocToken<JsonObject>; maxBytes: number }>;
 
 const ctx = BACKGROUND_CONTEXT;
@@ -42,7 +45,8 @@ export type RuntimeOptions = {
 	token: string;
 	info: { agentId: string; name: string; model: string };
 	/** Prepares a thread before a message (its MCP servers), after it exists. */
-	beforeMessage?: (threadId: string, conversation: Conversation, text: string) => Promise<void>;
+	/** choice: the model ("provider/modelId", "" the agent's own) and thinking level ("" the default) the person chose. */
+	beforeMessage?: (threadId: string, conversation: Conversation, text: string, choice: MessageChoice) => Promise<void>;
 	/** A message was submitted to the thread (its reply's end is reported to the platform). */
 	afterMessage?: (threadId: string, submissionId: number) => void;
 	/** The conversation documents apps may read (none by default). */
@@ -204,7 +208,15 @@ export function createRuntimeServer(options: RuntimeOptions): {
 		}
 		if (method === "POST" && action === "messages") {
 			touch();
-			const body = (await readJson(request)) as { text?: unknown; requestId?: unknown; author?: unknown; announceAuthor?: unknown; whenBusy?: unknown };
+			const body = (await readJson(request)) as {
+				text?: unknown;
+				requestId?: unknown;
+				author?: unknown;
+				announceAuthor?: unknown;
+				whenBusy?: unknown;
+				model?: unknown;
+				thinking?: unknown;
+			};
 			const text = typeof body.text === "string" ? body.text.trim() : "";
 			const requestId = typeof body.requestId === "string" ? body.requestId : undefined;
 			if (text.length === 0 || text.length > 32_000) return fail(response, 400, "invalid_text", "text is required (at most 32,000 characters)");
@@ -215,7 +227,11 @@ export function createRuntimeServer(options: RuntimeOptions): {
 			// The platform (the only caller) says who sent the message, and whether the model is told (shared threads).
 			const author = parseAuthor(body.author);
 			const conversation = await threads.ensure(threadId, text);
-			await options.beforeMessage?.(threadId, conversation, text);
+			const choice: MessageChoice = {
+				model: typeof body.model === "string" ? body.model.trim() : "",
+				thinking: typeof body.thinking === "string" ? body.thinking.trim() : "",
+			};
+			await options.beforeMessage?.(threadId, conversation, text, choice);
 			const data: UserEntryData = { text, at: Date.now(), ...(author === undefined ? {} : { author }), ...(requestId === undefined ? {} : { requestId }) };
 			const content = author !== undefined && body.announceAuthor === true ? `${speakerLine(author)}\n${text}` : text;
 			const submission = await conversation.submit(

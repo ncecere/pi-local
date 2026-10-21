@@ -17,7 +17,7 @@ ported frontend changes as little as possible.
 
 | Route | Answer |
 |---|---|
-| `GET /api/me` | `{user: {id: "local", name, email: "", role: "admin"}, csrfToken: "", features: {messageSearch, folderDialog, updates}, platform: {mode: "local", account: null}}`. `name` is the OS user's full name. `features.folderDialog`: `POST /api/choose-folder` opens a native dialog (the desktop app only). `features.updates`: this copy can install updates itself (`canInstall`, see [Updates](#updates)). |
+| `GET /api/me` | `{user: {id: "local", name, email: "", role: "admin"}, csrfToken: "", features: {messageSearch, folderDialog, updates, agentRouting, modelPerConversation}, platform: {mode: "local", account: null}}`. `name` is the OS user's full name. `features.folderDialog`: `POST /api/choose-folder` opens a native dialog (the desktop app only). `features.updates`: this copy can install updates itself (`canInstall`, see [Updates](#updates)). |
 | `GET /api/auth/config` | `{oidcEnabled: false, devAuthEnabled: false, devAccounts: [], instance: {name: "Pi Local", logoUrl: null, colorTheme: "neutral", defaultTheme: "system", orgName: "", supportUrl: null}}` |
 | `GET /api/me/prefs` | `Record<key, object>`: every saved preference. |
 | `PUT /api/me/prefs/{key}` | Body `{value: object}`. Keys: `inbox` (≤ 512 KiB), `appearance` (≤ 16 KiB), `onboarding` (≤ 4 KiB); any other key is `404 unknown_pref`. Answers `{ok: true}`. |
@@ -78,7 +78,7 @@ type AgentThread = {
 | `GET /api/agents/{a}/threads` | `AgentThread[]`, newest activity first. From the app's own index: **never starts the runtime.** |
 | `GET /api/agents/{a}/threads/{t}` | The runtime's `ChatView` (`runtime/src/lib/view.ts`), passed through. Starts the runtime if it is asleep. `?limit=&before=` pages. |
 | `GET /api/agents/{a}/threads/{t}/events` | SSE from the runtime, passed through: `view` events (the whole ChatView), or with `?format=delta&v=1` a `snapshot` then changes (`runtime/src/lib/delta.ts`). `Last-Event-ID` is forwarded. Starts the runtime. |
-| `POST /api/agents/{a}/threads/{t}/messages` | Body `{text, requestId, whenBusy?: "followUp" \| "steer"}`, at most 32,000 characters. `202 {submissionId}`. Creates the thread on first use: the app records the thread *before* relaying, and removes the record if the runtime refuses. |
+| `POST /api/agents/{a}/threads/{t}/messages` | Body `{text, requestId, whenBusy?: "followUp" \| "steer", modelId?, thinking?}`, at most 32,000 characters. `modelId`/`thinking`: see [Model per conversation](#model-per-conversation-v02). `202 {submissionId}`. Creates the thread on first use: the app records the thread *before* relaying, and removes the record if the runtime refuses. |
 | `POST /api/agents/{a}/threads/{t}/stop` | `202 {ok: true}` |
 | `PATCH /api/agents/{a}/threads/{t}` | Body `{title}` (1–200 chars, one line). Answers `AgentThread`. Stored by the app; doesn't start the runtime. |
 | `DELETE /api/agents/{a}/threads/{t}` | Deletes it in the runtime (starting it if needed) and in the index. Answers `{ok: true}`. |
@@ -712,6 +712,41 @@ from the likeliest agents.
 
 Tool preselection happens in the runtime, before a model with many deferred tools (MCP) answers; it needs nothing from
 the UI.
+
+## Ask, notify and checklist tools (v0.2)
+
+Every agent has three tools for working with the person (subagents don't):
+
+- `ask_person` `{question, choices?: string[], yes_no?: boolean}` asks and waits up to 15 minutes. The question is an
+  elicitation (`server: "agent"`, `serverName` the agent's name, `tool: "ask_person"`), answered like an MCP server's:
+  the cards in the conversation, `POST /api/elicitations/{id}`. Choices are an `enum` field `answer`, yes/no a boolean
+  `yes`, otherwise a text `answer`.
+- `notify_person` `{title, message}`: a `notification` event `{agentId, agentName, threadId, title, message}` (title at
+  most 80 characters, message 300). One every 20 seconds per agent; more are refused to the agent. The desktop app
+  shows a system notification while its window isn't in front; the UI shows a toast.
+- `todo` `{items: [{text, status: "pending" | "doing" | "done"}]}` writes the conversation's checklist: the exposed
+  document `todo` (`GET …/threads/{t}/documents/todo`, `{items}`), listed in the thread's documents.
+
+The desktop app's notifications have buttons: **Approve** / **Deny** on an approval, **Yes, go ahead** / **Decline** on
+a question whose only field is a yes/no. Clicking a notification anywhere else opens the app.
+
+## Model per conversation (v0.2)
+
+The person may choose a conversation's model and thinking level in the composer, by hand: nothing picks a model for
+them. On by default; Settings → Models turns it off (every conversation then uses its agent's model).
+
+| Route | |
+|---|---|
+| `GET /api/settings/chat` | `{modelPerConversation: boolean, thinkingLevels: ["off", "low", "medium", "high"]}`. |
+| `PUT /api/settings/chat` | Body `{modelPerConversation?}`. Answers as GET. `GET /api/me` says `features.modelPerConversation`. |
+
+- A message may carry `modelId` (a catalog model `provider/modelId`; `""` or the agent's own: the agent's) and
+  `thinking` (`off`, `low`, `medium`, `high`; `""`: the model's default, which is off). Left out, the conversation keeps
+  what it had. `400 invalid_model` (unknown, turned off, or the demo model), `400 invalid_thinking`.
+- Thinking is kept only for a model with `reasoning`; on another it is dropped.
+- The thread (`GET …/threads/{t}` and the list) has `modelId` and `thinking`, `""` for none. A choice that can no
+  longer be used (its model turned off) falls back to the agent's model at the next message, and is cleared.
+- Usage is counted under the model that answered.
 
 ## Not yet (later phases)
 

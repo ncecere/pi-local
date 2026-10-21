@@ -26,6 +26,9 @@ type Thread struct {
 	CreatedBy    any       `json:"createdBy"`
 	Participants []any     `json:"participants"`
 	CalledBy     *CalledBy `json:"calledBy"`
+	// The model ("provider/modelId") and thinking level the person chose for it; empty: the agent's own.
+	ModelID  string `json:"modelId,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // CalledBy is the agent (and its thread) that asked in a thread (ask_agent).
@@ -101,14 +104,14 @@ func NewIndex(db *sql.DB, onChange func(Change)) *Index {
 	return &Index{db: db, onChange: onChange, now: time.Now, sending: map[string]int{}}
 }
 
-const columns = `thread_id, COALESCE(title_override, title), created_at, updated_at, busy, last_reply_at, last_error, called_by_agent, called_by_thread`
+const columns = `thread_id, COALESCE(title_override, title), created_at, updated_at, busy, last_reply_at, last_error, called_by_agent, called_by_thread, COALESCE(model_id, ''), COALESCE(thinking, '')`
 
 func (x *Index) scan(row interface{ Scan(...any) error }) (*Thread, error) {
 	var t Thread
 	var busy int
 	var lastReply sql.NullInt64
 	var lastErr, byAgent, byThread sql.NullString
-	if err := row.Scan(&t.ThreadID, &t.Title, &t.CreatedAt, &t.UpdatedAt, &busy, &lastReply, &lastErr, &byAgent, &byThread); err != nil {
+	if err := row.Scan(&t.ThreadID, &t.Title, &t.CreatedAt, &t.UpdatedAt, &busy, &lastReply, &lastErr, &byAgent, &byThread, &t.ModelID, &t.Thinking); err != nil {
 		return nil, err
 	}
 	if byAgent.Valid {
@@ -219,6 +222,20 @@ func (x *Index) Adopt(ctx context.Context, agentID, threadID, title string) erro
 		return err
 	}
 	x.changed(ctx, agentID, threadID)
+	return nil
+}
+
+// SetChoice records the model and thinking level the person chose for a thread ("" for the agent's own).
+func (x *Index) SetChoice(ctx context.Context, agentID, threadID, modelID, thinking string) error {
+	res, err := x.db.ExecContext(ctx, `UPDATE threads SET model_id = NULLIF(?, ''), thinking = NULLIF(?, '')
+		WHERE agent_id = ? AND thread_id = ? AND (COALESCE(model_id, '') != ? OR COALESCE(thinking, '') != ?)`,
+		modelID, thinking, agentID, threadID, modelID, thinking)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		x.changed(ctx, agentID, threadID)
+	}
 	return nil
 }
 
