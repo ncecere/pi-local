@@ -104,7 +104,7 @@ func New(dir string) (*Store, error) {
 		t.Builtin = true
 		s.builtin = append(s.builtin, *t)
 	}
-	order := map[string]int{"assistant": 0, "researcher": 1, "writer": 2, "daily-briefing": 3, "translator": 4, "planner": 5, "coding": 6}
+	order := map[string]int{"assistant": 0, "researcher": 1, "writer": 2, "daily-briefing": 3, "translator": 4, "planner": 5, "coding": 6, "meeting-helper": 7}
 	sort.SliceStable(s.builtin, func(i, j int) bool { return order[s.builtin[i].ID] < order[s.builtin[j].ID] })
 	return s, nil
 }

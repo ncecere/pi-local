@@ -31,6 +31,11 @@ prompt and the project-instruction loading of the pi coding agent,
 > COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 > OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## Apple connections
+
+The Calendar, Reminders and Notes bridge is Pi Local's own MIT-licensed code. It calls macOS's installed
+`/usr/bin/osascript`; no Apple binaries or third-party MCP server packages are redistributed for these connections.
+
 ## Bundled into the agent runtime
 
 `runtime/dist/runtime.mjs` bundles its npm dependencies; esbuild keeps their license comments in

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -35,7 +36,38 @@ func (a *API) templateList() []templates.Template {
 	if a.Templates == nil {
 		return []templates.Template{}
 	}
-	return a.Templates.List()
+	list := []templates.Template{}
+	for _, t := range a.Templates.List() {
+		if a.templateAvailable(&t) {
+			list = append(list, t)
+		}
+	}
+	return list
+}
+
+// Capability-dependent templates are offered and accepted only with a tested, enabled connection.
+func (a *API) templateAvailable(t *templates.Template) bool {
+	if !t.Builtin || t.ID != "meeting-helper" {
+		return true
+	}
+	if a.MCP == nil {
+		return false
+	}
+	list, err := a.MCP.Connections(context.Background())
+	if err != nil {
+		return false
+	}
+	for _, c := range list {
+		if c.ID != "apple_calendar" || c.State != "connected" || c.Server == nil || c.Server.Slug != "apple_calendar" {
+			continue
+		}
+		for _, tool := range c.Server.Tools {
+			if tool.Name == "calendar" && tool.ModelVisible {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *API) listTemplates(w http.ResponseWriter, r *http.Request) {

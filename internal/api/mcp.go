@@ -12,6 +12,9 @@ import (
 )
 
 func (a *API) mcpRoutes(m *http.ServeMux) {
+	m.HandleFunc("GET /api/connections", a.listConnections)
+	m.HandleFunc("POST /api/connections/{id}/connect", a.connect)
+	m.HandleFunc("DELETE /api/connections/{id}", a.disconnect)
 	m.HandleFunc("GET /api/mcp/servers", a.listMCP)
 	m.HandleFunc("POST /api/mcp/servers", a.createMCP)
 	m.HandleFunc("PATCH /api/mcp/servers/{slug}", a.updateMCP)

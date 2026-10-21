@@ -3,6 +3,8 @@
 <!-- For Developer ID signing with the hardened runtime (Phase 8): the bundled Node's V8 needs JIT. -->
 <plist version="1.0">
 <dict>
+	<!-- Apple connections use osascript after the person grants Automation permission. -->
+	<key>com.apple.security.automation.apple-events</key><true/>
 	<key>com.apple.security.cs.allow-jit</key><true/>
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
 </dict>

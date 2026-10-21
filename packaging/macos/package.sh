@@ -75,6 +75,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>LSMinimumSystemVersion</key><string>11.0</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 	<key>NSHighResolutionCapable</key><true/>
+	<key>NSAppleEventsUsageDescription</key><string>Let agents you choose use Calendar, Reminders and Notes. Creating events or reminders asks for your confirmation.</string>
 	<key>NSHumanReadableCopyright</key><string>MIT licensed. Includes Node.js (see Resources/node-LICENSE).</string>
 </dict>
 </plist>

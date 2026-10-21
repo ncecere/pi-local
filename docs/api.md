@@ -52,7 +52,7 @@ type Agent = {
 | Route | Answer |
 |---|---|
 | `GET /api/agents` | `Agent[]`, newest first. Never starts a runtime. |
-| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. `templates` are the New agent gallery's starting points, the same list as `GET /api/templates` (see [Templates](#templates-and-web-tools-v02)): the built-ins Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner and Coding, then the person's own. `triage` is retired: no longer offered, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
+| `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. `templates` are the New agent gallery's starting points, the same list as `GET /api/templates` (see [Templates](#templates-and-web-tools-v02)): the built-ins Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner and Coding, plus Meeting helper when its Apple Calendar capability is connected, then the person's own. `triage` is retired: no longer offered, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
 | `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?, web?}` (`workspace`: see [Workspace tools](#workspace-tools-approvals-and-attachments-phase-4)). `templateId` is a template's ID: the agent starts from it (its kind, instructions, tools, approvals, web tools and first schedule), and the body's own fields win; an empty `instructions` keeps the template's. `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`, `invalid_workspace_folder`. A `coding` agent made without `workspace.tools` gets `["read", "write", "edit", "bash"]`. |
 | `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?, memory?, budget?}` (later phases add more; `memory`: see [Memory](#memory-v02); `budget`: see [Budgets](#budgets-v03), `null` removes it). Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
 | `DELETE /api/agents/{id}` | Stops its runtime and moves its folder to the OS trash (or deletes it). Answers `{ok: true}`. |
@@ -567,6 +567,82 @@ after the files. `400 invalid_attachments` for more files or a path outside the 
 - The `read` tool opens PDF, Word (`.docx`), Excel (`.xlsx`) and PowerPoint (`.pptx`) files as Markdown: pages,
   headings, lists and tables, sheets as tables, slides with their notes. A scanned PDF has no text; `read` says so.
   Images too large for the model are resized rather than refused.
+
+## Connections gallery (v0.4)
+
+Connections are curated MCP presets, not another credential store. Endpoints and source URLs were checked
+**2026-10-21**; see `internal/mcp/connections.go` for the source list. All remote presets use **Streamable HTTP**,
+not legacy HTTP+SSE. No real service sign-in is performed by tests.
+
+Unauthenticated GET checks on 2026-10-21 returned 401 challenges for Linear, Atlassian v2, GitHub and Asana v2.
+Linear's `https://mcp.linear.app/.well-known/oauth-authorization-server` advertises `/register` and S256;
+Atlassian's `https://mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp` leads to an authorization
+server advertising DCR and S256. Asana's `https://app.asana.com/.well-known/oauth-authorization-server`
+has no registration endpoint, consistent with its app-registration guide. Notion's endpoint and metadata returned
+403 from this environment, so its OAuth/DCR support is verified from the official guide, **not a live sign-in**.
+No OAuth clients were registered with real services and no real authorization grants were obtained.
+
+| Route | Answer |
+|---|---|
+| `GET /api/connections` | `Connection[]` (no network calls or runtime startup). Each has `id`, `name`, `icon`, `group` (`apps`, `mail`, `computer`), `description`, `transport`, `url?`, `command?`, `auth`, `docsUrl`, `checkedAt`, `advanced`, `automatic`, `setup: string[]`, `state`, `server: McpServer \| null`, `usedBy: {id,name}[]`, and `problem?`. No secrets. |
+| `POST /api/connections/{id}/connect` | `{connection: Connection, authorizeUrl?: string}`. Creates and tests the preset through the existing MCP catalog, or reuses an exact matching configuration. OAuth uses the existing sign-in/probe and browser callback. The reply is **not proof of success**: follow `mcp` events and read the gallery again. A failed test remains `error`. Repeated calls do not create duplicate servers. |
+| `DELETE /api/connections/{id}` | `{ok:true}`. Removes the matching MCP server and its saved secrets; does not revoke provider-side grants or OS Automation permissions. `409 in_use` (with agents): remove its agent selections first. `409 signing_in`: wait for an active sign-in to end. Already disconnected is a no-op. |
+
+States: `not_connected` (no matching configuration), `needs_sign_in` (OAuth has no tokens, or its last probe
+requires sign-in even with tokens stored), `error` (disabled,
+untested, or last test failed), `connected` (enabled, successfully tested and, for OAuth, tokens stored). An Apple
+connection being connected means **tools are available**, not that personal records were read or Automation
+permission was granted. `GET` never probes the services. Configuration identity uses the endpoint and transport
+(or exact bundled Apple command), never a name alone; a conflicting custom slug is not overwritten.
+
+Use with agents reuses `PATCH /api/agents/{id}` `{mcp: [...]}`; preserve other selections and per-tool restrictions.
+No agent gains access just because a connection was created. Connections appear on the agent's Connections tab
+(the existing `?tab=mcp`). Custom connections (MCP) remain at `/settings/mcp`.
+
+- Notion: `https://mcp.notion.com/mcp`, OAuth + dynamic client registration (DCR).
+- Linear: `https://mcp.linear.app/mcp`, OAuth 2.1 + DCR.
+- Atlassian: `https://mcp.atlassian.com/v2/mcp?tools=all`, OAuth; official v2 flat tool listing keeps tool-level
+  selection and approval hints rather than an opaque execute tool. Organization restrictions may apply.
+- GitHub: `https://api.githubcopilot.com/mcp/`. **Advanced**: official host integration docs explicitly say no DCR;
+  OAuth needs a registered app. Pi Local cannot configure its OAuth app yet. A fine-grained PAT works through a
+  custom HTTP Authorization header, with OAuth off; this is **token auth**, not browser OAuth.
+- Asana: `https://mcp.asana.com/v2/mcp`. **Advanced**: pre-register an MCP OAuth app with client ID and secret;
+  no DCR. Not yet supported by Pi Local's automatic sign-in. Do not use the retired `/sse` endpoint.
+- Google: **Advanced**, separate first-party presets for Gmail (`https://gmailmcp.googleapis.com/mcp/v1`),
+  Calendar (`https://calendarmcp.googleapis.com/mcp/v1`) and Drive (`https://drivemcp.googleapis.com/mcp/v1`).
+  Google's [official setup guide](https://developers.google.com/workspace/guides/configure-mcp-servers), updated
+  2026-10-19 and checked 2026-10-21, requires enabling the Workspace MCP APIs, a consent screen and your own
+  OAuth client ID/secret for an AI-powered agent. That pre-registered-app flow is not configurable in Pi Local yet.
+  Separate cards avoid claiming that a Calendar-only connection provides mail or files. No automatic success claim.
+- Microsoft 365: **Advanced** setup guide for the reviewed Softeria community server, not an invented first-party
+  endpoint. It has a shared app for some device-login scopes, but production/custom scopes need an Entra app.
+  It manages its own tokens outside Pi Local's store. Microsoft's first-party Agent 365 MCP alternative requires a
+  Frontier tenant, your own Entra app and admin consent; see [Microsoft's authentication guide](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/mcp-authentication).
+  Review the chosen server's setup and storage before adding it. No automatic install or sign-in.
+- Apple Calendar, Reminders, Notes: macOS only, bundled `runtime.mjs apple-mcp calendar|reminders|notes` over stdio
+  using `/usr/bin/osascript` (JXA). No packages downloaded, no credentials, no personal data access during connect,
+  test or tools/list. The first tool call may open the app and require Automation permission. Elsewhere the gallery
+  says Coming to Windows and Linux.
+
+Apple tools: `calendar({start,end,calendar?,limit?})` (ISO timestamps with timezone, positive range ≤31 days),
+`create_event({calendar,title,start,end})` (no invitations), `list_reminders({list?,limit?})`,
+`create_reminder({list,title})`, `search_notes({query,limit?})` (title matching, plain-text excerpts ≤2,000 chars).
+Reads default to 20 results (max 100), inspect at most 20 calendars/lists, and are not an exhaustive search or
+availability check. Recurring instances are not expanded. Calls time out at 20 seconds with bounded output.
+User input is validated and passed as JSON argv, never interpolated into script source or a shell. Every creation
+requires **server-side MCP elicitation**, even under trusting/custom allow rules, and fails closed without client
+support, explicit acceptance and `approve:true`. A timeout can have an uncertain creation outcome: inspect the app
+before retrying. No edit/delete/send tools are exposed.
+
+The **Meeting helper** template appears only when the enabled, tested `apple_calendar` connection offers its
+model-visible `calendar` tool. Agent creation rechecks this condition (`409 connection_required` otherwise).
+It uses the careful profile, does not send invitations and explains bounded/recurring-event limits.
+**Inbox helper is deferred**: this curated set has no safely configured automatic mail capability. The calendar
+tool is supplied by the Apple connection, not a synthetic calendar backed by unconnected cloud accounts.
+
+Apple tests use synthetic objects/scripts; `PI_LOCAL_TEST_APPLE=1` opts into a live, metadata-only macOS smoke test
+(application running flags, no personal records). It is off by default. Calendar recurrence expansion and a full
+permission-granted read/write round-trip remain unverified; no live personal-data tests run automatically.
 
 ## MCP servers (Phase 5)
 
