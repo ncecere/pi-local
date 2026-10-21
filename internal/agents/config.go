@@ -176,9 +176,9 @@ type Workspace struct {
 	// Sandbox: "on" runs the agent's `bash` in an OS sandbox (reads anywhere but credentials and other agents' data;
 	// writes only the workspace and temporary folders); "off" or empty (an agent made before the sandbox) runs it
 	// with everything the person can reach. Only `bash` is affected: the file tools stay inside the workspace always.
-	Sandbox string `yaml:"sandbox,omitempty" json:"sandbox"`
+	Sandbox string `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
 	// Network: "off" blocks the sandboxed shell's network; "on" or empty allows it. No effect without the sandbox.
-	Network string `yaml:"network,omitempty" json:"network"`
+	Network string `yaml:"network,omitempty" json:"network,omitempty"`
 }
 
 // Switch values for Workspace.Sandbox and Workspace.Network.

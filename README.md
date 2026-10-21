@@ -25,8 +25,9 @@ reply finishes the next time you open the app.
   - duplicate, export and import
 - **Teams, and agents asking agents.** An agent may ask the agents it is allowed to ask (its `canCall`, or its team);
   each answers in a conversation of its own that you can read.
-- **Workspace tools.** `read`, `write`, `edit` and `bash` in the agent's own folder or a project folder, with
-  **approvals**: a profile (careful, balanced, trusting) and your own rules decide which tool calls wait for you to approve or deny, even while the agent sleeps or the app is closed; "Approve and always allow this" adds a rule.
+- **Workspace tools.** `read`, `write`, `edit` and `bash` in the agent's own folder or a project folder; `bash` runs in
+  a **sandbox** on a Mac (it can read your files except keys and credentials, write only in the workspace, its temp
+  folder and `/tmp`, with the network on or off per agent), and with **approvals**: a profile (careful, balanced, trusting) and your own rules decide which tool calls wait for you to approve or deny, even while the agent sleeps or the app is closed; "Approve and always allow this" adds a rule.
 - **MCP servers:**
   - local (stdio) or remote (Streamable HTTP, headers or OAuth sign-in)
   - each agent picks servers and tools

@@ -50,8 +50,9 @@ export interface Agent {
   /** The newest runtime that wrote its storage. */
   piDurableVersion: string | null;
   /**
-   * Its file tools, confined to its workspace folder (bash is not confined), and
-   * that folder. Phase 4; absent from an older backend (read as no tools).
+   * Its file tools, confined to its workspace folder (bash is confined only when
+   * its sandbox is on), and that folder. Phase 4; absent from an older backend
+   * (read as no tools).
    */
   workspace?: AgentWorkspace;
   /** Which tools ask first, and how long a request waits. Phase 4. */
@@ -276,12 +277,22 @@ export interface AgentWorkspace {
   folder?: string;
   /** The folder it works in now: the project folder, or `…/agents/<id>/workspace`. Read-only. */
   dir?: string;
+  /** Its `bash` runs in the OS sandbox (agents made before the sandbox: false). Absent from an older backend. */
+  sandbox?: boolean;
+  /** Whether sandboxed commands may use the network (default true). Absent from an older backend. */
+  network?: boolean;
+  /** Whether this computer has a sandbox (macOS for now). Read-only. */
+  sandboxAvailable?: boolean;
 }
 
 /** What a create or update sends as `workspace`: `tools` is required (left out, it becomes none). */
 export interface AgentWorkspaceInput {
   tools: WorkspaceTool[];
   folder?: string;
+  /** Left out: the agent keeps what it has (a new agent: on where there is a sandbox and it has bash). */
+  sandbox?: boolean;
+  /** Left out: the agent keeps what it has. */
+  network?: boolean;
 }
 
 /** How much an agent asks: see docs/api.md, "Approval rules and profiles". An agent with none is `custom`. */
