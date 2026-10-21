@@ -63,7 +63,7 @@ type Status struct {
 	// where macOS put a quarantined copy); nil when it can, or when this isn't an installed app at all.
 	InstallBlocked *string `json:"installBlocked"`
 	AutoCheck      bool    `json:"autoCheck"`
-	// Stage of an install in progress: downloading, verifying, installing, restarting, or failed.
+	// Stage of an install in progress: downloading, verifying, backing-up, installing, restarting, or failed.
 	Stage *string `json:"stage"`
 }
 
@@ -78,6 +78,9 @@ type Updater struct {
 	Bundle string
 	// Relaunch quits the app after a swap so the new one starts (set by the desktop app).
 	Relaunch func(bundle string)
+	// BeforeInstall runs once the archive is verified and before anything is replaced (the app makes a backup of its
+	// data here). An error stops the update: nothing was changed, and it may be tried again.
+	BeforeInstall func(ctx context.Context) error
 	// OnChange is told whenever the status changes.
 	OnChange func(Status)
 	// AutoCheck reads and writes the "check automatically" setting.
@@ -335,6 +338,12 @@ func (u *Updater) install(ctx context.Context, rel *Release) error {
 	}
 	if err := VerifyNamed(u.Key, archive, rel.asset.name, strings.TrimSpace(string(sig))); err != nil {
 		return err
+	}
+	if u.BeforeInstall != nil {
+		u.setStage("backing-up", "")
+		if err := u.BeforeInstall(ctx); err != nil {
+			return fmt.Errorf("the update wasn't installed, because the backup before it failed: %w", err)
+		}
 	}
 	u.setStage("installing", "")
 	staged, err := unpack(ctx, archive, dir, rel.Version)

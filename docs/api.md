@@ -98,6 +98,9 @@ type AgentThread = {
 - `event: memory`, `data: {agentId}` when memory changes: `agentId` `""` is the person's (the About me card, facts,
   suggestions), otherwise that agent's notes. Nothing else is sent: read `/api/you…` or `/api/agents/{id}/memory` again
   (see [Memory](#memory-v02))
+- `event: backup`, `data: {}` when backups change: one made or deleted, the daily setting, a restore recorded or taken
+  back, a backup starting or ending. Read `GET /api/backups` again (see
+  [Backups and diagnostics](#backups-and-diagnostics-v03))
 - `event: resync`, `data: {}` when events may have been missed; the lists should be read again
 - `: keep-alive` every 15 s
 
@@ -549,7 +552,7 @@ type UpdateStatus = {
   installBlocked: string | null;   // why this copy can't update itself where it is (run from the disk image, or a
                                    // quarantined copy), a message to show; null when it can, or isn't an installed app
   autoCheck: boolean;         // checks 30 s after start and every 12 hours
-  stage: null | "downloading" | "verifying" | "installing" | "restarting" | "failed";
+  stage: null | "downloading" | "verifying" | "backing-up" | "installing" | "restarting" | "failed";
 };
 ```
 
@@ -557,7 +560,7 @@ type UpdateStatus = {
 |---|---|
 | `GET /api/update` | `UpdateStatus` |
 | `POST /api/update/check` | Checks GitHub now. `UpdateStatus`. |
-| `POST /api/update/install` | `202 UpdateStatus`: downloads, verifies, installs and restarts in the background; the stages arrive as `update` events (`failed` with `error`; it may be tried again). `409 cannot_install` with a message when it can't (no newer version, already installing, not an installed app, no archive for this Mac). |
+| `POST /api/update/install` | `202 UpdateStatus`: downloads, verifies, [backs up the data](#backups-and-diagnostics-v03) (stage `backing-up`; if the backup fails the update stops, `failed`, nothing replaced), installs and restarts in the background; the stages arrive as `update` events (`failed` with `error`; it may be tried again). `409 cannot_install` with a message when it can't (no newer version, already installing, not an installed app, no archive for this Mac). |
 | `PUT /api/update/settings` | Body `{autoCheck: boolean}`. `UpdateStatus`. |
 
 Live events: `event: update`, `data: UpdateStatus`.
@@ -759,6 +762,112 @@ them. On by default; Settings → Models turns it off (every conversation then u
 - The thread (`GET …/threads/{t}` and the list) has `modelId` and `thinking`, `""` for none. A choice that can no
   longer be used (its model turned off) falls back to the agent's model at the next message, and is cleared.
 - Usage is counted under the model that answered.
+
+## Backups and diagnostics (v0.3)
+
+### Backups
+
+A backup is one zip in `<data>/backups/` (`pi-local-<YYYY-MM-DD-HHMMSS>.zip`, with `-auto` or `-before-update` for
+those):
+
+```
+manifest.json                      what it is, see below
+app.db                             VACUUM INTO: whole and compact
+templates/…
+agents/<id>/agent.yaml, memory.json, state.sqlite, workspace/…, tmp/attachments/…
+```
+
+- **Never secrets.** Provider keys, MCP variable and header values and sign-ins are in the OS keychain, which isn't
+  copied. The manifest lists, by name only, what will need entering again on another computer (`needsKeys`). On the
+  same computer the keychain still has them.
+- **Workspaces are included**: each agent's own `workspace/` can be large, so is the zip; the UI shows its size.
+  Not included: logs, `tmp/` (except `tmp/attachments/`), symbolic links and special files (counted in `warnings`),
+  and a project folder outside the data folder (`workspace.folder`; the manifest names it).
+- **An awake agent's conversations** (`state.sqlite`) are held open exclusively by its runtime, so for the copy the
+  agent is put to sleep (its work in flight stays pending, as when it hibernates), the file is copied with SQLite's
+  `VACUUM INTO`, and the agent wakes again (only the copy happens while it sleeps; the zip is written afterwards from
+  the copies). Anything that would wake the agent waits for that moment.
+- **Daily.** On by default: a backup (reason `automatic`) when the newest backup is more than a day old, looked for
+  every 15 minutes from 2 minutes after the app starts. While an agent is in the middle of a reply it waits for a quiet
+  moment, for up to 12 hours. Kept: the newest 7 `automatic` and the newest 3 `before-update`; `manual` backups are
+  never deleted by the app.
+- **Before an update.** Installing an update makes a `before-update` backup after the archive is verified and before
+  anything is replaced.
+- **Restore** replaces `app.db`, `agents/` and `templates/`. The running app holds app.db open, so it happens at the
+  next start: the request is written to `<data>/restore-pending.json` and the app restarts (the desktop app
+  relaunches itself; a build that can't says `canRestart: false` and the person quits and opens it). As it starts,
+  before app.db is opened, the backup is unpacked into `<data>/restore-staging` and checked (the zip's names, a SQLite
+  integrity check); only then the current data is moved to `<data>/before-restore-<YYYY-MM-DD>` (`-2`, … if taken) and
+  the unpacked data moved in. A backup that fails its checks changes nothing and is reported in `lastRestore`. The
+  steps after the checks are repeatable: an interrupted restore carries on at the next start. The outcome is kept in
+  `<data>/last-restore.json`. Everything in the backup folder, the runtime bundle and the keychain are left as they
+  are.
+
+```ts
+type BackupReason = "manual" | "automatic" | "before-update";
+type KeyNeed = { kind: "provider" | "mcp" | "web-search" | "judgments"; id: string; name: string;
+  items: string[] };            // "API key", "Header X-Org", "Variable GITHUB_TOKEN", "Sign-in": names, never values
+type Backup = {
+  id: string;                   // the file's name without .zip
+  file: string; path: string;   // absolute
+  createdAt: number;            // Unix ms
+  size: number;                 // the zip's size on disk
+  bytes: number;                // before compression
+  reason: BackupReason; version: string;    // the Pi Local that made it
+  agents: number;
+  workspaceBytes: number;       // what the agents' workspace folders add (before compression)
+  needsKeys: KeyNeed[];
+  warnings: string[];           // what couldn't be included
+  readable: boolean;            // false: not a backup this version can open (can't be restored)
+};
+type BackupList = {
+  backups: Backup[];            // in the backup folder, newest first
+  folder: string;               // <data>/backups
+  auto: boolean;                // the daily backup is on
+  keep: number;                 // automatic backups kept: 7
+  running: boolean;             // a backup is being made
+  autoError: string;            // why the last automatic one failed, "" if it didn't
+  pending: { id: string; requestedAt: number; phase: "pending" | "applying" } | null;   // a restore waiting for the restart
+  canRestart: boolean;          // the app restarts itself to restore
+  lastRestore: { ok: boolean; at: number; id: string; movedTo: string /* absolute */; error: string } | null;
+};
+```
+
+| Route | Answer |
+|---|---|
+| `GET /api/backups` | `BackupList` |
+| `POST /api/backups` | Body `{folder?}` (optional; an absolute path to an existing folder: the zip goes there instead, and isn't listed or pruned). Makes a backup now (reason `manual`), which can take a while, and finishes even if the request is dropped. `201 Backup`. Errors: `400 invalid_folder`, `409 backup_running` (a backup or restore is under way), `500 backup_failed` with a message for people (for example not enough free space). |
+| `PUT /api/backups/settings` | Body `{auto?: boolean}`. Answers `BackupList`. |
+| `DELETE /api/backups/{id}` | `{ok: true}`; `404 not_found`. |
+| `POST /api/backups/{id}/reveal` | Shows the file selected in Finder (`open -R`). `{ok: true}`. |
+| `POST /api/backups/{id}/restore` | Body `{confirm: "restore"}` (`400 confirm` without it). Checks the backup, records the restore, and, when `canRestart`, restarts the app about half a second later. `{pending, restarting: boolean}`. `404 not_found`, `409 backup_running`, `400 invalid_backup` (message for people: not a backup, made by a newer Pi Local, no app.db). With `restarting: false` the UI asks the person to quit and open Pi Local. |
+| `DELETE /api/backups/pending-restore` | Takes back a restore that hasn't begun. `{ok: true}`; `409 cannot_cancel` once it has. |
+
+Live events: `event: backup`, `data: {}`.
+
+### Diagnostics
+
+A zip to send when something goes wrong, `pi-local-diagnostics-<date-time>.zip`:
+
+```
+README.txt, about.json            Pi Local, Node, pi-durable and OS versions, the data folder's path (home folder as ~)
+settings.json                     app.db's settings (not the About me card)
+providers.json, mcp-servers.json  how it is set up; names of keys, headers and variables, never their values
+agents.json                       each agent: kind, model, status, last error, storage size
+agents/<id>/agent.yaml            its configuration, with the instructions left out
+agents/<id>/runtime.log, app.log  the last 2,000 lines of each
+recent-errors.txt                 the problem lines of those, and each failed agent's error
+```
+
+Everything free-form is redacted with the approvals rules (`internal/agents/redact.go`, the Go side of
+`runtime/src/lib/redact.ts`): a value whose key names a credential, a token-looking word, an Authorization or Cookie
+line, a bearer token, a password in a URL, a PEM private key become `[redacted, N characters]`. Conversations, memory
+and files are never included. The app's own log is its recent `slog` lines (kept in memory, 2,000 lines).
+
+| Route | Answer |
+|---|---|
+| `POST /api/diagnostics` | Desktop app: asks where to save (the system Save dialog) and writes the zip. `{path}`, or `{cancelled: true}`; `501 not_supported` in a browser (use `GET`). |
+| `GET /api/diagnostics` | The zip as a download (`Content-Disposition: attachment`). |
 
 ## Not yet (later phases)
 

@@ -36,6 +36,9 @@ reply finishes the next time you open the app.
   - notifications when something needs you
   - launch at login
 
+- **Backups:** a daily backup of your agents, conversations and settings (keeping 7), one before each update, and
+  yours when you want; restore from Settings → Backups. **Diagnostics** to send when something goes wrong: logs and
+  settings with keys and tokens removed.
 - **Updates** itself from GitHub Releases, installing only archives signed with the project's release key.
 
 Status: v1. See [PLAN.md](PLAN.md).
@@ -62,8 +65,8 @@ Pi Local checks GitHub for a new release shortly after it starts and every 12 ho
 About**), and shows **Update to …** in its menu bar menu. Installing downloads the release's zip and checks its
 **ed25519 signature** against the public key built into the app. It installs the new app only if the signature is
 good, the archive holds exactly one Pi Local.app with the right bundle ID and version, and `codesign --verify` passes.
-Then it swaps the app in place, moves the old one to the Trash, and restarts. Your data
-(`~/Library/Application Support/Pi Local`) is not touched.
+Before it replaces anything it makes a backup of your data (kept in `backups/`). Then it swaps the app in place,
+moves the old one to the Trash, and restarts. Your data (`~/Library/Application Support/Pi Local`) is not touched.
 
 ## Releasing
 
@@ -95,6 +98,7 @@ A local release build: `make release VERSION=0.2.0` (signs when `RELEASE_SIGNING
 | `internal/models`, `internal/mcp`, `internal/secrets` | Providers and models, MCP servers, the OS keychain |
 | `internal/approvals`, `internal/asks`, `internal/teams` | Tool approvals, agents asking agents, teams |
 | `internal/schedules`, `internal/search`, `internal/usage` | Schedules, message search (FTS5), usage |
+| `internal/backup`, `internal/diagnostics` | Backups, restoring them at the next start, the daily one; the diagnostics zip |
 | `internal/api` | The UI's API ([docs/api.md](docs/api.md)) |
 | `runtime/` | The agent runtime (TypeScript, from pi-durable-platform, on SQLite), bundled to `runtime.mjs` |
 | `frontend/` | The UI (React, from Pi Agent Interface) |
@@ -112,6 +116,8 @@ The data directory is `~/Library/Application Support/Pi Local`, or `-data` / `PI
 | `agents/<id>/workspace/` | Its files (attachments under `attachments/`) |
 | `agents/<id>/tmp/`, `agents/<id>/logs/runtime.log` | Its temporary files and its log |
 | `trash/` | Deleted agents' folders |
+| `backups/` | Backups (zips): daily, before an update, and yours. Settings → Backups |
+| `before-restore-<date>/` | The data a restore replaced, kept until you delete it |
 | `runtime/` | The runtime bundle, written out by the app |
 
 Secrets (provider keys, MCP env and header values, OAuth tokens) are kept in the macOS keychain under "Pi Local".

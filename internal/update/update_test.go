@@ -264,3 +264,83 @@ func TestAnAppThatCantBeReplacedWhereItIsSaysWhy(t *testing.T) {
 		t.Fatalf("a writable folder: %+v", st)
 	}
 }
+
+// An update makes a backup first, after the archive is verified and before anything is replaced; a backup that fails
+// stops the update and leaves the app as it was.
+func TestABackupIsMadeBeforeAnUpdateInstalls(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	os.MkdirAll(filepath.Join(os.Getenv("HOME"), ".Trash"), 0o755)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	work := t.TempDir()
+	apps := filepath.Join(t.TempDir(), "Applications")
+	os.MkdirAll(apps, 0o755)
+	exec.Command("ditto", "-x", "-k", fakeApp(t, work, "0.1.0", BundleID), apps).Run()
+	bundle := filepath.Join(apps, "Pi Local.app")
+	zip := fakeApp(t, work, "0.2.0", BundleID)
+	sig, _ := Sign(priv, zip)
+	os.WriteFile(zip+".sig", []byte(sig), 0o644)
+	gh := fakeGitHub(t, "0.2.0", map[string]string{filepath.Base(zip): zip, filepath.Base(zip) + ".sig": zip + ".sig"})
+
+	newUpdater := func(hook func(context.Context) error) (*Updater, chan string) {
+		u := New("0.1.0", bundle)
+		u.Key, u.APIBase = pub, gh.URL
+		relaunched := make(chan string, 1)
+		u.Relaunch = func(b string) { relaunched <- b }
+		u.BeforeInstall = hook
+		u.Check(context.Background())
+		return u, relaunched
+	}
+
+	// The backup fails: the update stops with a message, and the installed app is untouched.
+	u, relaunched := newUpdater(func(context.Context) error { return fmt.Errorf("the disk is full") })
+	if err := u.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if st := u.Status(); st.Stage != nil && *st.Stage == "failed" {
+			if st.Error == nil || !strings.Contains(*st.Error, "backup before it failed") || !strings.Contains(*st.Error, "the disk is full") {
+				t.Fatalf("the failure: %+v", st.Error)
+			}
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if st := u.Status(); st.Stage == nil || *st.Stage != "failed" {
+		t.Fatalf("the update should have failed: %+v", st)
+	}
+	select {
+	case <-relaunched:
+		t.Fatal("relaunched after a failed backup")
+	default:
+	}
+	if v := installed(t, bundle); v != "0.1.0" {
+		t.Fatalf("a failed backup changed the app: %s", v)
+	}
+
+	// The backup succeeds: it ran while the old app was still in place, then the update installed.
+	var during string
+	var stageDuring string
+	u, relaunched = newUpdater(nil)
+	u.BeforeInstall = func(context.Context) error {
+		during = installed(t, bundle)
+		if st := u.Status(); st.Stage != nil {
+			stageDuring = *st.Stage
+		}
+		return nil
+	}
+	if err := u.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-relaunched:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("no relaunch; status %+v", u.Status())
+	}
+	if during != "0.1.0" || stageDuring != "backing-up" {
+		t.Fatalf("the backup ran with app %q at stage %q", during, stageDuring)
+	}
+	if v := installed(t, bundle); v != "0.2.0" {
+		t.Fatalf("after installing: %s", v)
+	}
+}

@@ -23,6 +23,10 @@ import (
 type Manager interface {
 	About() map[string]any
 	Reveal(path string) error
+	// RevealFile shows a file selected in the Finder.
+	RevealFile(path string) error
+	// WriteDiagnostics writes the diagnostics zip.
+	WriteDiagnostics(w io.Writer) error
 }
 
 func (a *API) manageRoutes(m *http.ServeMux) {

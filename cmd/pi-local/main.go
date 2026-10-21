@@ -26,6 +26,7 @@ import (
 	"github.com/ncecere/pi-local/frontend"
 	"github.com/ncecere/pi-local/internal/app"
 	"github.com/ncecere/pi-local/internal/runtimeenv"
+	"github.com/ncecere/pi-local/internal/update"
 	runtimebundle "github.com/ncecere/pi-local/runtime"
 )
 
@@ -134,15 +135,23 @@ func main() {
 	if core != nil {
 		core.API.Desktop = desktop{dataDir: *dataDir}
 		// An installed update: wait for this process to have stopped (its agents included), then open the new app.
-		core.Updater.Relaunch = func(bundle string) {
+		relaunch := func(bundle string) {
 			script := fmt.Sprintf("while kill -0 %d 2>/dev/null; do sleep 0.2; done; /usr/bin/open -n %q", os.Getpid(), bundle)
 			cmd := exec.Command("/bin/sh", "-c", script)
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 			if err := cmd.Start(); err != nil {
-				slog.Error("relaunching after the update", "err", err)
+				slog.Error("relaunching", "err", err)
 				return
 			}
 			wails.Quit()
+		}
+		core.Updater.Relaunch = relaunch
+		// A restore is applied as the app starts: restart it. (Only an installed app can open itself again; a
+		// development build asks the person to quit and open it.)
+		if exe, err := os.Executable(); err == nil {
+			if bundle := update.BundleOf(exe); bundle != "" {
+				core.API.Restart = func() { relaunch(bundle) }
+			}
 		}
 		updateItem.OnClick(func(*application.Context) {
 			if st := core.Updater.Status(); st.Available {

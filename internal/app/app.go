@@ -29,8 +29,11 @@ import (
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/api"
 	"github.com/ncecere/pi-local/internal/appdb"
+	"github.com/ncecere/pi-local/internal/applog"
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
+	"github.com/ncecere/pi-local/internal/backup"
+	"github.com/ncecere/pi-local/internal/diagnostics"
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
 	"github.com/ncecere/pi-local/internal/gateway"
@@ -48,6 +51,7 @@ import (
 	"github.com/ncecere/pi-local/internal/update"
 	"github.com/ncecere/pi-local/internal/usage"
 	"github.com/ncecere/pi-local/internal/web"
+	"gopkg.in/yaml.v3"
 )
 
 // Config configures an App.
@@ -95,6 +99,10 @@ type App struct {
 	Elicitations *elicitations.Store
 	// DB is app.db (diagnostics and tests).
 	DB *sql.DB
+	// Backups makes, lists and restores backups of the data folder, and the daily automatic one.
+	Backups *backup.Service
+	// Log is the app's own recent log lines (diagnostics).
+	Log *applog.Ring
 
 	mcpProber       *mcp.Prober
 	runtimeVersion  string
@@ -159,6 +167,13 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			a.Close()
 		}
 	}()
+	a.Log = applog.Install()
+	// A restore the person asked for is carried out first, before anything opens app.db or the agents' folders.
+	if res, err := backup.ApplyPending(cfg.DataDir, time.Now()); err != nil {
+		return nil, fmt.Errorf("finishing the restore: %w", err)
+	} else if res != nil {
+		slog.Info("applied a restore", "ok", res.OK, "backup", res.ID, "movedTo", res.MovedTo, "error", res.Error)
+	}
 
 	versions, err := ReadRuntimeVersions(ctx, cfg.Runtime)
 	if err != nil {
@@ -341,7 +356,32 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.Updater.OnChange = func(st update.Status) { a.Hub.Publish("update", st) }
 	a.API.Updater = a.Updater
+	a.Backups = backup.New(backup.Config{
+		DataDir: cfg.DataDir, DB: db, Version: Version,
+		Agents: func() []backup.AgentInfo {
+			var out []backup.AgentInfo
+			for _, ag := range a.Agents.List() {
+				out = append(out, backup.AgentInfo{ID: ag.ID, Name: ag.Config.Name, Dir: ag.Dir, ProjectFolder: ag.Config.Workspace.Folder})
+			}
+			return out
+		},
+		Quiesce: a.Sup.Quiesce,
+		Wake:    a.Sup.Wake,
+		Keys:    a.backupKeys,
+		Busy: func(ctx context.Context) bool {
+			ids, err := a.Threads.AgentsWithBusyThreads(ctx)
+			return err == nil && len(ids) > 0
+		},
+		OnChange: func() { a.Hub.Publish("backup", map[string]any{}) },
+	})
+	a.API.Backups = a.Backups
+	// An update backs the data up first.
+	a.Updater.BeforeInstall = func(ctx context.Context) error {
+		_, err := a.Backups.Create(ctx, backup.BeforeUpdate, "")
+		return err
+	}
 	a.Schedules.Start()
+	a.Backups.Start()
 	ok = true
 	return a, nil
 }
@@ -667,6 +707,14 @@ func (a *App) About() map[string]any {
 	}
 }
 
+// RevealFile shows a file selected in the Finder (on Linux, its folder in the file manager).
+func (a *App) RevealFile(path string) error {
+	if goruntime.GOOS == "linux" {
+		return exec.Command("xdg-open", filepath.Dir(path)).Start()
+	}
+	return exec.Command("open", "-R", path).Start()
+}
+
 // Reveal opens a folder in the Finder (or the system's file manager).
 func (a *App) Reveal(path string) error {
 	opener := "open"
@@ -745,6 +793,9 @@ func baseEnv(dataDir string) map[string]string {
 
 // Close stops every agent gracefully (work in flight stays pending in its storage) and closes everything.
 func (a *App) Close() {
+	if a.Backups != nil {
+		a.Backups.Close()
+	}
 	if a.Asks != nil {
 		a.Asks.Close()
 	}
@@ -848,4 +899,88 @@ func (a *App) conversationModelEnv(ctx context.Context, agentID, modelID string)
 	}
 	env["MODEL_USAGE_URL"] = a.gatewayURL + "/usage?model=" + url.QueryEscape(modelID)
 	return env, nil
+}
+
+// backupKeys lists what a backup can't carry: the secrets in the keychain, by name, for the manifest.
+func (a *App) backupKeys(ctx context.Context) []backup.KeyNeed {
+	var out []backup.KeyNeed
+	if providers, err := a.Catalog.Providers(ctx); err == nil {
+		for _, p := range providers {
+			var items []string
+			if p.HasKey {
+				items = append(items, "API key")
+			}
+			for _, h := range p.HeaderNames {
+				items = append(items, "Header "+h)
+			}
+			if len(items) > 0 {
+				out = append(out, backup.KeyNeed{Kind: "provider", ID: p.ID, Name: p.Name, Items: items})
+			}
+		}
+	}
+	if servers, err := a.MCP.List(ctx); err == nil {
+		for _, s := range servers {
+			var items []string
+			for _, n := range s.EnvNames {
+				items = append(items, "Variable "+n)
+			}
+			for _, n := range s.HeaderNames {
+				items = append(items, "Header "+n)
+			}
+			if s.OAuth && s.SignedIn {
+				items = append(items, "Sign-in")
+			}
+			if len(items) > 0 {
+				out = append(out, backup.KeyNeed{Kind: "mcp", ID: s.Slug, Name: s.Name, Items: items})
+			}
+		}
+	}
+	if a.Web.Settings().HasKey {
+		out = append(out, backup.KeyNeed{Kind: "web-search", ID: "web-search", Name: "Web search", Items: []string{"API key"}})
+	}
+	if a.Judge.Settings().HasKey {
+		out = append(out, backup.KeyNeed{Kind: "judgments", ID: "judgments", Name: "Fast judgments", Items: []string{"API key"}})
+	}
+	return out
+}
+
+// WriteDiagnostics writes the diagnostics zip (see package diagnostics): no secrets, no conversations.
+func (a *App) WriteDiagnostics(w io.Writer) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	settings := map[string]string{}
+	if rows, err := a.DB.QueryContext(ctx, `SELECT key, value FROM settings`); err == nil {
+		for rows.Next() {
+			var k, v string
+			if rows.Scan(&k, &v) == nil {
+				settings[k] = v
+			}
+		}
+		rows.Close()
+	}
+	in := diagnostics.Input{
+		Now: time.Now(), Version: Version, DataDir: a.cfg.DataDir, Node: a.nodeVersion, PiDurable: a.runtimeVersion,
+		Contract: a.contractVersion, SecretsInKeychain: secrets.InKeychain(a.cfg.Secrets), Settings: settings,
+		AppLog: a.Log.Lines(),
+	}
+	if providers, err := a.Catalog.Providers(ctx); err == nil {
+		in.Providers = providers
+	}
+	if servers, err := a.MCP.List(ctx); err == nil {
+		in.MCPServers = servers
+	}
+	for _, ag := range a.Agents.List() {
+		status, lastErr := a.Sup.Status(ag.ID)
+		cfg := ag.Config
+		cfg.Instructions = fmt.Sprintf("[omitted, %d characters]", len([]rune(cfg.Instructions)))
+		raw, _ := yaml.Marshal(cfg)
+		d := diagnostics.Agent{ID: ag.ID, Name: ag.Config.Name, Kind: ag.Config.Kind, Model: ag.Config.Model.String(),
+			Status: string(status), LastError: lastErr, PiDurable: ag.PiDurableVersion, Revision: ag.Revision,
+			ConfigYAML: string(raw), LogPath: filepath.Join(ag.LogDir(), "runtime.log")}
+		if st, err := os.Stat(ag.StoragePath()); err == nil {
+			d.StorageBytes = st.Size()
+		}
+		in.Agents = append(in.Agents, d)
+	}
+	return diagnostics.Write(w, in)
 }
