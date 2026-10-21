@@ -205,3 +205,38 @@ func TestTheApprovalPolicyKnowsWhenTheShellIsSandboxed(t *testing.T) {
 		t.Fatal("the approvals alone know nothing of the sandbox")
 	}
 }
+
+func TestSharedSkillsAreNamesInAgentYAML(t *testing.T) {
+	c, err := ParseConfig([]byte("name: A\nskills:\n  - release-notes\n  - pdf-tools\n  - release-notes\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Skills) != 2 || c.Skills[0] != "release-notes" || c.Skills[1] != "pdf-tools" {
+		t.Fatalf("each once, in order: %v", c.Skills)
+	}
+	for _, bad := range []string{"Release Notes", "../etc", "a_b", "", strings.Repeat("a", 65)} {
+		c := Config{Name: "A", Model: DemoModel, Skills: []string{bad}}
+		c.Normalize()
+		var inv *InvalidError
+		if err := c.Validate(); !errors.As(err, &inv) || inv.Code != "invalid_skills" {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	many := Config{Name: "A", Model: DemoModel}
+	for i := 0; i <= MaxSkills; i++ {
+		many.Skills = append(many.Skills, "s"+strings.Repeat("a", i%5)+string(rune('a'+i%26))+string(rune('a'+i/26)))
+	}
+	many.Normalize()
+	if err := many.Validate(); err == nil {
+		t.Error("more than the limit was accepted")
+	}
+	// Without skills nothing is written.
+	var out bytes.Buffer
+	yaml.NewEncoder(&out).Encode(Config{Name: "A"})
+	if strings.Contains(out.String(), "skills") {
+		t.Fatalf("yaml:\n%s", out.String())
+	}
+}

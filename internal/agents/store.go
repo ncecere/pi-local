@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -44,6 +45,9 @@ func (a *Agent) WorkspaceDir() string {
 	}
 	return a.OwnWorkspaceDir()
 }
+
+// SkillsDir is the agent's own skills (<agent folder>/skills/<name>/SKILL.md): always on for this agent.
+func (a *Agent) SkillsDir() string { return filepath.Join(a.Dir, "skills") }
 
 // OwnWorkspaceDir is the workspace/ folder inside the agent's folder (its workspace when it has no project folder).
 func (a *Agent) OwnWorkspaceDir() string { return filepath.Join(a.Dir, "workspace") }
@@ -123,6 +127,19 @@ func (s *Store) checkMCP(list []MCPChoice) error {
 		}
 	}
 	return nil
+}
+
+// UsingSkill lists the agents that picked a shared skill.
+func (s *Store) UsingSkill(name string) []*Agent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*Agent
+	for _, a := range s.agents {
+		if slices.Contains(a.Config.Skills, name) {
+			out = append(out, copyOf(a))
+		}
+	}
+	return out
 }
 
 // UsingMCP lists the agents using an MCP server.

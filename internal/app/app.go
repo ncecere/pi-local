@@ -44,9 +44,11 @@ import (
 	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/memory"
 	"github.com/ncecere/pi-local/internal/models"
+	"github.com/ncecere/pi-local/internal/prompts"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/search"
 	"github.com/ncecere/pi-local/internal/secrets"
+	"github.com/ncecere/pi-local/internal/skills"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
 	"github.com/ncecere/pi-local/internal/templates"
@@ -101,6 +103,10 @@ type App struct {
 	Memory *memory.Store
 	// Templates are the New agent gallery's starting points, built-in and the person's.
 	Templates *templates.Store
+	// Skills are the shared skills (<data>/skills); an agent's own are in its folder.
+	Skills *skills.Store
+	// Prompts is the prompt library (<data>/prompts), offered by the composer's slash menu.
+	Prompts *prompts.Store
 	// Web is web search and page reading for agents.
 	Web *web.Service
 	// Elicitations are MCP servers' questions to the person, while a tool call waits (memory only).
@@ -258,6 +264,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	if a.Templates, err = templates.New(filepath.Join(cfg.DataDir, "templates")); err != nil {
 		return nil, fmt.Errorf("templates: %w", err)
 	}
+	a.Skills = skills.New(filepath.Join(cfg.DataDir, "skills"))
+	if a.Prompts, err = prompts.New(filepath.Join(cfg.DataDir, "prompts")); err != nil {
+		return nil, fmt.Errorf("prompts: %w", err)
+	}
 	a.Elicitations = elicitations.New(0)
 	a.Elicitations.OnChange = func(e elicitations.Elicitation) { a.Hub.Publish("elicitation", e) }
 	a.Elicitations.AgentName = func(id string) string {
@@ -353,7 +363,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, Activity: a.Activity, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, Activity: a.Activity, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, Skills: a.Skills, Prompts: a.Prompts, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
+	// An agent's own skills changed: its next call resolves its configuration again (the runtime has the skills tool only
+	// while there are skills), and restarts it if that differs.
+	a.API.SkillsChanged = a.Sup.Invalidate
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
@@ -558,6 +571,25 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	}
 	if len(webTools) > 0 {
 		env["WEB_TOOLS"] = strings.Join(webTools, ",")
+	}
+	// Skills: the agent's own (every one in its folder) and the shared ones it picked. The runtime reads the files itself,
+	// so it only needs to know where; without any skill it has neither the prompt section nor the `skill` tool.
+	var skillSources []map[string]any
+	if own := skills.New(ag.SkillsDir()); len(own.Names()) > 0 {
+		skillSources = append(skillSources, map[string]any{"root": ag.SkillsDir()})
+	}
+	var sharedNames []string
+	for _, n := range ag.Config.Skills {
+		if a.Skills.Has(n) {
+			sharedNames = append(sharedNames, n)
+		}
+	}
+	if len(sharedNames) > 0 {
+		skillSources = append(skillSources, map[string]any{"root": a.Skills.Root, "names": sharedNames})
+	}
+	if len(skillSources) > 0 {
+		raw, _ := json.Marshal(skillSources)
+		env["SKILL_DIRS"] = string(raw)
 	}
 	// Secret scrubbing of what tools return (on unless the agent's agent.yaml turns it off); logs are always cleaned.
 	env["SCRUB_SECRETS"] = strconv.FormatBool(ag.Config.Security.Scrub())
