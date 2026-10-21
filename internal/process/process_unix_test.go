@@ -121,8 +121,15 @@ func TestGracefulAndEscalation(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { tr.Close() })
+			pid := tr.PID()
+			if pid != cmd.Process.Pid || pid <= 0 {
+				t.Fatal("Tree PID does not identify the owned Unix child")
+			}
 			if mode != "early" {
 				ready(t, out)
+				if tr.ExitCode() != -1 {
+					t.Fatal("published exit status before reap")
+				}
 			}
 			if mode == "descendants" || mode == "orphan" {
 				deadline := time.Now().Add(5 * time.Second)
@@ -149,6 +156,9 @@ func TestGracefulAndEscalation(t *testing.T) {
 			}
 			finished(t, tr)
 			tr.Wait()
+			if tr.ExitCode() != cmd.ProcessState.ExitCode() {
+				t.Fatal("Tree status differs from sole cmd.Wait status")
+			}
 			if mode == "graceful" || mode == "stdin" || mode == "early" || mode == "orphan" {
 				if code := cmd.ProcessState.ExitCode(); code != 0 {
 					t.Fatalf("graceful exit code = %d", code)
@@ -174,6 +184,9 @@ func TestGracefulAndEscalation(t *testing.T) {
 				go func() { defer wg.Done(); tr.Term(); tr.KillTree(); tr.Close(); tr.Wait() }()
 			}
 			wg.Wait()
+			if tr.PID() != pid || tr.ExitCode() != cmd.ProcessState.ExitCode() {
+				t.Fatal("diagnostic status changed after Close")
+			}
 		})
 	}
 }
