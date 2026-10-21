@@ -124,6 +124,10 @@ type Store struct {
 	// OnChange is told after a schedule changes (nil: deleted); OnRunEnd after a run finishes.
 	OnChange func(id string, s *Schedule)
 	OnRunEnd func(s *Schedule, run *Run)
+	// Budget, when set, says whether the agent may take new work: an error (over its budget) refuses it. A refused
+	// "Run now" is 402 over_budget; a refused scheduled fire is a failed run saying why, which doesn't count toward
+	// pausing the schedule (next month it runs again).
+	Budget func(ctx context.Context, agentID string) error
 
 	now    func() time.Time
 	ctx    context.Context
@@ -662,6 +666,11 @@ func (s *Store) Fire(ctx context.Context, id string) (*Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s.Budget != nil {
+		if err := s.Budget(ctx, sc.AgentID); err != nil {
+			return nil, &Error{Status: http.StatusPaymentRequired, Code: "over_budget", Message: err.Error()}
+		}
+	}
 	return s.fire(sc, false), nil
 }
 
@@ -683,6 +692,16 @@ func (s *Store) fire(sc *Schedule, scheduled bool) *Run {
 	s.db.ExecContext(ctx, `UPDATE schedules SET last_fire_at = ? WHERE id = ?`, now, sc.ID)
 	run := &Run{ID: runID, ScheduleID: sc.ID, ThreadID: thread, FiredAt: now, Status: "running"}
 
+	if s.Budget != nil {
+		if err := s.Budget(ctx, sc.AgentID); err != nil {
+			s.finish(sc.AgentID, thread, runID, "failed", err.Error())
+			run.Status = "failed"
+			if updated, err := s.Get(ctx, sc.ID); err == nil {
+				s.OnChange(sc.ID, updated)
+			}
+			return run
+		}
+	}
 	sendErr := s.send(ctx, sc, thread, runID)
 	if sendErr != nil {
 		s.finish(sc.AgentID, thread, runID, "failed", sendErr.Error())

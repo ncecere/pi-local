@@ -42,6 +42,7 @@ type Agent = {
   model: { id: string; name: string; provider: string } | null;  // Phase 1: the demo model
   enabled: boolean;           // always true in Phase 1
   lastUsedAt: string | null;
+  budget: { monthlyUsd: number; onExceed: "stop" | "warn" } | null;  // its monthly budget (see Budgets); null: none
   revision: number;           // bumped on every config change
   createdAt: string;
   updatedAt: string;
@@ -53,7 +54,7 @@ type Agent = {
 | `GET /api/agents` | `Agent[]`, newest first. Never starts a runtime. |
 | `GET /api/agents/catalog` | `{templates: Template[], models: [{id, name}], defaultModelId, allowModelChoice: true, limit: 1000, used}`. `templates` are the New agent gallery's starting points, the same list as `GET /api/templates` (see [Templates](#templates-and-web-tools-v02)): the built-ins Assistant, Researcher, Writer & editor, Daily briefing, Translator, Planner and Coding, then the person's own. `triage` is retired: no longer offered, but agents made with it keep running. Models are `demo/demo-1` in Phase 1. |
 | `POST /api/agents` | Body `{name, description?, templateId?, modelId?, instructions?, workspace?, web?}` (`workspace`: see [Workspace tools](#workspace-tools-approvals-and-attachments-phase-4)). `templateId` is a template's ID: the agent starts from it (its kind, instructions, tools, approvals, web tools and first schedule), and the body's own fields win; an empty `instructions` keeps the template's. `201 Agent`. Errors: `400 invalid_name`, `invalid_template`, `invalid_model`, `invalid_workspace_folder`. A `coding` agent made without `workspace.tools` gets `["read", "write", "edit", "bash"]`. |
-| `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?, memory?}` (later phases add more; `memory`: see [Memory](#memory-v02)). Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
+| `PATCH /api/agents/{id}` | Body `{name?, description?, modelId?, instructions?, web?, memory?, budget?}` (later phases add more; `memory`: see [Memory](#memory-v02); `budget`: see [Budgets](#budgets-v03), `null` removes it). Answers `Agent`; fields left out are unchanged (an empty body changes nothing but the revision). A change restarts the agent's runtime if it is awake. |
 | `DELETE /api/agents/{id}` | Stops its runtime and moves its folder to the OS trash (or deletes it). Answers `{ok: true}`. |
 
 ## Threads
@@ -78,7 +79,7 @@ type AgentThread = {
 | `GET /api/agents/{a}/threads` | `AgentThread[]`, newest activity first. From the app's own index: **never starts the runtime.** |
 | `GET /api/agents/{a}/threads/{t}` | The runtime's `ChatView` (`runtime/src/lib/view.ts`), passed through. Starts the runtime if it is asleep. `?limit=&before=` pages. |
 | `GET /api/agents/{a}/threads/{t}/events` | SSE from the runtime, passed through: `view` events (the whole ChatView), or with `?format=delta&v=1` a `snapshot` then changes (`runtime/src/lib/delta.ts`). `Last-Event-ID` is forwarded. Starts the runtime. |
-| `POST /api/agents/{a}/threads/{t}/messages` | Body `{text, requestId, whenBusy?: "followUp" \| "steer", modelId?, thinking?, attachments?}` (`attachments`: see [Attachments](#attachments)), at most 32,000 characters. `modelId`/`thinking`: see [Model per conversation](#model-per-conversation-v02). `202 {submissionId}`. Creates the thread on first use: the app records the thread *before* relaying, and removes the record if the runtime refuses. |
+| `POST /api/agents/{a}/threads/{t}/messages` | Body `{text, requestId, whenBusy?: "followUp" \| "steer", modelId?, thinking?, attachments?}` (`attachments`: see [Attachments](#attachments)), at most 32,000 characters. `modelId`/`thinking`: see [Model per conversation](#model-per-conversation-v02). `202 {submissionId}`. Creates the thread on first use: the app records the thread *before* relaying, and removes the record if the runtime refuses. `402 over_budget` (nothing is recorded or sent) when the agent's budget, or the app's, says stop and is used up: see [Budgets](#budgets-v03). |
 | `POST /api/agents/{a}/threads/{t}/stop` | `202 {ok: true}` |
 | `PATCH /api/agents/{a}/threads/{t}` | Body `{title}` (1–200 chars, one line). Answers `AgentThread`. Stored by the app; doesn't start the runtime. |
 | `DELETE /api/agents/{a}/threads/{t}` | Deletes it in the runtime (starting it if needed) and in the index. Answers `{ok: true}`. |
@@ -101,6 +102,10 @@ type AgentThread = {
 - `event: backup`, `data: {}` when backups change: one made or deleted, the daily setting, a restore recorded or taken
   back, a backup starting or ending. Read `GET /api/backups` again (see
   [Backups and diagnostics](#backups-and-diagnostics-v03))
+- `event: budget`, `data: {level: 0 | 80 | 100, message, status: BudgetStatus}` when a budget reaches 80% or 100% of
+  its limit for the month, once each (see [Budgets](#budgets-v03)); `level: 0` when a budget was changed (set, raised,
+  removed), with `status` naming only the `scope` (and `agentId`): nothing to announce, read `GET /api/budgets` again.
+  The desktop app shows levels 80 and 100 as system notifications, the UI as a toast.
 - `event: resync`, `data: {}` when events may have been missed; the lists should be read again
 - `: keep-alive` every 15 s
 
@@ -145,6 +150,10 @@ type Model = {
   reasoning: boolean; images: boolean;
   inputPrice: number | null;   // USD per million tokens; null: unpriced
   outputPrice: number | null;
+  cacheReadPrice: number | null;   // USD per million cached tokens read; null: counted at the input price
+  cacheWritePrice: number | null;  // USD per million tokens written to the cache; null: the input price
+  priceSource: "list" | "you" | null;  // where the prices came from: the app's price list, or typed in; null: unpriced
+  hasListPrice: boolean;       // the price list has a price for this model ("Use list prices" works)
   enabled: boolean;
   usedBy: number;              // agents on this model
 };
@@ -159,7 +168,7 @@ type Model = {
 | `GET /api/providers/detect` | `Detected[]`: the local presets' servers that answer (each looked for for up to about 1 s; nothing is configured). A server that isn't running is left out. Not cached. |
 | `POST /api/providers/setup` | One-step setup from a preset, for the first run. Body `{preset, apiKey?, models?: string[]}`. Creates the provider from the preset, or reuses the one already set up for it (a new `apiKey` replaces its key), lists its models, and adds `models`. Without `models`, a local preset gets every chat model (at most 20) and a remote one none (pick from `available`, then call again with `models`; the key isn't needed again). The first model added becomes the default model while the default is still `demo/demo-1`. Answers `{provider: Provider, available: Discovered[], defaultModelId}` (`available` marks `added`). Errors: `400 invalid_preset`, `400 invalid_key` (a keyed preset with no key stored or given: "Paste the API key from OpenAI."), `400 invalid_model` (not offered), `502 discovery_failed` with a message for people (wrong key, nothing answering). |
 | `POST /api/providers/{p}/discover` | Lists the provider's models from its API: `{models: [{modelId, name, contextWindow: number \| null, added: boolean}]}`. `502 discovery_failed` with a message for people. |
-| `PUT /api/providers/{p}/models/{modelId...}` | Adds or changes a model. Body `{name?, contextWindow?, maxTokens?, reasoning?, images?, inputPrice?, outputPrice?, enabled?}`. Answers `Model`. |
+| `PUT /api/providers/{p}/models/{modelId...}` | Adds or changes a model. Body `{name?, contextWindow?, maxTokens?, reasoning?, images?, inputPrice?, outputPrice?, cacheReadPrice?, cacheWritePrice?, priceFromList?, enabled?}`. Answers `Model`. Prices: see [Known prices](#known-prices). |
 | `DELETE /api/providers/{p}/models/{modelId...}` | `{ok: true}`, or `409 in_use` as above. |
 | `PUT /api/settings/default-model` | Body `{modelId}`: the model new agents get. Answers `{defaultModelId}`. |
 
@@ -167,19 +176,104 @@ type Model = {
 `{id, name, provider, providerName}`, with `defaultModelId`. An agent whose model was removed or turned off keeps it in
 `agent.yaml`; it fails to start (`status: "error"`, `lastError` says which model) until it is given another.
 
+### Known prices
+
+A model added without prices gets the **list prices** of well-known models (OpenAI, Anthropic, Google, Mistral,
+DeepSeek) when the price list (`internal/models/prices.go`) knows it, and `priceSource` is `"list"`. Prices set by hand
+are `"you"` (so are any set before v0.3); a model with no prices has `priceSource: null`. Details:
+
+- The model ID is matched flexibly: a provider prefix (`anthropic/claude-sonnet-4.5`, `openrouter/openai/gpt-5`,
+  `models/gemini-2.5-pro`), a dated suffix (`claude-sonnet-4-5-20250929`, `gpt-4.1-2025-04-14`), dots or dashes in the
+  version (`gpt-5.4`, `gpt-5-4`), any case, and Bedrock's vendor and version
+  (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`). Anything else that isn't in the list exactly is unpriced: no guessing
+  that `gpt-5.4-turbo` is `gpt-5.4`. A dated model with a price of its own keeps it (`gpt-4o-2024-05-13`).
+- Only flat, generally available prices are listed. Prices that are promotional, scheduled to change, or depend on the
+  hour are left out. Where a service has a short-prompt and a long-prompt price (OpenAI over 272K tokens, Gemini Pro over
+  200K) the short-prompt price is used. DeepSeek's are the peak-hour prices. `PriceListChecked` in `prices.go` says when
+  the list was last checked against the services' pages.
+- A model on a local server (the `ollama` and `lm-studio` providers) never gets list prices: it costs nothing.
+- Creating a model with `inputPrice`, `outputPrice`, `cacheReadPrice` and `cacheWritePrice` all absent or `null` gets the
+  list prices when there are some. Setting any price on an existing model makes the source `"you"`, unless the values sent
+  are the ones it has (the edit form sends them all); setting both `inputPrice` and `outputPrice` to `null` clears all
+  prices (`priceSource: null`). `priceFromList: true` sets all four prices from the list: `400 no_list_price` when the
+  model isn't in it (and for local providers).
+- `cacheReadPrice` and `cacheWritePrice` (≥ 0, optional): tokens a model read from, or wrote to, its cache cost these;
+  without them, cached tokens are counted at the input price (an estimate that errs high).
+
 ### Usage
 
-`GET /api/me/usage?days=7|30|90` (default 30):
+`GET /api/me/usage?days=7|30|90` (default 30) or `?month=YYYY-MM`, with optional `&agent={agentId}` and
+`&model={provider/modelId}`:
 
 ```ts
 type UsageTotals = { requests: number; inputTokens: number; outputTokens: number; cacheReadTokens: number;
   cacheWriteTokens: number; costUsd: number; unpricedRequests: number };   // unpricedRequests: not in costUsd
 type UsageReport = { from: string; to: string; days: number;               // dates, YYYY-MM-DD, local time
+  month?: string;                                                          // "2026-10", for a month report
   total: UsageTotals;
   agents: (UsageTotals & { agentId: string; name: string })[];             // deleted agents keep their last name
   models: (UsageTotals & { modelId: string; name: string })[];
-  byDay: (UsageTotals & { day: string })[] };                              // every day of the range, zeros included
+  byDay: (UsageTotals & { day: string })[];                                // every day of the range, zeros included
+  options: { agents: { agentId: string; name: string }[];                  // everything with usage in the period,
+             models: { modelId: string; name: string }[] };                // whatever is filtered: for the filters
+  budget: { app: BudgetStatus | null; agent: BudgetStatus | null } | null };  // null: no budget applies
 ```
+
+- `month` is a whole calendar month: `from` its first day, `to` its last (also when it is this month, so later days are
+  zeros), `days` its length. It wins over `days`. A malformed month is `400 invalid_month`.
+- `agent` and `model` narrow `total`, `agents`, `models` and `byDay` (both: only where they met). An unknown ID gives an
+  empty report. `options` is never narrowed.
+- `budget` is for the month shown (this month unless `month` is given): `app` is the app-wide budget, `agent` the
+  filtered agent's, when each has one. It is the whole month's spending, whatever else is filtered.
+- Cost: input and output at their prices, cache reads and writes at their prices (or the input price when a model has
+  none). Requests to models without input and output prices are in `unpricedRequests`, not in `costUsd`.
+
+### Budgets (v0.3)
+
+A monthly limit in US dollars on what an agent may spend on its model, and another for every agent together. A budget
+counts this **calendar month** (this computer's time zone) of usage, at the models' prices, **priced models only**:
+requests to unpriced models are counted apart (`unpricedRequests`) and never add to the spending, so the real cost may be
+more. Usage is recorded as each model request ends, so a reply already running can overshoot the limit.
+
+```ts
+type Budget = { monthlyUsd: number;                    // $0.01 to $1,000,000, whole cents
+                onExceed: "stop" | "warn" };           // default "stop"
+type BudgetStatus = { scope: "app" | "agent"; agentId?: string; name: string;   // the agent's name, or "Pi Local"
+  month: string; monthName: string;                    // "2026-10", "October"
+  monthlyUsd: number; onExceed: "stop" | "warn";
+  spentUsd: number; unpricedRequests: number;
+  percent: number;                                     // spentUsd / monthlyUsd × 100
+  state: "ok" | "near" | "over";                       // near: 80% or more; over: 100% or more
+  blocked: boolean };                                  // over, and onExceed is "stop": new work is refused
+```
+
+| Route | Answer |
+|---|---|
+| `PATCH /api/agents/{id}` `{budget}` | `{monthlyUsd, onExceed?}` sets the agent's budget (it is `budget` in `agent.yaml`: `budget: {monthlyUsd: 20, onExceed: stop}`); `null` removes it. `POST /api/agents` takes it too. `400 invalid_budget`. Changing it restarts the agent if it is awake, like any other change. |
+| `GET /api/budgets` | `{app: BudgetStatus \| null, agents: BudgetStatus[]}`: this month's budgets, the agents' being those that have one. |
+| `GET /api/settings/budget` | `{budget: Budget \| null}`: the app-wide budget. |
+| `PUT /api/settings/budget` | Body `{budget: Budget \| null}` (`null` removes it; leaving `budget` out is `400 invalid_budget`). Answers as GET. `400 invalid_budget`. |
+
+- **80% and 100%.** The first time a budget's spending reaches 80% and 100% in a month, the app sends a `budget` event
+  (see [Live events](#live-events)) and the desktop app a system notification: "Hardac used 80% of its $20 budget for
+  October." and "Hardac reached its $20 budget for October. It is stopped until you raise it." (`warn`: "…It keeps
+  running."; the app-wide one: "Pi Local reached its $50 budget for October. Agents are stopped until you raise it.").
+  Each level is told once per month and limit: changing the limit starts again. A single request that jumps past both
+  levels sends only the 100% one.
+- **`stop`.** At 100% an agent whose budget says stop (or any agent, when the app's does) refuses new work with
+  **`402 over_budget`** (for a message, with `details.budget: BudgetStatus`) and a message naming the budget:
+  "Hardac reached its $20 budget for October. Raise it in its settings." (the app's: "Pi Local reached its $50 budget
+  for October. Raise it in Settings → Usage."). It covers:
+  - `POST …/threads/{t}/messages` (nothing is recorded: a refused first message leaves no conversation);
+  - `POST /api/schedules/{id}/run` ("Run now"). A schedule that comes due is not run: its run is recorded as `failed`
+    with that message (and the usual `schedule_run` event), no conversation is made, and it does **not** count toward
+    pausing the schedule: it runs again once the budget allows;
+  - an `ask_agent` to the agent (the gateway's `POST /a2a/asks` answers `402 over_budget` with the message, which the
+    asking agent's model is told). An ask already started goes on.
+  Work already running, approvals decided and questions answered are not stopped.
+- **`warn`.** Nothing is refused. The UI shows a banner above the conversation (80%, and over the limit), and the Usage
+  page the meter.
+- The next month, or a higher limit, or removing the budget, lifts the stop at once.
 
 ## Agent manager (Phase 3)
 
@@ -508,7 +602,7 @@ type Run = { id: string; scheduleId: string; threadId: string; firedAt: number;
 | `POST /api/agents/{a}/schedules` | Body `{name?, at? (ISO 8601; without an offset it is in timezone), cron?, timezone?, message, threadMode?, threadId?, missedPolicy?}`. `201 Schedule`. Errors: `invalid_when`, `invalid_time`, `invalid_cron`, `invalid_timezone`, `invalid_message`, `invalid_thread_mode`. |
 | `PATCH /api/schedules/{id}` | The same fields and `paused`. Resuming resets the failure count. `agentId` moves the schedule to another agent (`invalid_agent` for one that doesn't exist): its runs then start new conversations there, so `threadMode` becomes `new` (a `this` is ignored). |
 | `DELETE /api/schedules/{id}` | `{ok: true}` |
-| `POST /api/schedules/{id}/run` | Runs it now (its next time doesn't change): `Run`. |
+| `POST /api/schedules/{id}/run` | Runs it now (its next time doesn't change): `Run`. `402 over_budget` when the agent's budget, or the app's, is used up and says stop (see [Budgets](#budgets-v03)). |
 | `GET /api/schedules/{id}/runs?limit=` | `Run[]`, newest first. |
 
 `Agent` gains `schedules: {agentMade: boolean}` (`PATCH` it). Live events: `event: schedule`

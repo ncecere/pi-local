@@ -33,6 +33,7 @@ import (
 	"github.com/ncecere/pi-local/internal/approvals"
 	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/backup"
+	"github.com/ncecere/pi-local/internal/budget"
 	"github.com/ncecere/pi-local/internal/diagnostics"
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
@@ -78,6 +79,7 @@ type App struct {
 	API        *api.API
 	Catalog    *models.Catalog
 	Usage      *usage.Store
+	Budget     *budget.Service
 	Teams      *teams.Store
 	Asks       *asks.Broker
 	Approvals  *approvals.Store
@@ -199,6 +201,25 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.Catalog = models.New(db, cfg.Secrets)
 	a.Usage = usage.New(db)
+	a.Budget = budget.New(db, a.Usage)
+	a.Budget.Prices = func(model string) (usage.Price, bool) { return a.Catalog.UsagePrice(context.Background(), model) }
+	a.Budget.Agent = func(id string) (string, *agents.Budget, bool) {
+		ag, err := a.Agents.Get(id)
+		if err != nil {
+			return "", nil, false
+		}
+		return ag.Config.Name, ag.Config.Budget, true
+	}
+	a.Budget.All = func() []budget.AgentBudget {
+		var out []budget.AgentBudget
+		for _, ag := range a.Agents.List() {
+			if ag.Config.Budget != nil {
+				out = append(out, budget.AgentBudget{ID: ag.ID, Name: ag.Config.Name, Budget: *ag.Config.Budget})
+			}
+		}
+		return out
+	}
+	a.Budget.Publish = func(ev budget.Event) { a.Hub.Publish("budget", ev) }
 	a.Agents.ModelAvailable = func(m agents.ModelRef) bool { return a.Catalog.Available(context.Background(), m.String()) }
 	a.Catalog.UsedBy = func(model string) []models.AgentRef {
 		provider, id, _ := models.SplitModelID(model)
@@ -287,7 +308,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		StopGrace:    cfg.StopGrace,
 	})
 	a.Asks = asks.New(db, a.Sup, a.Agents, permissions{a}, a.Threads)
+	a.Asks.Budget = a.Budget.Check
 	a.Schedules = schedules.New(db, a.Sup, a.Agents, a.Threads)
+	a.Schedules.Budget = a.Budget.Check
 	a.Schedules.OnChange = func(id string, sc *schedules.Schedule) {
 		if sc == nil {
 			a.Hub.Publish("schedule", map[string]any{"scheduleId": id, "deleted": true})
@@ -311,7 +334,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Budget: a.Budget, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web, Templates: a.Templates, Memory: a.Memory, MemoryDefaults: basicsDefaults, Judge: a.Judge, SecretsInKeychain: secrets.InKeychain(cfg.Secrets)}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
@@ -755,7 +778,12 @@ func (a *App) RecordUsage(ctx context.Context, agentID, model string, c usage.Co
 	if ag, err := a.Agents.Get(agentID); err == nil {
 		name = ag.Config.Name
 	}
-	return a.Usage.Record(ctx, agentID, name, model, a.Catalog.ModelName(ctx, model), c)
+	if err := a.Usage.Record(ctx, agentID, name, model, a.Catalog.ModelName(ctx, model), c); err != nil {
+		return err
+	}
+	// The report may have brought a budget to 80% or 100%.
+	a.Budget.Evaluate(ctx, agentID)
+	return nil
 }
 
 // refuse stops a runtime older than the one that last wrote an agent's storage from opening it: pi-durable storage

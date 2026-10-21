@@ -141,7 +141,9 @@ function modelFacts(model: Model): string {
   if (model.reasoning) facts.push('reasoning');
   if (model.images) facts.push('images');
   if (model.inputPrice !== null || model.outputPrice !== null)
-    facts.push(`${formatPrice(model.inputPrice)} in / ${formatPrice(model.outputPrice)} out per M`);
+    facts.push(
+      `${formatPrice(model.inputPrice)} in / ${formatPrice(model.outputPrice)} out per M${model.priceSource === 'list' ? ' (list)' : ''}`,
+    );
   return facts.join(' · ');
 }
 

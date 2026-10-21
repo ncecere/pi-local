@@ -18,8 +18,9 @@ import {
   useSetBackupAuto,
 } from '~/hooks/use-backups';
 import { useCurrentUser } from '~/hooks/use-session';
+import { formatDayTime } from '~/lib/dates';
 import { usePageTitle } from '~/lib/document-title';
-import { formatDateTime, formatRelativeTime } from '~/lib/utils';
+import { formatRelativeTime } from '~/lib/utils';
 
 const WEEK = 7 * 24 * 3_600_000;
 
@@ -88,7 +89,7 @@ function BackupRow({
     <li className="flex flex-col gap-3 rounded-xl border border-[var(--border-subtle)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="text-sm font-medium text-[var(--text-primary)]">
-          {formatDateTime(new Date(backup.createdAt))}
+          {formatDayTime(new Date(backup.createdAt))}
           <span className="ml-2 rounded-md bg-[var(--bg-control)] px-1.5 py-0.5 text-xs font-normal text-[var(--text-secondary)]">
             {REASON_LABEL[backup.reason]}
           </span>

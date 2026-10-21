@@ -25,6 +25,50 @@ import { ErrorNotice, FIELD, Field, Optional, RequestError } from './fields';
 
 const CHECKBOX = 'size-4 accent-[var(--accent)]';
 
+/** Where a model's prices came from, and a way back to the list's. */
+export function PriceSource({
+  isNew,
+  source,
+  hasListPrice,
+  pending,
+  onUseList,
+}: {
+  isNew: boolean;
+  source: 'list' | 'you' | null;
+  hasListPrice: boolean;
+  pending: boolean;
+  onUseList: () => void;
+}) {
+  if (isNew)
+    return (
+      <p className="-mt-2 text-xs text-[var(--text-muted)]">
+        Leave the prices empty and a well-known model gets its list prices.
+      </p>
+    );
+  return (
+    <p className="-mt-2 text-xs text-[var(--text-muted)]" data-price-source={source ?? 'none'}>
+      {source === 'list'
+        ? 'These are the list prices.'
+        : source === 'you'
+          ? 'You set these prices.'
+          : 'No prices: its usage is counted, but not in dollars.'}
+      {hasListPrice && source !== 'list' && (
+        <>
+          {' '}
+          <button
+            type="button"
+            className="text-[var(--accent-bright)] underline-offset-4 hover:underline disabled:opacity-50"
+            disabled={pending}
+            onClick={onUseList}
+          >
+            Use list prices
+          </button>
+        </>
+      )}
+    </p>
+  );
+}
+
 /**
  * Adding a model by its ID, or changing one: its name, limits, what it can
  * do, and its prices (for the usage page's cost estimate).
@@ -49,6 +93,10 @@ export function ModelDialog({
   const [images, setImages] = useState(model?.images ?? false);
   const [inputPrice, setInputPrice] = useState(model?.inputPrice?.toString() ?? '');
   const [outputPrice, setOutputPrice] = useState(model?.outputPrice?.toString() ?? '');
+  const [cacheReadPrice, setCacheReadPrice] = useState(model?.cacheReadPrice?.toString() ?? '');
+  const [cacheWritePrice, setCacheWritePrice] = useState(model?.cacheWritePrice?.toString() ?? '');
+  // Where the prices came from: the list's, or the person's; changes as they are saved here.
+  const [priceSource, setPriceSource] = useState(model?.priceSource ?? null);
   const [enabled, setEnabled] = useState(model?.enabled ?? true);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -63,9 +111,16 @@ export function ModelDialog({
     const output = parseTokens(maxTokens);
     const input$ = parsePrice(inputPrice);
     const output$ = parsePrice(outputPrice);
+    const cacheRead$ = parsePrice(cacheReadPrice);
+    const cacheWrite$ = parsePrice(cacheWritePrice);
     if (context === undefined) return setProblem('The context window must be a number of tokens.');
     if (output === undefined) return setProblem('The output limit must be a number of tokens.');
-    if (input$ === undefined || output$ === undefined)
+    if (
+      input$ === undefined ||
+      output$ === undefined ||
+      cacheRead$ === undefined ||
+      cacheWrite$ === undefined
+    )
       return setProblem('A price must be a number of dollars, or empty.');
     setProblem(null);
     put.mutate(
@@ -79,6 +134,8 @@ export function ModelDialog({
         images,
         inputPrice: input$,
         outputPrice: output$,
+        cacheReadPrice: cacheRead$,
+        cacheWritePrice: cacheWrite$,
         enabled,
       },
       {
@@ -196,7 +253,65 @@ export function ModelDialog({
                 className={FIELD}
               />
             </Field>
+            <Field
+              id={`${id}-cache-read-price`}
+              label={
+                <>
+                  Cache read price <Optional />
+                </>
+              }
+              hint="Cached input. Empty: the input price."
+            >
+              <input
+                id={`${id}-cache-read-price`}
+                inputMode="decimal"
+                value={cacheReadPrice}
+                onChange={(event) => setCacheReadPrice(event.target.value)}
+                aria-describedby={`${id}-cache-read-price-hint`}
+                className={FIELD}
+              />
+            </Field>
+            <Field
+              id={`${id}-cache-write-price`}
+              label={
+                <>
+                  Cache write price <Optional />
+                </>
+              }
+              hint="Writing to the cache. Empty: the input price."
+            >
+              <input
+                id={`${id}-cache-write-price`}
+                inputMode="decimal"
+                value={cacheWritePrice}
+                onChange={(event) => setCacheWritePrice(event.target.value)}
+                aria-describedby={`${id}-cache-write-price-hint`}
+                className={FIELD}
+              />
+            </Field>
           </div>
+          <PriceSource
+            isNew={!model}
+            source={priceSource}
+            hasListPrice={model?.hasListPrice ?? false}
+            pending={put.isPending}
+            onUseList={() =>
+              model &&
+              put.mutate(
+                { provider: provider.id, modelId: model.modelId, priceFromList: true },
+                {
+                  onSuccess: (saved) => {
+                    setInputPrice(saved.inputPrice?.toString() ?? '');
+                    setOutputPrice(saved.outputPrice?.toString() ?? '');
+                    setCacheReadPrice(saved.cacheReadPrice?.toString() ?? '');
+                    setCacheWritePrice(saved.cacheWritePrice?.toString() ?? '');
+                    setPriceSource(saved.priceSource ?? null);
+                    toast('List prices set.');
+                  },
+                },
+              )
+            }
+          />
           <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
             <legend className="mb-1.5 text-sm font-medium">It can</legend>
             <label className="flex items-center gap-2 text-sm">

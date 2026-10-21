@@ -13,9 +13,9 @@ import {
 } from '~/components/ui/dialog';
 import { Spinner } from '~/components/ui/spinner';
 import { useDeleteBackup, useRestoreBackup } from '~/hooks/use-backups';
-import { formatDateTime } from '~/lib/utils';
+import { formatDayTime } from '~/lib/dates';
 
-const when = (backup: Backup) => formatDateTime(new Date(backup.createdAt));
+const when = (backup: Backup) => formatDayTime(new Date(backup.createdAt));
 
 /**
  * Restore asks first: it replaces everything the app holds (agents, conversations, settings) with what the backup

@@ -93,6 +93,8 @@ type Broker struct {
 	agents   Agents
 	perms    Permissions
 	index    *threads.Index
+	// Budget, when set, refuses an ask to an agent that is over a budget that says stop (its error is passed on as is).
+	Budget func(ctx context.Context, agentID string) error
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -207,6 +209,11 @@ func (b *Broker) Start(ctx context.Context, caller string, req Request) (*Starte
 	}
 	if !b.perms.MayCall(ctx, caller, target) {
 		return nil, refuse("You may not ask %s.", b.agents.NameOf(target))
+	}
+	if b.Budget != nil {
+		if err := b.Budget(ctx, target); err != nil {
+			return nil, err
+		}
 	}
 	// The chain of asks that led here: the caller's own (when it was asked in this thread), plus the caller.
 	var chain []string
