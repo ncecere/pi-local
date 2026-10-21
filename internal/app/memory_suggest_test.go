@@ -73,9 +73,11 @@ func TestSuggestionsAtTheEndOfAConversation(t *testing.T) {
 	}
 	h.sendAndWait(agent, "t1", "Also, my dog Rex needs a walk at noon", "r2")
 	var got []suggestedFact
-	eventually(t, 30*time.Second, "the suggestions", func() bool {
+	eventually(t, 30*time.Second, "all three suggestions", func() bool {
 		got = suggestedFacts(t, h)
-		return len(got) > 0
+		// Suggestions are persisted one at a time; observing the first isn't
+		// evidence that the extraction's complete expected set has been saved.
+		return len(got) == 3
 	})
 	// At most three; each is the agent's inference from this conversation.
 	if len(got) != 3 {
