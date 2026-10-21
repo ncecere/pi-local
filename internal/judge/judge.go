@@ -546,8 +546,9 @@ const maxPassageChars = 1500
 // `knowledge` use): a yes/no per passage, in one request, and the positions of the best `keep` of them, most relevant
 // first. Passages judged not relevant are left out, unless none is relevant: then the first `keep` in the order given
 // stand (the index's own ranking), so a judgment never empties an answer. ErrOff when the use is off; any other error
-// means no judgment, and the caller keeps the index's order.
-func (s *Service) RankPassages(ctx context.Context, question string, passages []string, keep int) ([]int, error) {
+// means no judgment, and the caller keeps the index's order. An optional recorder counts the attempted request,
+// including failures, and any reported tokens.
+func (s *Service) RankPassages(ctx context.Context, question string, passages []string, keep int, record ...UsageRecorder) ([]int, error) {
 	if !s.On("knowledge") {
 		return nil, ErrOff
 	}
@@ -567,7 +568,11 @@ func (s *Service) RankPassages(ctx context.Context, question string, passages []
 			Instructions: "Does this passage from the person's documents help answer `question`, by containing information that answers it or part of it? Passage:\n" + p,
 		}
 	}
-	answers, _, err := s.Ask(ctx, map[string]string{"question": question}, questions)
+	var recorder UsageRecorder
+	if len(record) > 0 {
+		recorder = record[0]
+	}
+	answers, _, err := s.ask(ctx, map[string]string{"question": question}, questions, recorder)
 	if err != nil {
 		return nil, err
 	}

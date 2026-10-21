@@ -14,6 +14,7 @@ import (
 
 	"github.com/ncecere/pi-local/internal/judge"
 	"github.com/ncecere/pi-local/internal/knowledge"
+	"github.com/ncecere/pi-local/internal/usage"
 )
 
 // knowledgeFolders are every agent's knowledge folders, together: what the index keeps and watches.
@@ -104,13 +105,19 @@ func (g knowledgeGateway) Search(ctx context.Context, agentID, query string, lim
 		return nil, err
 	}
 	reranked := false
-	if len(hits) > 0 && g.a.Judge.On("knowledge") {
+	if len(hits) > 0 && g.a.Judge != nil && g.a.Judge.On("knowledge") && g.a.budgetCheck("knowledge judgment")(ctx, agentID) == nil {
 		texts := make([]string, len(hits))
 		for i, h := range hits {
 			texts[i] = h.File + "\n" + h.Text
 		}
 		jctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		order, jerr := g.a.Judge.RankPassages(jctx, query, texts, limit)
+		// Judgments have no configured prices: count attempts and available tokens as unpriced usage.
+		// A stopped budget skips only the judgment above, never the local search.
+		order, jerr := g.a.Judge.RankPassages(jctx, query, texts, limit, func(model string, input, output int64) {
+			if recordErr := g.a.RecordUsage(context.WithoutCancel(ctx), agentID, "judgments/"+model, usage.Counts{Requests: 1, Input: input, Output: output}); recordErr != nil {
+				slog.Warn("recording knowledge judgment usage", "err", recordErr)
+			}
+		})
 		cancel()
 		if jerr == nil {
 			picked := make([]knowledge.Hit, 0, len(order))
