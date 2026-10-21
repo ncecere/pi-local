@@ -33,6 +33,7 @@ interface Tab {
     | '/settings/conversations'
     | '/settings/usage'
     | '/settings/activity'
+    | '/settings/prompts'
     | '/settings/backups';
   label: string;
   exact: boolean;
@@ -52,6 +53,7 @@ const ALL_TABS: Tab[] = [
   { to: '/settings/conversations', label: 'Conversations', exact: false },
   { to: '/settings/usage', label: 'Usage', exact: false },
   { to: '/settings/activity', label: 'Activity', exact: false },
+  { to: '/settings/prompts', label: 'Prompts', exact: false },
   { to: '/settings/backups', label: 'Backups', exact: false },
 ];
 

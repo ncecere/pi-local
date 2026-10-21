@@ -86,6 +86,9 @@ func newFixture(t *testing.T) *fixture {
 	db.Exec(`INSERT INTO settings (key, value) VALUES ('default_model', 'demo/demo-1')`)
 
 	writeFile(t, filepath.Join(f.dir, "templates", "mine.yaml"), "id: mine\n")
+	writeFile(t, filepath.Join(f.dir, "skills", "pdf-tools", "SKILL.md"), "---\nname: pdf-tools\ndescription: d\n---\n")
+	writeFile(t, filepath.Join(f.dir, "prompts", "summarize.md"), "---\ntitle: Summarize\n---\nSummarize {{x}}\n")
+	writeFile(t, filepath.Join(agentDirOf(f.dir, agentA), "skills", "mine", "SKILL.md"), "---\nname: mine\ndescription: d\n---\n")
 	for id, name := range map[string]string{agentA: "Ann's helper", agentB: "Bob"} {
 		root := filepath.Join(f.dir, "agents", id)
 		writeFile(t, filepath.Join(root, "agent.yaml"), "name: "+name+"\n")
@@ -140,6 +143,8 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
+func agentDirOf(dir, id string) string { return filepath.Join(dir, "agents", id) }
+
 func zipNames(t *testing.T, path string) []string {
 	t.Helper()
 	zr, err := zip.OpenReader(path)
@@ -165,13 +170,13 @@ func TestABackupHoldsTheDataAndNoSecrets(t *testing.T) {
 		t.Fatalf("%+v", info)
 	}
 	want := []string{
-		"agents/" + agentA + "/agent.yaml", "agents/" + agentA + "/memory.json", "agents/" + agentA + "/state.sqlite",
+		"agents/" + agentA + "/agent.yaml", "agents/" + agentA + "/memory.json", "agents/" + agentA + "/skills/", "agents/" + agentA + "/skills/mine/", "agents/" + agentA + "/skills/mine/SKILL.md", "agents/" + agentA + "/state.sqlite",
 		"agents/" + agentA + "/tmp/", "agents/" + agentA + "/tmp/attachments/", "agents/" + agentA + "/tmp/attachments/upload.pdf",
 		"agents/" + agentA + "/workspace/", "agents/" + agentA + "/workspace/notes/", "agents/" + agentA + "/workspace/notes/todo.md",
 		"agents/" + agentB + "/agent.yaml", "agents/" + agentB + "/memory.json", "agents/" + agentB + "/state.sqlite",
 		"agents/" + agentB + "/tmp/", "agents/" + agentB + "/tmp/attachments/", "agents/" + agentB + "/tmp/attachments/upload.pdf",
 		"agents/" + agentB + "/workspace/", "agents/" + agentB + "/workspace/notes/", "agents/" + agentB + "/workspace/notes/todo.md",
-		"app.db", "manifest.json", "templates/mine.yaml",
+		"app.db", "manifest.json", "prompts/summarize.md", "skills/pdf-tools/", "skills/pdf-tools/SKILL.md", "templates/mine.yaml",
 	}
 	if got := zipNames(t, info.Path); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("the backup holds:\n%s\nwanted:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -358,6 +363,9 @@ func TestRestoreReplacesTheDataAndKeepsTheOldAside(t *testing.T) {
 	writeFile(t, filepath.Join(f.dir, "agents", agentA, "workspace", "notes", "todo.md"), "changed\n")
 	writeFile(t, filepath.Join(f.dir, "agents", agentA, "workspace", "new.txt"), "made after the backup")
 	writeFile(t, filepath.Join(f.dir, "templates", "later.yaml"), "id: later\n")
+	writeFile(t, filepath.Join(f.dir, "skills", "later", "SKILL.md"), "made after the backup")
+	writeFile(t, filepath.Join(f.dir, "prompts", "later.md"), "made after the backup")
+	os.Remove(filepath.Join(f.dir, "prompts", "summarize.md"))
 
 	pending, err := f.svc.PrepareRestore(info.ID)
 	if err != nil || pending.Phase != "pending" {
@@ -381,7 +389,17 @@ func TestRestoreReplacesTheDataAndKeepsTheOldAside(t *testing.T) {
 	if got := readFile(t, filepath.Join(f.dir, "agents", agentA, "workspace", "notes", "todo.md")); got != "buy milk\n" {
 		t.Fatalf("the workspace after the restore: %q", got)
 	}
-	for _, gone := range []string{filepath.Join(f.dir, "agents", agentA, "workspace", "new.txt"), filepath.Join(f.dir, "templates", "later.yaml")} {
+	// The shared skills and prompts come back as they were.
+	if got := readFile(t, filepath.Join(f.dir, "prompts", "summarize.md")); !strings.Contains(got, "Summarize {{x}}") {
+		t.Fatalf("the prompts after the restore: %q", got)
+	}
+	if got := readFile(t, filepath.Join(f.dir, "skills", "pdf-tools", "SKILL.md")); !strings.Contains(got, "pdf-tools") {
+		t.Fatalf("the skills after the restore: %q", got)
+	}
+	if got := readFile(t, filepath.Join(f.dir, "agents", agentA, "skills", "mine", "SKILL.md")); !strings.Contains(got, "mine") {
+		t.Fatalf("an agent's own skill after the restore: %q", got)
+	}
+	for _, gone := range []string{filepath.Join(f.dir, "agents", agentA, "workspace", "new.txt"), filepath.Join(f.dir, "templates", "later.yaml"), filepath.Join(f.dir, "skills", "later"), filepath.Join(f.dir, "prompts", "later.md")} {
 		if _, err := os.Stat(gone); err == nil {
 			t.Fatalf("%s survived the restore", gone)
 		}

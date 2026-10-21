@@ -35,8 +35,10 @@ import (
 	"github.com/ncecere/pi-local/internal/mcp"
 	"github.com/ncecere/pi-local/internal/memory"
 	"github.com/ncecere/pi-local/internal/models"
+	"github.com/ncecere/pi-local/internal/prompts"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/search"
+	"github.com/ncecere/pi-local/internal/skills"
 	"github.com/ncecere/pi-local/internal/supervisor"
 	"github.com/ncecere/pi-local/internal/teams"
 	"github.com/ncecere/pi-local/internal/templates"
@@ -77,6 +79,12 @@ type API struct {
 	Desktop   Desktop
 	Updater   *update.Updater
 	Templates *templates.Store
+	// Skills: the shared skills (<data>/skills); an agent's own are in its folder. SkillsChanged says an agent's own
+	// skills changed (the app restarts its runtime if it needs to).
+	Skills        *skills.Store
+	SkillsChanged func(agentID string)
+	// Prompts: the prompt library (<data>/prompts).
+	Prompts *prompts.Store
 	// Memory: what agents know about the person, and their own notes; MemoryDefaults fills the About me card.
 	Memory *memory.Store
 	// Judge: optional fast judgments (agent routing, tool preselection).
@@ -153,6 +161,8 @@ func (a *API) Handler() http.Handler {
 	a.toolRoutes(m)
 	a.mcpRoutes(m)
 	a.templateRoutes(m)
+	a.skillRoutes(m)
+	a.promptRoutes(m)
 	a.memoryRoutes(m)
 	a.judgeRoutes(m)
 	a.chatSettingsRoutes(m)
@@ -407,6 +417,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"mcp":              mcpChoices(ag.Config.MCP),
 		"schedules":        ag.Config.Schedules,
 		"budget":           ag.Config.Budget,
+		"skills":           nonNil(ag.Config.Skills),
 		"security":         map[string]any{"scrubSecrets": ag.Config.Security.Scrub()},
 	}
 }
@@ -516,6 +527,8 @@ type agentInput struct {
 	Schedules    *agents.AgentSchedules `json:"schedules"`
 	Web          *agents.WebTools       `json:"web"`
 	Memory       *agents.MemorySettings `json:"memory"`
+	// Skills: the shared skills it uses, by name.
+	Skills *[]string `json:"skills"`
 	// Security: {scrubSecrets} (true when left out).
 	Security *agents.Security `json:"security"`
 	// Budget: {monthlyUsd, onExceed} sets the agent's monthly budget, null removes it, absent leaves it.
@@ -607,6 +620,9 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.Security != nil {
 		c.Security = *in.Security
+	}
+	if in.Skills != nil {
+		c.Skills = *in.Skills
 	}
 	if in.MCP != nil {
 		c.MCP = *in.MCP

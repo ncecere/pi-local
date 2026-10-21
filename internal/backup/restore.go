@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// Restoring replaces the data (app.db, agents/, templates/) with a backup's. The app holds app.db open and runs the
+// Restoring replaces the data (app.db, agents/, templates/, skills/, prompts/) with a backup's. The app holds app.db open and runs the
 // agents, so it happens at the next start, before app.db is opened:
 //
 //  1. PrepareRestore (in the running app) checks the backup and writes <data>/restore-pending.json.
@@ -36,7 +36,7 @@ const (
 )
 
 // restoredItems are what a restore replaces, in the data folder.
-var restoredItems = []string{"app.db", "agents", "templates"}
+var restoredItems = []string{"app.db", "agents", "templates", "skills", "prompts"}
 
 // Pending is a restore waiting for the next start.
 type Pending struct {
@@ -238,7 +238,7 @@ func allowed(name string) (string, bool) {
 	switch parts[0] {
 	case "app.db":
 		return clean, len(parts) == 1
-	case "templates":
+	case "templates", "skills", "prompts":
 		return clean, true
 	case "agents":
 		if len(parts) < 2 || !validAgentID(parts[1]) {
@@ -336,7 +336,7 @@ func checkStaged(dir string) error {
 	if err != nil || verdict != "ok" {
 		return errors.New("its app.db is damaged")
 	}
-	for _, sub := range []string{"agents", "templates"} {
+	for _, sub := range []string{"agents", "templates", "skills", "prompts"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
 			return err
 		}

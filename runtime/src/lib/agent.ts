@@ -34,6 +34,7 @@ import { imageProcessor } from "./images.ts";
 import type { ChatAttachment } from "./view.ts";
 import { ModelChoices } from "./model-choices.ts";
 import { personExtension, TodoDoc } from "./person.ts";
+import { parseSkillSources, skillsExtension } from "./skills.ts";
 import { parseWebTools, webExtension } from "./web.ts";
 import { createWorkspaceEnv, parseSandboxEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
 
@@ -185,12 +186,17 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 		config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
 			? webExtension({ gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL, key: config.modelEnv.PLATFORM_KEY, tools: parseWebTools(config.modelEnv.WEB_TOOLS) })
 			: undefined;
+	// Skills (SKILL_DIRS): the list in the prompt and the `skill` tool that reads one (skills.ts). The app sets it only for
+	// an agent that has skills; their files are read from disk on each use.
+	const skillSources = parseSkillSources(config.modelEnv.SKILL_DIRS);
+	const skills = skillSources.length > 0 ? skillsExtension({ sources: skillSources }) : undefined;
 	// Asking other agents (AGENT_CALLS, with the gateway): the app decides who may be asked (agent-calls.ts).
 	const calling = config.modelEnv.AGENT_CALLS === "true" && !!config.modelEnv.PLATFORM_GATEWAY_URL && !!config.modelEnv.PLATFORM_KEY;
 	const extensions = [
 		...resolveExtensions(definition, context),
 		...(workspace ? [workspace] : []),
 		...(web ? [web] : []),
+		...(skills ? [skills] : []),
 		...(memory ? [memory] : []),
 		...(person ? [person] : []),
 		...(calling

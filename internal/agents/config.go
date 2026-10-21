@@ -108,6 +108,8 @@ type Config struct {
 	Memory MemorySettings `yaml:"memory,omitempty"`
 	// Budget: a monthly limit on what the agent may spend on its model (nil: none).
 	Budget *Budget `yaml:"budget,omitempty"`
+	// Skills: the shared skills (<data>/skills/<name>) it uses, by name. Its own skills (<agent folder>/skills/) are always on.
+	Skills []string `yaml:"skills,omitempty"`
 	// Security: whether what its tools return is cleaned of secrets before the model sees it and before it is saved.
 	Security Security `yaml:"security,omitempty"`
 }
@@ -547,6 +549,9 @@ func (c *Config) Validate() error {
 	if t := c.Approvals.TimeoutSeconds; t != 0 && (t < 60 || t > 30*24*60*60) {
 		return invalid("invalid_approval_timeout", "A request waits from 1 minute to 30 days.")
 	}
+	if err := c.checkSkills(); err != nil {
+		return err
+	}
 	seenServer := map[string]bool{}
 	if len(c.MCP) > 50 {
 		return invalid("invalid_mcp", "An agent uses at most 50 MCP servers.")
@@ -566,6 +571,31 @@ func (c *Config) Validate() error {
 	if c.Model.Provider == "" || c.Model.ID == "" || strings.ContainsAny(c.Model.Provider, "/ ") {
 		return invalid("invalid_model", "Choose one of the models offered.")
 	}
+	return nil
+}
+
+// MaxSkills is how many shared skills an agent may pick.
+const MaxSkills = 100
+
+var skillNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+// checkSkills: shared skill names (each once, in the order given). Whether a skill of that name exists on this computer
+// isn't checked: an agent imported from another computer keeps the names, and a missing one is left out of its prompt.
+func (c *Config) checkSkills() error {
+	if len(c.Skills) > MaxSkills {
+		return invalid("invalid_skills", "An agent uses at most %d shared skills.", MaxSkills)
+	}
+	var names []string
+	for _, n := range c.Skills {
+		n = strings.TrimSpace(n)
+		if len(n) > 64 || !skillNamePattern.MatchString(n) {
+			return invalid("invalid_skills", "%q isn't a skill name (lowercase letters, digits and dashes).", n)
+		}
+		if !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	c.Skills = names
 	return nil
 }
 

@@ -135,3 +135,13 @@ export function fieldByLabel(text: string | RegExp): HTMLElement | null {
   const id = label?.htmlFor;
   return id ? document.getElementById(id) : null;
 }
+
+/** The button of the open dialog whose text is `text` (the page behind it may have buttons with the same words). */
+export function dialogButton(text: string | RegExp): HTMLButtonElement | undefined {
+  return [...(document.querySelector('[role="dialog"]')?.querySelectorAll('button') ?? [])].find(
+    (button) =>
+      typeof text === 'string'
+        ? button.textContent?.trim() === text
+        : text.test(button.textContent ?? ''),
+  );
+}

@@ -1,6 +1,7 @@
 // Package backup makes, lists, deletes and restores backups of the data folder, and runs the daily automatic one.
 //
-// A backup is one zip: app.db (VACUUM INTO, so it is whole and compact), templates/, and every agent's folder
+// A backup is one zip: app.db (VACUUM INTO, so it is whole and compact), templates/, skills/ and prompts/ (the shared
+// ones), and every agent's folder
 // (agent.yaml, memory.json, its conversations in state.sqlite, and its own workspace/). Logs and temporary files are
 // left out. Secrets are never in it: they live in the OS keychain, which isn't copied; the manifest lists which
 // providers and MCP servers will need their keys again on another computer.
@@ -562,8 +563,10 @@ func (s *Service) Create(ctx context.Context, reason Reason, folder string) (*In
 	if err := addFile(zw, "app.db", filepath.Join(work, "app.db"), st); err != nil {
 		return nil, diskError(err)
 	}
-	if err := addTree(zw, "templates", filepath.Join(s.cfg.DataDir, "templates"), nil, st, nil); err != nil {
-		return nil, diskError(err)
+	for _, shared := range []string{"templates", "skills", "prompts"} {
+		if err := addTree(zw, shared, filepath.Join(s.cfg.DataDir, shared), nil, st, nil); err != nil {
+			return nil, diskError(err)
+		}
 	}
 	manifest := Manifest{Format: ManifestFormat, App: "Pi Local", Version: s.cfg.Version, CreatedAt: now.UnixMilli(), Reason: reason,
 		Agents: []ManifestAgent{}, NeedsKeys: s.cfg.Keys(ctx),

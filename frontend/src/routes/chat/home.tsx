@@ -33,6 +33,7 @@ import { routeMessage } from '~/hooks/use-judgments';
 import { useYou } from '~/hooks/use-memory';
 import { useModelChoice } from '~/hooks/use-model-choice';
 import { ME_KEY, useCurrentUser } from '~/hooks/use-session';
+import { useSlashCommands } from '~/hooks/use-slash-commands';
 import { useTeams } from '~/hooks/use-teams';
 import { agentKindLabel } from '~/lib/agent-groups';
 import { titleFromFiles } from '~/lib/attachments';
@@ -136,6 +137,12 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
   // A choice made for one agent is not another's: it starts again when the agent (or Auto) changes.
   const modelChoice = useModelChoice(NO_CHOICE, undefined, auto ? '' : (agent?.id ?? ''));
   const modelChanges = modelChoice.changes;
+  // Slash commands in the message box (this page is already a new conversation, so no /new).
+  const [modelOpen, setModelOpen] = useState(false);
+  const slashCommands = useSlashCommands({
+    agent: shown ?? undefined,
+    onModel: useCallback(() => setModelOpen(true), []),
+  });
   // Files for the first message, saved in the chosen agent's workspace.
   const attachments = useAttachments(shown);
   const drop = useFileDrop(attachments.add, attachments.enabled);
@@ -398,6 +405,7 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
           if (!attachments.busy) void send(draft, attachments.ready);
         }}
         submitting={submitting || routing}
+        commands={slashCommands}
         tray={
           <>
             {question && (
@@ -432,6 +440,8 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
             onModel={modelChoice.pickModel}
             onThinking={modelChoice.pickThinking}
             disabled={!agent}
+            open={modelOpen}
+            onOpenChange={setModelOpen}
           />
         }
         options={
