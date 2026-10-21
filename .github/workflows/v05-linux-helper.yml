@@ -38,6 +38,28 @@ jobs:
           for path in / /usr /tmp; do findmnt -T "$path" -o TARGET,FSTYPE,PROPAGATION; done
           # Read only: missing keys are diagnostic, never a request to change policy.
           sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns || true
+      - name: Diagnose isolated engine admission without changing host policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # All probes retain network isolation, import only trusted /usr read-only,
+          # and run /usr/bin/true. These are engine diagnostics, not confinement passes.
+          base=(/usr/bin/bwrap --unshare-user --unshare-net)
+          root=(--ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 --chdir / -- /usr/bin/true)
+          for nnp in 0 1; do
+            for caps in 0 1; do
+              prefix=(); drop=()
+              if test "$nnp" = 1; then prefix=(/usr/bin/setpriv --no-new-privs); fi
+              if test "$caps" = 1; then drop=(--cap-drop ALL); fi
+              printf 'NNP-before-exec=%s cap-drop=%s\n' "$nnp" "$caps"
+              if /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C HOME=/home/sandbox TMPDIR=/tmp \
+                "${prefix[@]}" "${base[@]}" "${drop[@]}" "${root[@]}"; then
+                echo 'engine probe: PASS'
+              else
+                echo "engine probe: FAIL:$?"
+              fi
+            done
+          done
       - name: Unit contracts and static helper
         shell: bash
         run: |
