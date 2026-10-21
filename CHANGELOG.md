@@ -25,7 +25,8 @@ directory before running its pinned package manager. The original tag is retaine
 - **Security:** fast-judgments requests cannot redirect credentials or judged text to another origin. Command rules
   remembered from an approval respect whole-word boundaries (`ls` never allows `lsof`). Workspace file tools refuse
   dangling symlinks and check normalized home/file-URL paths before permitting access. Document conversion uses
-  the same guarded cache operations.
+  the same guarded cache operations. Reused provider tool-call IDs no longer attach old decisions/results to new
+  actions or hide their pending approval cards; presentation uses durable call-occurrence identities.
 - **Distribution notices:** packaged dependency licenses, copyright notices and pinned provenance now ship inside
   the app, assembled and checked before signing.
 
