@@ -1,0 +1,39 @@
+name: v0.5 platform contracts
+on:
+  push:
+    branches: [v0.5]
+    paths:
+      - '.github/workflows/v05-foundations.yml'
+      - 'internal/datalock/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  datalock:
+    name: Data-directory lock (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Native locking and crash-release contract
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          go version
+          go test -count=1 -race -v ./internal/datalock
+          go vet ./internal/datalock
+# These are isolated kernel-lock contract tests using synthetic temporary directories.
+# Windows Server CI is not Windows 11 UI evidence; no WebView, sandbox, keyring or installer parity is claimed.
