@@ -15,7 +15,9 @@ Learning, knowledge and connections.
 - **Skills and prompts:** per-agent/shared skills, ZIP import and supporting-file viewing; a prompt library with
   import/export, placeholders and keyboard slash commands.
 - **Canvas:** keep Markdown, code, CSV and HTML artifacts beside a conversation; edit, review versions, copy,
-  download or save to the workspace. HTML previews strip active/navigation content and use a no-script sandbox.
+  download or save to the workspace. Unsaved drafts survive panel/layout and conversation changes in memory; only
+  explicit Save/Discard clears them, while reloading or closing the window loses them. HTML previews strip
+  active/navigation content and use a no-script sandbox.
 - **Agent builder:** propose agents and owned-agent updates with knowledge folders, installed skills and schedules.
   Every change requires human approval of the full normalized configuration, regardless of permission profile.
   Stale proposals are refused; committed updates recover their config files after interruption.
