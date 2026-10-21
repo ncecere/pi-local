@@ -1,5 +1,5 @@
 import { ApiError } from './errors';
-import { type Method, transport } from './transport';
+import { type Method, type RequestOptions, transport } from './transport';
 
 export { ApiError, apiErrorFrom } from './errors';
 /**
@@ -119,14 +119,22 @@ export interface AuthConfig {
 }
 
 /** A request to the backend; the `data` of the answer, or throws an ApiError. */
-export function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
-  return transport.request<T>(method, path, body);
+export function request<T>(
+  method: Method,
+  path: string,
+  body?: unknown,
+  options?: RequestOptions,
+): Promise<T> {
+  return options
+    ? transport.request<T>(method, path, body, options)
+    : transport.request<T>(method, path, body);
 }
 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
-  put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
+  put: <T>(path: string, body?: unknown, options?: RequestOptions) =>
+    request<T>('PUT', path, body, options),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   delete: <T>(path: string) => request<T>('DELETE', path),
   /** POSTs raw bytes (an ArrayBuffer, never a Blob: Wails drops those). */

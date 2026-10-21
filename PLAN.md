@@ -530,8 +530,16 @@ Each phase ends with a demoable milestone and its checks: `go test`, runtime con
   - Settings: the header and section tabs stay put while the page scrolls, and the profile column stays put on wide
     windows; the collapsed sidebar's controls sit beside the traffic lights
   - the CLIProxyAPI provider preset (Anthropic-compatible, `127.0.0.1:8317`)
+  - End-to-end QA (two testers in a browser on a scripted model; then fixes): Coding agents ask before commands;
+    a failed agent recovers when its model comes back; waking no longer bumps old conversations; imports get a free
+    name; plain agent.yaml and MCP connection errors; ⌘K finds conversations; "Asks you" for MCP questions; prefs
+    flushed on reload; saved toasts on agent tabs; Mark unread keeps its place; first-run "Make an agent"; long dialogs
+    keep their buttons; light-mode contrast; toasts bottom-right
+  - Faster conversations: a call to an awake agent no longer re-resolves its configuration (keychain reads) under its
+    lock; the MCP probe flushes results over 64 KiB; agent folders are stored relative to the data folder
+  - MCP: elicitation (servers ask the person mid-call), sign-in commands for local servers, env values edited one at
+    a time; external links open in the browser
 - **Left:**
-  - create the GitHub repository, set `RELEASE_SIGNING_KEY`, push, and tag the first release
   - later: Developer ID signing and notarization (`SIGN_IDENTITY`, `notarytool`), a crash and log bundle export
 - **Then:** Windows and Linux.
 

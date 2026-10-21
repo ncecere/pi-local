@@ -5,13 +5,14 @@ import { toast } from 'sonner';
 import { type Agent, errorMessage } from '~/api/client';
 import { AgentStatus } from '~/components/agent-manager/agent-status';
 import { ModelSelect } from '~/components/agent-manager/model-select';
-import { Fact, Panel } from '~/components/agent-manager/panel';
+import { Fact, Panel, saveAgentChange } from '~/components/agent-manager/panel';
 import { ErrorNotice, FIELD, Field, Optional } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { useAgentPower, useReveal } from '~/hooks/use-agent-manager';
 import { type AgentCatalog, useUpdateAgent } from '~/hooks/use-agents';
 import { agentKindLabel } from '~/lib/agent-groups';
+import { agentFieldText } from '~/lib/agent-text';
 import { cn, formatDateTime, formatRelativeTime } from '~/lib/utils';
 
 /**
@@ -40,6 +41,7 @@ function AgentForm({ agent, catalog }: { agent: Agent; catalog: AgentCatalog }) 
   };
   const [form, setForm] = useState(initial);
   const set = (change: Partial<typeof form>) => setForm((before) => ({ ...before, ...change }));
+  const text = agentFieldText(agent.agentKind);
 
   const changes = {
     ...(form.name.trim() !== agent.name ? { name: form.name.trim() } : {}),
@@ -72,10 +74,7 @@ function AgentForm({ agent, catalog }: { agent: Agent; catalog: AgentCatalog }) 
         onSubmit={(event) => {
           event.preventDefault();
           if (!dirty || !form.name.trim()) return;
-          update.mutate(
-            { id: agent.id, ...changes },
-            { onSuccess: (saved) => toast(`${saved.name} saved.`) },
-          );
+          saveAgentChange(agent, () => update.mutateAsync({ id: agent.id, ...changes }));
         }}
       >
         <Field id={`${id}-name`} label="Name">
@@ -100,7 +99,7 @@ function AgentForm({ agent, catalog }: { agent: Agent; catalog: AgentCatalog }) 
             maxLength={500}
             value={form.description}
             onChange={(event) => set({ description: event.target.value })}
-            placeholder="What it does, for you and for agents that may ask it"
+            placeholder={text.description}
             className={FIELD}
           />
         </Field>
@@ -143,7 +142,7 @@ function AgentForm({ agent, catalog }: { agent: Agent; catalog: AgentCatalog }) 
               Instructions <Optional />
             </>
           }
-          hint="Leave empty to use the default prompt for its kind."
+          hint={text.instructionsHint}
         >
           <textarea
             id={`${id}-instructions`}
@@ -151,7 +150,7 @@ function AgentForm({ agent, catalog }: { agent: Agent; catalog: AgentCatalog }) 
             maxLength={20_000}
             value={form.instructions}
             onChange={(event) => set({ instructions: event.target.value })}
-            placeholder="You help me keep track of research papers…"
+            placeholder={text.instructions}
             aria-describedby={`${id}-instructions-hint`}
             className={cn(FIELD, 'h-auto min-h-40 resize-y py-2 leading-relaxed')}
           />

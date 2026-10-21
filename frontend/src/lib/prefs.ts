@@ -8,6 +8,7 @@ import {
   useAvatarStyle,
 } from '~/components/agent/avatar/avatar-prefs';
 import { useAuthConfig, useCurrentUser } from '~/hooks/use-session';
+import { writePref } from '~/lib/pref-writes';
 import { useTheme } from '~/providers/theme-provider';
 import { COLOR_THEMES, type ColorTheme, THEME_MODES, type ThemeMode } from '~/shared';
 
@@ -125,14 +126,14 @@ export function AppearanceSync() {
 
   useEffect(() => {
     if (!applied.current || json === lastSaved.current) return;
-    // A burst of changes (clicking through themes) is saved once.
-    const timer = setTimeout(() => {
-      lastSaved.current = json;
-      void api.put('/api/me/prefs/appearance', { value: JSON.parse(json) }).catch(() => {
+    // Saved at once: a theme click is one event, and a reload straight after must keep it.
+    // Requests go one at a time, the latest last (writePref).
+    lastSaved.current = json;
+    writePref('appearance', JSON.parse(json), {
+      onError: () => {
         lastSaved.current = null; // try again on the next change
-      });
-    }, 600);
-    return () => clearTimeout(timer);
+      },
+    });
   }, [json]);
 
   return null;

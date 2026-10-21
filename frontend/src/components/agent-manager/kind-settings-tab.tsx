@@ -1,7 +1,6 @@
 import { useId, useState } from 'react';
-import { toast } from 'sonner';
 import { type Agent, errorMessage } from '~/api/client';
-import { Panel, SaveBar } from '~/components/agent-manager/panel';
+import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
 import { ErrorNotice, FIELD, Field } from '~/components/models/fields';
 import { Switch } from '~/components/ui/switch';
 import { useUpdateAgent } from '~/hooks/use-agents';
@@ -42,10 +41,7 @@ function useSaveKindSettings(agent: Agent) {
   return {
     update,
     save: (kindSettings: Record<string, unknown>) =>
-      update.mutate(
-        { id: agent.id, kindSettings },
-        { onSuccess: () => toast(`${agent.name}'s settings saved.`) },
-      ),
+      saveAgentChange(agent, () => update.mutateAsync({ id: agent.id, kindSettings })),
   };
 }
 

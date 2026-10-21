@@ -216,6 +216,22 @@ func (s *Supervisor) setStatus(id string, st *agentState, status Status, lastErr
 	}
 }
 
+// Recheck clears a failed agent's error when its configuration can now be resolved (its model is back, or it was
+// given another): it is asleep again, and wakes on its next message. Anything else is left as it is.
+func (s *Supervisor) Recheck(ctx context.Context, id string) {
+	s.mu.Lock()
+	st, ok := s.agents[id]
+	failed := ok && st.status == Failed && (st.proc == nil || !st.proc.alive())
+	s.mu.Unlock()
+	if !failed {
+		return
+	}
+	if _, err := s.opts.Resolve(ctx, id); err != nil {
+		return
+	}
+	s.setStatus(id, st, Asleep, "")
+}
+
 // Status is an agent's current runtime status and, when it failed, why.
 func (s *Supervisor) Status(id string) (Status, string) {
 	s.mu.Lock()

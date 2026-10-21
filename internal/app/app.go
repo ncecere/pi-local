@@ -287,6 +287,8 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			return
 		}
 		a.publishAgent(c.AgentID)
+		// A failed agent given a working configuration (another model) is no longer failed.
+		a.Sup.Recheck(context.Background(), c.AgentID)
 		// A running agent picks up its new configuration now (the supervisor restarts it on the new revision).
 		if status, _ := a.Sup.Status(c.AgentID); status == supervisor.Awake {
 			go func() {
@@ -639,6 +641,8 @@ func (a *App) catalogChanged(provider string) {
 			continue
 		}
 		if status, _ := a.Sup.Status(ag.ID); status != supervisor.Awake {
+			// One that failed because of this provider (its model was turned off) is fine again once it's back.
+			a.Sup.Recheck(context.Background(), ag.ID)
 			continue
 		}
 		id := ag.ID

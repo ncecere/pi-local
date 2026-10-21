@@ -78,7 +78,7 @@ export function AvatarArt({
       aria-label={label}
       aria-hidden={label ? undefined : true}
       data-state={state}
-      className={cn('av', `av-${style}`, `av-${state}`, off && 'av-off', className)}
+      className={cn('av select-none', `av-${style}`, `av-${state}`, off && 'av-off', className)}
       style={css}
     >
       {style === 'face' && <FaceArt />}
@@ -95,6 +95,10 @@ function Svg({ children }: { children: ReactNode }) {
     </svg>
   );
 }
+
+/** A sleeping "z", drawn as a stroke: `size` wide and tall, its bottom left at (x, y). */
+const zPath = (x: number, y: number, size: number) =>
+  `M${x} ${y - size}h${size}l${-size} ${size}h${size}`;
 
 // ── Face: pi-d-ui's, as it is ───────────────────────────────────────────────────────────────
 
@@ -124,16 +128,12 @@ function FaceArt() {
           <path d="M55 51 Q61.5 41 68 51" />
         </g>
       </g>
-      <g className="face-zzz">
-        <text className="face-z face-z-1" x="68" y="26">
-          z
-        </text>
-        <text className="face-z face-z-2" x="78" y="15">
-          z
-        </text>
-        <text className="face-z face-z-3" x="88" y="5">
-          z
-        </text>
+      {/* Drawn, not text: a "z" would join the agent's name in copied text and accessible names. */}
+      {/* biome-ignore lint/a11y/noAriaHiddenOnFocusable: an SVG group is never focusable; the z's are decoration */}
+      <g className="face-zzz" aria-hidden="true">
+        <path className="face-z face-z-1" d={zPath(68, 26, 9)} />
+        <path className="face-z face-z-2" d={zPath(78, 15, 7.5)} />
+        <path className="face-z face-z-3" d={zPath(88, 5, 6)} />
       </g>
       <path className="face-sweat" d="M84 20 Q89 28 84 31 Q79 28 84 20 Z" />
       <path

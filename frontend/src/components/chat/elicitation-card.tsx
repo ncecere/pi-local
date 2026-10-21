@@ -10,6 +10,7 @@ import {
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { useAnswerElicitation } from '~/hooks/use-elicitations';
+import { useNow } from '~/hooks/use-now';
 import {
   confirmField,
   contentOf,
@@ -35,16 +36,6 @@ const LONG_TEXT = 200;
 
 /** How long an answered card stays, saying how it ended, before it goes. */
 const KEEP_ANSWERED_MS = 5_000;
-
-/** The time, ticking every 15 s while a countdown shows. */
-function useNow(): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 15_000);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
-}
 
 type Outcome = 'accept' | 'decline' | 'cancel' | 'gone';
 
@@ -239,7 +230,7 @@ export function ElicitationCard({
   const [outcome, setOutcome] = useState<Outcome | null>(answered);
   const titleId = useId();
   const fieldId = useId();
-  const now = useNow();
+  const now = useNow(15_000);
   const done = useRef(onDone);
   done.current = onDone;
 

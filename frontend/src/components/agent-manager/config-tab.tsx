@@ -1,13 +1,20 @@
 import { TriangleAlert } from 'lucide-react';
 import { useId, useState } from 'react';
-import { toast } from 'sonner';
 import { type Agent, ApiError, errorMessage } from '~/api/client';
-import { Panel, SaveBar } from '~/components/agent-manager/panel';
+import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
 import { ErrorNotice, FIELD } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { useAgentConfig, usePutAgentConfig } from '~/hooks/use-agent-manager';
 import { cn } from '~/lib/utils';
+
+/**
+ * The server's reason a text can't be saved (bad YAML, or a setting there is
+ * no such thing as), without the file name the notice already says.
+ */
+export function yamlProblem(message: string): string {
+  return message.replace(/^agent\.yaml:\s*/i, '');
+}
 
 /** The agent's agent.yaml, as text: saving replaces its whole configuration. */
 export function ConfigTab({ agent }: { agent: Agent }) {
@@ -75,8 +82,8 @@ function ConfigEditor({ agent, yaml }: { agent: Agent; yaml: string }) {
             <ErrorNotice>
               {invalid ? (
                 <>
-                  <span className="font-medium">Not valid YAML: </span>
-                  <span className="font-mono text-xs">{put.error.message}</span>
+                  <span className="font-medium">Can't save this agent.yaml: </span>
+                  <span className="font-mono text-xs">{yamlProblem(put.error.message)}</span>
                 </>
               ) : (
                 errorMessage(put.error)
@@ -88,9 +95,7 @@ function ConfigEditor({ agent, yaml }: { agent: Agent; yaml: string }) {
           dirty={dirty}
           busy={put.isPending}
           saveLabel="Replace configuration"
-          onSave={() =>
-            put.mutate(text, { onSuccess: () => toast(`${agent.name}'s configuration saved.`) })
-          }
+          onSave={() => saveAgentChange(agent, () => put.mutateAsync(text))}
           onReset={() => {
             setText(yaml);
             put.reset();

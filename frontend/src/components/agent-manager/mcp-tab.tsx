@@ -2,9 +2,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { RefreshCw, TriangleAlert } from 'lucide-react';
 import { useId, useState } from 'react';
-import { toast } from 'sonner';
 import { type Agent, type AgentMcpServer, errorMessage, type McpServer } from '~/api/client';
-import { Panel, SaveBar } from '~/components/agent-manager/panel';
+import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
 import { McpStatusBadge } from '~/components/mcp/server-bits';
 import { ErrorNotice } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
@@ -74,14 +73,12 @@ function McpForm({
   const patterns = agent.approvals?.tools ?? [];
 
   const save = () =>
-    update.mutate(
-      { id: agent.id, mcp: selection },
-      {
-        onSuccess: () => {
-          toast(`${agent.name}'s MCP servers saved.`);
-          // "Used by" in Settings → MCP.
-          void queryClient.invalidateQueries({ queryKey: MCP_SERVERS_KEY });
-        },
+    saveAgentChange(
+      agent,
+      () => update.mutateAsync({ id: agent.id, mcp: selection }),
+      () => {
+        // "Used by" in Settings → MCP.
+        void queryClient.invalidateQueries({ queryKey: MCP_SERVERS_KEY });
       },
     );
 

@@ -39,6 +39,7 @@ import {
   readThreadCache,
   writeThreadCache,
 } from '~/lib/inbox-store';
+import { writePref } from '~/lib/pref-writes';
 
 const EMPTY: Record<string, ThreadMeta> = {};
 const NO_STORE_SUBSCRIBE = () => () => undefined;
@@ -117,7 +118,10 @@ export function inboxActionsFor(store: InboxStore): InboxActions {
       const meta = store.get(key) ?? {};
       const at = now();
       const seen = meta.visitedAt ?? 0;
-      const unseen = (meta.completedAt ?? 0) > seen || (meta.failedAt ?? 0) > seen;
+      const unseen =
+        (meta.completedAt ?? 0) > seen ||
+        (meta.failedAt ?? 0) > seen ||
+        (meta.markedUnreadAt ?? 0) > seen;
       const woke = meta.snoozedUntil !== undefined && meta.snoozedUntil <= at;
       if (!unseen && !woke && meta.visitedAt !== undefined && at - seen < VISIT_EVERY_MS) return;
       store.set(key, change.visit(meta, at));
@@ -240,7 +244,7 @@ export function useInbox(): Inbox {
           pendingElicitations: asked,
           meta,
           bucket: bucketOf(meta, thread, now, waiting),
-          status: statusOf(meta, now, waiting),
+          status: statusOf(meta, now, approving, asked),
         });
       }
     });
@@ -444,16 +448,17 @@ export function useInboxSync() {
     if (!store || !pulled.current) return;
     const body = JSON.stringify(store.exportAll());
     if (body === lastPushed.current) return;
-    const timer = setTimeout(() => {
-      lastPushed.current = body;
-      void api
-        .put('/api/me/prefs/inbox', {
-          value: { v: 1, threads: JSON.parse(body), since: store.since },
-        })
-        .catch(() => {
+    // A burst of changes is saved once; one still waiting is sent at once if the page goes away (lib/pref-writes).
+    lastPushed.current = body;
+    writePref(
+      'inbox',
+      { v: 1, threads: JSON.parse(body), since: store.since },
+      {
+        delayMs: PUSH_AFTER_MS,
+        onError: () => {
           lastPushed.current = null; // try again with the next change or pull
-        });
-    }, PUSH_AFTER_MS);
-    return () => clearTimeout(timer);
+        },
+      },
+    );
   }, [metas, store]);
 }

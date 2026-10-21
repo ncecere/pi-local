@@ -125,7 +125,7 @@ export async function probeMcpServer(request: ProbeRequest, emit: (event: ProbeE
 			}),
 		]);
 	} catch (error) {
-		outcome = { type: "error", code: "connect_failed", message: (error as Error).message };
+		outcome = { type: "error", code: "connect_failed", message: connectProblem(error, request.server) };
 	} finally {
 		clearTimeout(timer);
 		await callback?.close().catch(() => {});
@@ -156,4 +156,35 @@ export async function runMcpProbe(): Promise<never> {
 	});
 	await written;
 	process.exit(ok ? 0 : 1);
+}
+
+/** Why a connection failed, in people's words when Node's is a bare "fetch failed" (its cause says what happened). */
+export function connectProblem(error: unknown, server: Pick<McpServerConfig, "url">): string {
+	const message = (error as Error)?.message ?? String(error);
+	const cause = (error as { cause?: { code?: string } })?.cause;
+	let host = "the server";
+	try {
+		if (server.url) host = new URL(server.url).host;
+	} catch {
+		// not a URL: keep the generic name
+	}
+	switch (cause?.code) {
+		case "ECONNREFUSED":
+			return `Nothing is answering at ${host}. Is the server running?`;
+		case "ENOTFOUND":
+		case "EAI_AGAIN":
+			return `Can't find ${host}: check the address.`;
+		case "ETIMEDOUT":
+		case "UND_ERR_CONNECT_TIMEOUT":
+			return `${host} took too long to answer.`;
+		case "CERT_HAS_EXPIRED":
+		case "DEPTH_ZERO_SELF_SIGNED_CERT":
+		case "SELF_SIGNED_CERT_IN_CHAIN":
+		case "UNABLE_TO_VERIFY_LEAF_SIGNATURE":
+			return `${host}'s TLS certificate isn't trusted (${cause.code}).`;
+		case "ECONNRESET":
+			return `${host} closed the connection.`;
+	}
+	if ((cause as { message?: string } | undefined)?.message === "bad port") return `${host} uses a port that can't be used for web requests.`;
+	return message === "fetch failed" ? `Could not reach ${host}.` : message;
 }

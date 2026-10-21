@@ -23,9 +23,17 @@ export interface EventChannel {
   close(): void;
 }
 
+export interface RequestOptions {
+  /**
+   * The request outlives the page (`fetch(…, {keepalive: true})`): for a save
+   * sent as the page is reloaded, closed or hidden.
+   */
+  keepalive?: boolean;
+}
+
 export interface Transport {
   /** A request; the `data` of the answer, or throws an ApiError. */
-  request<T>(method: Method, path: string, body?: unknown): Promise<T>;
+  request<T>(method: Method, path: string, body?: unknown, options?: RequestOptions): Promise<T>;
   /**
    * Reads a server-sent event stream until the server ends it. Rejects with an
    * ApiError for a refused request, or the network error when the connection
@@ -64,12 +72,18 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 export const httpTransport: Transport = {
-  async request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+  async request<T>(
+    method: Method,
+    path: string,
+    body?: unknown,
+    options: RequestOptions = {},
+  ): Promise<T> {
     const response = await fetch(path, {
       method,
       headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       body: body === undefined ? undefined : JSON.stringify(body),
+      ...(options.keepalive ? { keepalive: true } : {}),
     });
     const parsed = await readJson(response);
     if (!response.ok) throw apiErrorFrom(response, parsed);
@@ -133,7 +147,7 @@ export function setTransport(next: Transport) {
 
 /** Calls through to the current transport. */
 export const transport: Transport = {
-  request: (method, path, body) => current.request(method, path, body),
+  request: (method, path, body, options) => current.request(method, path, body, options),
   stream: (path, onEvent, signal, headers) => current.stream(path, onEvent, signal, headers),
   channel: (path) => current.channel(path),
   upload: (path, bytes, contentType) => current.upload(path, bytes, contentType),

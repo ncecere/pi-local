@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { Toaster } from 'sonner';
 import { DocumentBranding } from '~/components/brand/document-branding';
 import { installExternalLinks } from '~/lib/external-links';
+import { installPrefFlush } from '~/lib/pref-writes';
 import { AppearanceSync } from '~/lib/prefs';
 import { ThemeProvider } from '~/providers/theme-provider';
 import { router } from '~/router';
@@ -20,6 +21,8 @@ const container = document.getElementById('root');
 if (!container) throw new Error('Root element not found');
 
 installExternalLinks();
+// A pref change still waiting to be saved is sent as the page is hidden or reloaded.
+installPrefFlush();
 
 createRoot(container).render(
   <StrictMode>
@@ -28,7 +31,8 @@ createRoot(container).render(
         <DocumentBranding router={router} />
         <AppearanceSync />
         <RouterProvider router={router} />
-        <Toaster theme="dark" position="top-right" />
+        {/* Bottom right: clear of the header's controls, the settings tabs and the first message. */}
+        <Toaster theme="dark" position="bottom-right" />
       </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,

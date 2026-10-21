@@ -94,7 +94,7 @@ const presets = [
   },
   {
     id: 'other',
-    name: 'Other…',
+    name: 'OpenAI-compatible',
     kind: 'openai-compatible',
     baseUrl: '',
     needsKey: false,

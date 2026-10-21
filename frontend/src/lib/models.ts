@@ -36,6 +36,17 @@ export function splitModelId(id: string): { provider: string; modelId: string } 
   return { provider: id.slice(0, at), modelId: id.slice(at + 1) };
 }
 
+/**
+ * Whether the catalog has nothing but the built-in demo model: no model
+ * provider is set up yet.
+ */
+export function onlyDemoModel(models: readonly CatalogModel[]): boolean {
+  return models.every(
+    (model) =>
+      model.id === DEMO_MODEL_ID || (model.provider ?? splitModelId(model.id)?.provider) === 'demo',
+  );
+}
+
 export interface ModelGroup<T> {
   /** The provider's ID. */
   key: string;

@@ -377,7 +377,8 @@ describe('The inbox', () => {
     view = await renderWithQuery(<InboxProbe />);
     await settle();
     const read = () => JSON.parse(document.querySelector('output')?.textContent ?? '{}');
-    expect(read()).toEqual({ needsYou: [['ag_a/t1', 'approval']], attention: 2 });
+    // In "Needs you", saying "Asks you" rather than "Needs approval".
+    expect(read()).toEqual({ needsYou: [['ag_a/t1', 'asks']], attention: 2 });
 
     // Answered: it goes back to where it was.
     await act(async () => {

@@ -175,6 +175,18 @@ describe('inboxActionsFor', () => {
     const meta = store.get('a/1')!;
     expect(meta.visitedAt!).toBeGreaterThanOrEqual(meta.completedAt!);
   });
+
+  it('reads a conversation marked unread when it is opened again, at once', () => {
+    const store = new InboxStore('tim', disk);
+    const actions = inboxActionsFor(store);
+    actions.visit('a/1');
+    actions.markUnread('a/1');
+    expect(store.get('a/1')?.completedAt).toBeUndefined();
+    expect(store.get('a/1')?.markedUnreadAt).toBeDefined();
+    actions.visit('a/1'); // not throttled: it was marked unread
+    const meta = store.get('a/1')!;
+    expect(meta.visitedAt!).toBeGreaterThanOrEqual(meta.markedUnreadAt!);
+  });
 });
 
 describe('when the inbox began', () => {

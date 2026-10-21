@@ -1,4 +1,4 @@
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { ChevronRight, MessageSquarePlus, Plus, Upload } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -14,11 +14,13 @@ import { SettingsSection } from '~/components/settings/settings-layout';
 import { Button } from '~/components/ui/button';
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  SCROLLING_DIALOG,
 } from '~/components/ui/dialog';
 import { Spinner } from '~/components/ui/spinner';
 import { useImportAgent } from '~/hooks/use-agent-manager';
@@ -30,6 +32,7 @@ import {
   useUpdateAgent,
 } from '~/hooks/use-agents';
 import { agentKindLabel } from '~/lib/agent-groups';
+import { agentFieldText } from '~/lib/agent-text';
 import { usePageTitle } from '~/lib/document-title';
 import { groupModelsByProvider } from '~/lib/models';
 import { cn } from '~/lib/utils';
@@ -65,7 +68,9 @@ export function AgentDialog({
   const [folder, setFolder] = useState('');
   const busy = create.isPending || update.isPending;
   const error = create.error ?? update.error;
-  const coding = (agent ? agent.agentKind : templateId) === 'coding';
+  const kind = agent ? agent.agentKind : templateId;
+  const coding = kind === 'coding';
+  const text = agentFieldText(kind);
   const folderError =
     error instanceof ApiError && error.code === 'invalid_workspace_folder' ? error.message : null;
   // An agent whose model was removed or turned off keeps it until given another.
@@ -122,7 +127,7 @@ export function AgentDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+      <DialogContent className={SCROLLING_DIALOG}>
         <DialogHeader>
           <DialogTitle>{agent ? `Edit ${agent.name}` : 'New agent'}</DialogTitle>
           <DialogDescription>
@@ -131,7 +136,7 @@ export function AgentDialog({
               : 'An agent on this computer, with its own folder for its memory and conversations.'}
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-4">
+        <DialogBody className="flex flex-col gap-4">
           <label htmlFor={`${id}-name`} className="flex flex-col gap-1.5 text-sm font-medium">
             Name
             <input
@@ -154,7 +159,7 @@ export function AgentDialog({
               id={`${id}-description`}
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              placeholder="Finds and summarizes papers"
+              placeholder={text.description}
               className={FIELD}
             />
           </label>
@@ -224,11 +229,7 @@ export function AgentDialog({
               rows={agent ? 8 : 4}
               value={instructions}
               onChange={(event) => setInstructions(event.target.value)}
-              placeholder={
-                coding
-                  ? 'Run the tests before you say you are done…'
-                  : 'You help me keep track of research papers…'
-              }
+              placeholder={text.instructions}
               aria-describedby={`${id}-instructions-hint`}
               className={cn(FIELD, 'h-auto min-h-24 resize-y py-2 font-normal')}
             />
@@ -236,9 +237,7 @@ export function AgentDialog({
               id={`${id}-instructions-hint`}
               className="text-xs font-normal text-[var(--text-muted)]"
             >
-              {coding
-                ? 'Added to the coding prompt, like an AGENTS.md of its own.'
-                : 'Leave empty to use the default prompt for its kind.'}
+              {text.instructionsHint}
             </span>
           </label>
           {catalog.allowModelChoice && (catalog.models.length > 1 || missingModel) && (
@@ -302,7 +301,7 @@ export function AgentDialog({
               {errorMessage(error)}
             </p>
           )}
-        </div>
+        </DialogBody>
         <DialogFooter>
           <Button variant="secondary" onClick={onClose}>
             Cancel
@@ -424,7 +423,15 @@ export function SettingsAgentsPage() {
   usePageTitle('Agents · Settings');
   const agents = useAgents();
   const catalog = useAgentCatalog();
-  const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
+  // `?new=true` opens on the New agent dialog.
+  const asked = (useSearch({ strict: false }) as { new?: boolean }).new === true;
+  const [creating, setCreating] = useState(asked);
+  const stopCreating = () => {
+    setCreating(false);
+    // Closed: a reload doesn't open it again.
+    if (asked) void navigate({ to: '/settings/agents', search: {}, replace: true });
+  };
   const [importError, setImportError] = useState<unknown>(null);
 
   if (!agents.data || !catalog.data)
@@ -479,8 +486,8 @@ export function SettingsAgentsPage() {
         )}
       </SettingsSection>
 
-      {creating && (
-        <AgentDialog agent={null} catalog={catalog.data} onClose={() => setCreating(false)} />
+      {creating && limit > 0 && !full && catalog.data.templates.length > 0 && (
+        <AgentDialog agent={null} catalog={catalog.data} onClose={stopCreating} />
       )}
     </>
   );

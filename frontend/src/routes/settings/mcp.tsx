@@ -273,7 +273,7 @@ function ServerCard({
                 onSuccess: () => {
                   if (!enabled && server.usedBy.length > 0)
                     toast(
-                      `${server.name} is off. ${plural(server.usedBy.length, 'agent')} using it restart without it.`,
+                      `${server.name} is off. ${plural(server.usedBy.length, 'agent')} using it ${server.usedBy.length === 1 ? 'restarts' : 'restart'} without it.`,
                     );
                 },
                 onError: (error) => toast.error(errorMessage(error, 'Not changed.')),

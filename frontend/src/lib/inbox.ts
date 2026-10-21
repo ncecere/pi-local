@@ -27,6 +27,11 @@ export interface ThreadMeta {
   completedAt?: number;
   /** The last time a reply was seen to fail. */
   failedAt?: number;
+  /**
+   * Marked unread by the person: shown unread until they next look at it. It
+   * changes neither its place in the list nor the time it shows.
+   */
+  markedUnreadAt?: number;
   /** Set while a reply is being written; cleared when it is seen to end. */
   workingSince?: number;
   /**
@@ -44,9 +49,19 @@ export type Bucket = 'approval' | 'pinned' | 'working' | 'inbox' | 'snoozed' | '
 
 /**
  * What a row says it needs, most pressing first. `approval`: the agent is
- * waiting for the person to approve a tool call; it is not working.
+ * waiting for the person to approve a tool call; it is not working. `asks`: an
+ * MCP server asks the person something (an elicitation), and nothing waits
+ * for approval. `marked`: the person marked it unread.
  */
-export type RowStatus = 'approval' | 'working' | 'failed' | 'unread' | 'woke' | null;
+export type RowStatus =
+  | 'approval'
+  | 'asks'
+  | 'working'
+  | 'failed'
+  | 'unread'
+  | 'marked'
+  | 'woke'
+  | null;
 
 /** How long a conversation may be believed to be working with no word from it. */
 export const STALE_WORKING_MS = 2 * 60 * 60 * 1000;
@@ -165,18 +180,31 @@ export function bucketOf(
   return 'inbox';
 }
 
-/** A conversation with requests waiting is "Needs approval", not "Working": it waits for the person. */
-export function statusOf(meta: ThreadMeta, now: number, pendingApprovals = 0): RowStatus {
+/**
+ * A conversation with requests waiting is "Needs approval", not "Working": it
+ * waits for the person. One where only an MCP server's question waits "Asks you".
+ */
+export function statusOf(
+  meta: ThreadMeta,
+  now: number,
+  pendingApprovals = 0,
+  pendingElicitations = 0,
+): RowStatus {
   if (pendingApprovals > 0) return 'approval';
+  if (pendingElicitations > 0) return 'asks';
   if (isWorking(meta, now)) return 'working';
   const visited = meta.visitedAt ?? 0;
   if ((meta.failedAt ?? 0) > visited) return 'failed';
   if ((meta.completedAt ?? 0) > visited) return 'unread';
+  if ((meta.markedUnreadAt ?? 0) > visited) return 'marked';
   if (hasWoken(meta, now)) return 'woke';
   return null;
 }
 
-/** Conversations that need the person: a reply finished or failed since they last looked. */
+/**
+ * Conversations that need the person: a reply finished or failed since they
+ * last looked. One only marked unread is not counted: it keeps its place.
+ */
 export function needsAttention(meta: ThreadMeta, now: number): boolean {
   const status = statusOf(meta, now);
   return status === 'unread' || status === 'failed';
@@ -184,9 +212,11 @@ export function needsAttention(meta: ThreadMeta, now: number): boolean {
 
 export const STATUS_LABEL: Record<NonNullable<RowStatus>, string> = {
   approval: 'Needs approval',
+  asks: 'Asks you',
   working: 'Working',
   failed: 'Failed',
   unread: 'Done',
+  marked: 'Unread',
   woke: 'Woke',
 };
 
@@ -371,10 +401,13 @@ export const change = {
       ...(woken ? { snoozedUntil: undefined, snoozedAt: undefined } : {}),
     };
   },
-  /** Unread again: as if the last reply had not been seen. */
+  /**
+   * Unread again, until the next visit. Only that: not a new reply, so the
+   * conversation keeps its place and its time (which follow activity).
+   */
   markUnread: (meta: ThreadMeta, now: number): ThreadMeta => ({
     ...meta,
-    completedAt: now,
+    markedUnreadAt: now,
     visitedAt: Math.min(meta.visitedAt ?? 0, now - 1),
   }),
   working: (meta: ThreadMeta, now: number, awaitingUsers?: number): ThreadMeta => ({

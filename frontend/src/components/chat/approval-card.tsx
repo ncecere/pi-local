@@ -5,6 +5,7 @@ import { ApiError, type ChatApproval, errorMessage } from '~/api/client';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { useDecideApproval } from '~/hooks/use-approvals';
+import { useNow } from '~/hooks/use-now';
 import { approvalOutcome, argumentsView, expiresIn } from '~/lib/approvals';
 import { cn } from '~/lib/utils';
 
@@ -101,16 +102,6 @@ export function ApprovalArguments({ tool, args }: { tool: string; args: unknown 
     case 'json':
       return <pre className={BLOCK}>{view.text}</pre>;
   }
-}
-
-/** The time, ticking every 30 s while something shows a countdown. */
-function useNow(): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
 }
 
 /**

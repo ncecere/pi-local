@@ -95,24 +95,24 @@
   pointer-events: none;
 }
 
+/* Strokes, not text, so the z's never end up in copied text or an accessible name. */
 .av-face .face-z {
-  fill: color-mix(in srgb, var(--a) 30%, #ffffff);
-  font-family: ui-rounded, system-ui, sans-serif;
-  font-weight: 800;
+  fill: none;
+  stroke: color-mix(in srgb, var(--a) 30%, #ffffff);
+  stroke-width: 2.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   transform-box: fill-box;
   transform-origin: center;
-}
-
-.av-face .face-z-1 {
-  font-size: 17px;
+  user-select: none;
 }
 
 .av-face .face-z-2 {
-  font-size: 14px;
+  stroke-width: 2.2px;
 }
 
 .av-face .face-z-3 {
-  font-size: 11px;
+  stroke-width: 1.8px;
 }
 
 /* Happy closed eyes (^ ^), only when done. */

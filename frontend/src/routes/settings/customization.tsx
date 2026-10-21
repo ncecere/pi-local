@@ -190,7 +190,7 @@ export function SettingsCustomizationPage() {
       </SettingsSection>
 
       <p className="mt-12 text-xs text-[var(--text-muted)]">
-        Saved to your account, so they follow you to every device you sign in on.
+        Saved on this computer, in Pi Local's settings.
       </p>
     </>
   );

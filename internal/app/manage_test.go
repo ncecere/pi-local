@@ -89,7 +89,7 @@ func TestTheAgentManager(t *testing.T) {
 		t.Fatalf("import: %d %s", code, body)
 	}
 	imported := decodeInto[struct{ Data struct{ ID, Name string } }](t, body).Data
-	if imported.ID == agent || imported.Name != "Edited" {
+	if imported.ID == agent || imported.Name != "Edited (2)" { // the original is still here: a name of its own
 		t.Fatalf("imported: %+v", imported)
 	}
 	// Its conversation came along: opening it (by its thread ID) wakes the agent with the old messages.

@@ -115,10 +115,14 @@ const settingsChildren = [
       'SettingsCustomizationPage',
     ),
   ),
-  settingsPage(
-    '/settings/agents',
-    lazyRouteComponent(() => import('~/routes/settings/agents'), 'SettingsAgentsPage'),
-  ),
+  createRoute({
+    getParentRoute: () => settingsRoute,
+    path: '/settings/agents',
+    // `?new=true`: open on the New agent dialog (the first-run home screen's "Make an agent").
+    validateSearch: (search: Record<string, unknown>): { new?: true } =>
+      search.new === true || search.new === 'true' ? { new: true } : {},
+    component: lazyRouteComponent(() => import('~/routes/settings/agents'), 'SettingsAgentsPage'),
+  }),
   settingsPage(
     '/settings/teams',
     lazyRouteComponent(() => import('~/routes/settings/teams'), 'SettingsTeamsPage'),

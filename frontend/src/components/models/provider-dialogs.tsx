@@ -87,6 +87,9 @@ function PresetPicker({
   );
 }
 
+/** The preset for any OpenAI-compatible server ("OpenAI-compatible"): it names no service. */
+const GENERIC_PRESET = 'other';
+
 /**
  * Adding a provider: pick a preset (which fills in its kind, address and
  * name), then name it, and give it a key and any extra headers.
@@ -114,7 +117,8 @@ export function AddProviderDialog({
 
   const pick = (next: ProviderPreset) => {
     setPreset(next);
-    setName(next.name);
+    // The generic preset names no service: the person names their server.
+    setName(next.id === GENERIC_PRESET ? '' : next.name);
     if (isKind(kinds, next.kind)) setKind(next.kind);
     setBaseUrl(next.baseUrl);
     setProblem(null);
@@ -151,7 +155,9 @@ export function AddProviderDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto" confirmDiscard={dirty}>
         <DialogHeader>
-          <DialogTitle>{preset ? `Add ${preset.name}` : 'Add a provider'}</DialogTitle>
+          <DialogTitle>
+            {preset && preset.id !== GENERIC_PRESET ? `Add ${preset.name}` : 'Add a provider'}
+          </DialogTitle>
           <DialogDescription>
             {preset
               ? 'Its key and header values are kept in the system keychain, never shown again.'
@@ -175,6 +181,7 @@ export function AddProviderDialog({
                 maxLength={60}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
+                placeholder={preset.id === GENERIC_PRESET ? 'My server' : undefined}
                 className={FIELD}
               />
             </Field>

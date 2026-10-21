@@ -264,3 +264,12 @@ describe("MCP elicitation (a server asks the person mid-call)", () => {
 		expect(result?.text).toContain("this client can't ask the person");
 	}, 20_000);
 });
+
+describe("connection problems in people's words", () => {
+	it("says nothing is answering when the port is closed", async () => {
+		const { connectProblem } = await import("../src/lib/probe.ts");
+		const err = await fetch("http://127.0.0.1:59999/mcp").catch((e: unknown) => e);
+		expect(connectProblem(err, { url: "http://127.0.0.1:59999/mcp" })).toBe("Nothing is answering at 127.0.0.1:59999. Is the server running?");
+		expect(connectProblem(new Error("boom"), {})).toBe("boom");
+	});
+});

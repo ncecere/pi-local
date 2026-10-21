@@ -1,9 +1,8 @@
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import { toast } from 'sonner';
 import { type Agent, errorMessage } from '~/api/client';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
-import { Panel, SaveBar } from '~/components/agent-manager/panel';
+import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
 import { ErrorNotice } from '~/components/models/fields';
 import { useUpdateAgent } from '~/hooks/use-agents';
 import { agentKindLabel } from '~/lib/agent-groups';
@@ -120,7 +119,7 @@ function CanCallForm({ agent, agents }: { agent: Agent; agents: Agent[] }) {
             dirty={dirty}
             busy={update.isPending}
             onSave={() =>
-              update.mutate({ id: agent.id, canCall: chosen }, { onSuccess: () => toast('Saved.') })
+              saveAgentChange(agent, () => update.mutateAsync({ id: agent.id, canCall: chosen }))
             }
             onReset={() => {
               setChosen(saved);

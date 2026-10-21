@@ -600,6 +600,7 @@ func (s *Store) Import(ctx context.Context, cfg Config, storage map[string][]byt
 	defer s.writeMu.Unlock()
 	cfg.Normalize()
 	cfg.CanCall = nil
+	cfg.Name = s.freeName(cfg.Name)
 	// MCP servers this computer doesn't have are left out (add them in Settings → MCP, then choose them again).
 	var kept []MCPChoice
 	for _, m := range cfg.MCP {
@@ -657,4 +658,29 @@ func (s *Store) NameOf(id string) string {
 		return a.Config.Name
 	}
 	return "an agent"
+}
+
+// freeName is name, or "name (2)", "name (3)" … when another agent has it (an import of an agent that is here
+// already), so pickers and chips can tell them apart. Called with the write lock held.
+func (s *Store) freeName(name string) string {
+	s.mu.RLock()
+	taken := map[string]bool{}
+	for _, a := range s.agents {
+		taken[strings.ToLower(a.Config.Name)] = true
+	}
+	s.mu.RUnlock()
+	if !taken[strings.ToLower(name)] {
+		return name
+	}
+	for n := 2; n < 1000; n++ {
+		suffix := fmt.Sprintf(" (%d)", n)
+		base := name
+		if r := []rune(base); len(r)+len([]rune(suffix)) > MaxNameChars {
+			base = string(r[:MaxNameChars-len([]rune(suffix))])
+		}
+		if candidate := base + suffix; !taken[strings.ToLower(candidate)] {
+			return candidate
+		}
+	}
+	return name
 }

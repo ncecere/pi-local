@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { toast } from 'sonner';
+import type { Agent } from '~/api/client';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
 import { cn } from '~/lib/utils';
@@ -34,6 +36,34 @@ export function Panel({
       )}
       {children}
     </section>
+  );
+}
+
+/** "Rex saved.", and that it restarts when it was awake. */
+export function agentSavedMessage(before: Pick<Agent, 'running'>, saved: Pick<Agent, 'name'>) {
+  return before.running
+    ? `${saved.name} saved. It restarts with the change.`
+    : `${saved.name} saved.`;
+}
+
+/**
+ * Saves a change to an agent and says so. A saved change bumps the agent's
+ * revision, and the tab's form (keyed by it) is drawn again from scratch, so
+ * a `mutate` callback would be dropped with the old form: the promise of
+ * `mutateAsync` is kept instead. A failure stays on the mutation, for the
+ * form to show.
+ */
+export function saveAgentChange(
+  before: Pick<Agent, 'running'>,
+  save: () => Promise<Agent>,
+  after?: (saved: Agent) => void,
+) {
+  void save().then(
+    (saved) => {
+      toast(agentSavedMessage(before, saved));
+      after?.(saved);
+    },
+    () => undefined,
   );
 }
 

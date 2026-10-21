@@ -65,6 +65,17 @@ func TestACodingAgentWorksInItsProjectFolderWithItsInstructions(t *testing.T) {
 	if !slices.Equal(created.Workspace.Tools, []string{"read", "write", "edit", "bash"}) || created.Workspace.Folder != project {
 		t.Fatalf("a coding agent's defaults: %+v", created.Workspace)
 	}
+	if ag, _ := h.app.Agents.Get(created.ID); !slices.Equal(ag.Config.Approvals.Tools, []string{"bash"}) {
+		t.Fatalf("a coding agent should ask before commands: %+v", ag.Config.Approvals)
+	}
+	// As the New agent dialog makes one: its tools and project folder given, nothing said about approvals.
+	viaDialog := decodeInto[struct{ ID string }](t, h.mustDo("POST", "/api/agents", map[string]any{
+		"name": "Coder 2", "templateId": "coding", "modelId": "script/s1",
+		"workspace": map[string]any{"tools": []string{"read", "write", "edit", "bash"}, "folder": project},
+	}, 201))
+	if ag, _ := h.app.Agents.Get(viaDialog.ID); !slices.Equal(ag.Config.Approvals.Tools, []string{"bash"}) {
+		t.Fatalf("a coding agent made with its tools should still ask before commands: %+v", ag.Config.Approvals)
+	}
 
 	v := h.sendAndWait(created.ID, "t1", "READ:hello.txt", "r1")
 	if last := v.Messages[len(v.Messages)-1]; !strings.Contains(last.Text, "hi from the project") {

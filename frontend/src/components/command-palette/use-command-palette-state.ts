@@ -5,6 +5,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { writeHandover } from '~/hooks/use-agent-thread';
 import { chattable, newThreadId, noteNewThread, useAgents } from '~/hooks/use-agents';
 import type { CommandPaletteProps, PaletteGroup, PaletteItem } from './types';
+import { useConversationItems } from './use-conversation-items';
 import { usePaletteActions } from './use-palette-actions';
 
 function matches(item: PaletteItem, query: string) {
@@ -37,6 +38,7 @@ export function useCommandPaletteState({
   }, [open]);
 
   const actionGroups = usePaletteActions({ sidebarOpen, onSidebarOpenChange });
+  const conversations = useConversationItems(query, open);
 
   const groups = useMemo<PaletteGroup[]>(() => {
     const nextGroups: PaletteGroup[] = [];
@@ -52,6 +54,9 @@ export function useCommandPaletteState({
       }))
       .filter((item) => matches(item, normalizedQuery));
     if (agentItems.length) nextGroups.push({ id: 'agents', label: 'Agents', items: agentItems });
+
+    if (conversations.items.length > 0)
+      nextGroups.push({ id: 'conversations', label: 'Conversations', items: conversations.items });
 
     for (const group of actionGroups) {
       const items = group.items.filter((item) => matches(item, normalizedQuery));
@@ -94,7 +99,7 @@ export function useCommandPaletteState({
     }
 
     return nextGroups;
-  }, [actionGroups, agents, navigate, normalizedQuery, query, queryClient]);
+  }, [actionGroups, agents, conversations.items, navigate, normalizedQuery, query, queryClient]);
 
   const items = groups.flatMap((group) => group.items);
   const itemIds = items.map((item) => item.id).join('|');
@@ -160,8 +165,17 @@ export function useCommandPaletteState({
     }
   }
 
-  const showThreadProgress = false;
-  const threadAnnouncement = '';
+  // Messages are searched once typing pauses: a spinner meanwhile, and the outcome said.
+  const showThreadProgress = conversations.pending;
+  const found = conversations.items.length;
+  const threadAnnouncement =
+    !query.trim() || conversations.pending
+      ? ''
+      : conversations.failed
+        ? 'Messages could not be searched.'
+        : found === 0
+          ? 'No conversations match.'
+          : `${found} conversation${found === 1 ? '' : 's'} match.`;
 
   /** Read once by the dialog's close handler, then reset. */
   function consumeKeepFocus() {

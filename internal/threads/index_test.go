@@ -126,3 +126,28 @@ func TestTitleFrom(t *testing.T) {
 		}
 	}
 }
+
+func TestWakingDoesNotMakeOldConversationsLookNew(t *testing.T) {
+	ctx := context.Background()
+	x, _, now := newIndex(t)
+	x.Sending(ctx, "ag_a", "old", "research cats", nil)
+	replied := ms(*now) + 1_000
+	x.Report(ctx, "ag_a", Status{ThreadID: "old", Title: "research cats", LastReplyAt: &replied, At: replied})
+	before, _ := x.Get(ctx, "ag_a", "old")
+
+	// 15 minutes later the agent wakes (a schedule): its start-up sync lists every thread, at that moment.
+	later := ms(*now) + 15*60_000
+	created := ms(*now)
+	x.Sync(ctx, "ag_a", []Status{
+		{ThreadID: "old", Title: "research cats", CreatedAt: created, LastReplyAt: &replied, At: later},
+		{ThreadID: "busy", Title: "scheduled", CreatedAt: later - 10, Busy: true, At: later},
+	}, later)
+	after, _ := x.Get(ctx, "ag_a", "old")
+	if after.UpdatedAt != before.UpdatedAt {
+		t.Fatalf("waking moved the old conversation's activity from %v to %v", before.UpdatedAt, after.UpdatedAt)
+	}
+	// A conversation busy at the sync is active now.
+	if busy, _ := x.Get(ctx, "ag_a", "busy"); busy.UpdatedAt != later {
+		t.Fatalf("a busy conversation's activity: %v", busy.UpdatedAt)
+	}
+}

@@ -2,7 +2,7 @@ import { ChevronRight, FolderOpen, TriangleAlert } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { toast } from 'sonner';
 import { type Agent, ApiError, errorMessage, type WorkspaceTool } from '~/api/client';
-import { Panel, SaveBar } from '~/components/agent-manager/panel';
+import { Panel, SaveBar, saveAgentChange } from '~/components/agent-manager/panel';
 import { ProjectFolderInput } from '~/components/agent-manager/project-folder-field';
 import { ErrorNotice, FIELD } from '~/components/models/fields';
 import { Button } from '~/components/ui/button';
@@ -52,6 +52,25 @@ const TOOL_TEXT: Record<WorkspaceTool, { label: string; hint: ReactNode }> = {
   },
 };
 
+/**
+ * Whether turning a tool on should choose the recommended "Ask first" for the
+ * agent: nothing of it asks first (saved or in the form), and the person has
+ * not chosen an option here. An agent whose approvals were set keeps them.
+ */
+export function preselectsAskFirst({
+  on,
+  preset,
+  presetChosen,
+  savedApprovals,
+}: {
+  on: boolean;
+  preset: PresetId | 'custom';
+  presetChosen: boolean;
+  savedApprovals: readonly string[];
+}): boolean {
+  return on && preset === 'none' && !presetChosen && savedApprovals.length === 0;
+}
+
 /** Server errors that belong to one field. */
 const FIELD_ERRORS = {
   folder: 'invalid_workspace_folder',
@@ -66,10 +85,28 @@ const FIELD_ERRORS = {
  * waits (docs/api.md, Phase 4).
  */
 export function ToolsTab({ agent }: { agent: Agent }) {
-  return <ToolsForm key={agent.revision} agent={agent} />;
+  // Whether Advanced is open, kept here: a save draws the form again (a new revision).
+  const [advancedOpen, setAdvancedOpen] = useState<boolean | null>(null);
+  return (
+    <ToolsForm
+      key={agent.revision}
+      agent={agent}
+      advancedOpen={advancedOpen}
+      onAdvancedOpen={setAdvancedOpen}
+    />
+  );
 }
 
-function ToolsForm({ agent }: { agent: Agent }) {
+function ToolsForm({
+  agent,
+  advancedOpen,
+  onAdvancedOpen,
+}: {
+  agent: Agent;
+  /** Opened or closed by the person; null: open when the list is custom. */
+  advancedOpen: boolean | null;
+  onAdvancedOpen: (open: boolean) => void;
+}) {
   const id = useId();
   const saved = readToolSettings(agent);
   const initialChoice = timeoutChoiceOf(saved.approvals.timeoutSeconds);
@@ -82,7 +119,9 @@ function ToolsForm({ agent }: { agent: Agent }) {
     minutes: String(Math.round(saved.approvals.timeoutSeconds / 60)),
   };
   const [form, setForm] = useState(initial);
-  const [advanced, setAdvanced] = useState(() => presetOf(saved.approvals.tools) === 'custom');
+  const advanced = advancedOpen ?? presetOf(saved.approvals.tools) === 'custom';
+  // The person chose an approvals option here: turning tools on leaves it alone.
+  const [presetChosen, setPresetChosen] = useState(false);
   const update = useUpdateAgent();
   const reveal = useReveal();
 
@@ -116,26 +155,29 @@ function ToolsForm({ agent }: { agent: Agent }) {
 
   const toggleTool = (tool: WorkspaceTool, on: boolean) => {
     const tools = normaliseTools(on ? [...form.tools, tool] : form.tools.filter((t) => t !== tool));
-    // Turning tools on: they ask first, unless the person chose otherwise.
-    const turnedOn = form.tools.length === 0 && tools.length > 0 && preset === 'none';
     setForm({
       ...form,
       tools,
-      patterns: turnedOn ? formatToolList(applyPreset(patterns, DEFAULT_PRESET)) : form.patterns,
+      patterns: preselectsAskFirst({
+        on,
+        preset,
+        presetChosen,
+        savedApprovals: saved.approvals.tools,
+      })
+        ? formatToolList(applyPreset(patterns, DEFAULT_PRESET))
+        : form.patterns,
     });
   };
-  const choosePreset = (choice: PresetId) =>
+  const choosePreset = (choice: PresetId) => {
+    setPresetChosen(true);
     setForm({ ...form, patterns: formatToolList(applyPreset(patterns, choice)) });
+  };
 
   // Tools that change things or run commands without asking.
   const unguarded = form.tools.filter((tool) => tool !== 'read' && !needsApproval(tool, patterns));
   const noTools = form.tools.length === 0;
 
-  const save = () =>
-    update.mutate(
-      { id: agent.id, ...next },
-      { onSuccess: () => toast(`${agent.name}'s tools saved.`) },
-    );
+  const save = () => saveAgentChange(agent, () => update.mutateAsync({ id: agent.id, ...next }));
 
   return (
     <div className="flex flex-col gap-4">
@@ -328,7 +370,7 @@ function ToolsForm({ agent }: { agent: Agent }) {
               type="button"
               aria-expanded={advanced}
               aria-controls={`${id}-advanced`}
-              onClick={() => setAdvanced(!advanced)}
+              onClick={() => onAdvancedOpen(!advanced)}
               className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
               <ChevronRight
@@ -347,11 +389,14 @@ function ToolsForm({ agent }: { agent: Agent }) {
                   rows={5}
                   value={form.patterns}
                   onChange={(event) => setForm({ ...form, patterns: event.target.value })}
-                  placeholder={'bash\nwrite\nedit\nmcp__github__create_*'}
+                  placeholder={'e.g. bash\nwrite\nedit\nmcp__github__create_*'}
                   spellCheck={false}
                   aria-invalid={Boolean(patternsError || fieldError('patterns')) || undefined}
                   aria-describedby={`${id}-patterns-hint`}
-                  className={cn(FIELD, 'h-auto min-h-28 resize-y py-2 font-mono text-xs')}
+                  className={cn(
+                    FIELD,
+                    'h-auto min-h-28 resize-y py-2 font-mono text-xs placeholder:text-[var(--text-muted)] placeholder:opacity-70',
+                  )}
                 />
                 <p id={`${id}-patterns-hint`} className="text-xs text-[var(--text-muted)]">
                   {patternsError ?? (

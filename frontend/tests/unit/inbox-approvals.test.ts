@@ -23,6 +23,15 @@ describe('inbox: a conversation waiting for approval', () => {
     expect(STATUS_LABEL.approval).toBe('Needs approval');
   });
 
+  it('says "Asks you" when only an MCP server\'s question waits', () => {
+    expect(statusOf(working, NOW, 0, 1)).toBe('asks');
+    expect(STATUS_LABEL.asks).toBe('Asks you');
+    // A tool approval still says "Needs approval", whatever else waits.
+    expect(statusOf(working, NOW, 1, 1)).toBe('approval');
+    // Both are in "Needs you".
+    expect(bucketOf(working, thread, NOW, 1)).toBe('approval');
+  });
+
   it('is in "Needs you", even when pinned, snoozed or archived', () => {
     expect(bucketOf(working, thread, NOW)).toBe('working');
     expect(bucketOf(working, thread, NOW, 2)).toBe('approval');

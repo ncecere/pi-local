@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Plus } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Agent, Team } from '~/api/client';
 import { AgentAvatar, agentStatusLabel } from '~/components/agent/agent-avatar';
@@ -13,11 +13,13 @@ import {
 } from '~/components/chat/attachments';
 import { Composer } from '~/components/chat/composer';
 import { ElicitationList } from '~/components/chat/elicitation-card';
+import { Button } from '~/components/ui/button';
 import { writeHandover } from '~/hooks/use-agent-thread';
 import {
   chattable,
   newThreadId,
   noteNewThread,
+  useAgentCatalog,
   useAgents,
   useAgentThreads,
 } from '~/hooks/use-agents';
@@ -29,6 +31,7 @@ import { agentKindLabel } from '~/lib/agent-groups';
 import { usePageTitle } from '~/lib/document-title';
 import { focusComposerOnArrival } from '~/lib/focus-after-navigation';
 import { greetingName } from '~/lib/greeting-name';
+import { onlyDemoModel } from '~/lib/models';
 import { chattableTeams } from '~/lib/teams';
 import { cn } from '~/lib/utils';
 
@@ -150,6 +153,10 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
 
   const firstName = me && greetingName(me.user.name, null);
   const loading = agentsQuery.isPending;
+  // First run: no agents at all, and maybe no model provider either (only the demo model).
+  const noAgents = agentsQuery.isSuccess && agentsQuery.data.length === 0;
+  const catalog = useAgentCatalog(noAgents);
+  const demoOnly = noAgents && catalog.data !== undefined && onlyDemoModel(catalog.data.models);
 
   return (
     <div
@@ -222,11 +229,34 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
             </fieldset>
           )}
 
-          <p className="mt-4 hidden text-sm md:block">
-            <Link to="/settings/agents" className="text-[var(--accent-bright)] hover:underline">
-              New agent
-            </Link>
-          </p>
+          {noAgents ? (
+            <div className="mt-6 flex flex-col items-center gap-3 md:items-start">
+              <Button asChild variant="primary" size="lg">
+                <Link to="/settings/agents" search={{ new: true }}>
+                  <Plus />
+                  Make an agent
+                </Link>
+              </Button>
+              {demoOnly && (
+                <p className="text-center text-sm text-[var(--text-muted)] md:text-left">
+                  Add a model provider first in{' '}
+                  <Link
+                    to="/settings/models"
+                    className="text-[var(--accent-bright)] underline-offset-4 hover:underline"
+                  >
+                    Settings → Models
+                  </Link>
+                  , or try the built-in demo model.
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="mt-4 hidden text-sm md:block">
+              <Link to="/settings/agents" className="text-[var(--accent-bright)] hover:underline">
+                New agent
+              </Link>
+            </p>
+          )}
 
           <ElicitationList elicitations={questions} className="mt-7" />
 
@@ -261,19 +291,9 @@ export function ChatHomePage({ agentId, teamId }: { agentId?: string; teamId?: s
             </div>
           )}
 
-          {agentsQuery.isSuccess && agents.length === 0 && (
+          {agentsQuery.isSuccess && agents.length === 0 && agentsQuery.data.length > 0 && (
             <p className="mt-8 rounded-xl bg-[var(--warning)]/10 px-4 py-3 text-sm text-[var(--warning)]">
-              {agentsQuery.data.length > 0 ? (
-                'Your agents are all turned off.'
-              ) : (
-                <>
-                  You don't have any agents yet.{' '}
-                  <Link to="/settings/agents" className="underline">
-                    Make one in Settings → Agents
-                  </Link>
-                  .
-                </>
-              )}
+              Your agents are all turned off.
             </p>
           )}
           {agentsQuery.isError && (

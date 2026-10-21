@@ -12,7 +12,7 @@ import {
   Trash2,
   Zap,
 } from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import {
   type Agent,
@@ -25,6 +25,7 @@ import { ConfirmDialog, ErrorNotice } from '~/components/models/fields';
 import { ScheduleDialog } from '~/components/schedules/schedule-dialog';
 import { Button } from '~/components/ui/button';
 import { Spinner } from '~/components/ui/spinner';
+import { useNow } from '~/hooks/use-now';
 import {
   useDeleteSchedule,
   useRunSchedule,
@@ -60,16 +61,6 @@ const RUN_TONE: Record<ScheduleRunStatus, string> = {
   done: 'text-[var(--success)]',
   failed: 'text-[var(--danger)]',
 };
-
-/** The time now, ticking each half minute: "in 5 minutes" stays true. */
-function useNow(every = 30_000): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), every);
-    return () => clearInterval(timer);
-  }, [every]);
-  return now;
-}
 
 const threadLink = (agentId: string, threadId: string) => ({
   to: '/agents/$agentId/threads/$threadId' as const,

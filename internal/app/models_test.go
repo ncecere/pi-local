@@ -251,6 +251,10 @@ func TestAModelThatGoesAwayStopsItsAgentsUntilTheyGetAnother(t *testing.T) {
 	if s, why := h.app.Sup.Status(agent); s != supervisor.Failed || !strings.Contains(why, "Model One is turned off") {
 		t.Fatalf("status: %s %q", s, why)
 	}
+	// Turned on again: the error goes (it's asleep, and wakes on its next message); then off again for what follows.
+	h.mustDo("PUT", "/api/providers/local/models/m1", map[string]any{"enabled": true}, 200)
+	eventually(t, 10*time.Second, "the error to clear", func() bool { s, _ := h.app.Sup.Status(agent); return s == supervisor.Asleep })
+	h.mustDo("PUT", "/api/providers/local/models/m1", map[string]any{"enabled": false}, 200)
 	// Renaming still works (only a changed model is checked), and a model that isn't offered is refused.
 	h.mustDo("PATCH", "/api/agents/"+agent, map[string]string{"name": "Dependent 2"}, 200)
 	if code, data := h.do("PATCH", "/api/agents/"+agent, map[string]string{"modelId": "local/nope"}); code != 400 || !strings.Contains(string(data), "invalid_model") {

@@ -13,6 +13,7 @@ import {
   Clock,
   Ellipsis,
   type LucideIcon,
+  MessageCircleQuestion,
   Pencil,
   Pin,
   PinOff,
@@ -24,6 +25,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { Agent } from '~/api/client';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
+import { SearchSnippet } from '~/components/layout/search-snippet';
 import { Button } from '~/components/ui/button';
 import {
   Dialog,
@@ -66,9 +68,7 @@ import {
 import { matchInboxShortcut } from '~/lib/inbox-shortcuts';
 import { nextPage, PAGE_SIZE, visibleOf } from '~/lib/paging';
 import { isScheduledThreadId } from '~/lib/schedules';
-import { splitSnippet } from '~/lib/snippet';
 import { cn } from '~/lib/utils';
-import { plainTextOfMarkdown } from '~/shared';
 
 /** Which shelves are open, remembered in this browser. They start closed. */
 const SHELVES_KEY = 'pai.inbox.shelves';
@@ -356,7 +356,7 @@ export function SidebarInbox({ filter }: { filter: string }) {
                         </span>
                       )}
                     </span>
-                    <Snippet text={hit.snippet} />
+                    <SearchSnippet text={hit.snippet} />
                   </Link>
                 </li>
               ))}
@@ -431,7 +431,7 @@ export function SidebarInbox({ filter }: { filter: string }) {
                       <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-secondary)]">
                         {elicitation.agentName}
                       </span>
-                      <StatusBadge status="approval" />
+                      <StatusBadge status="asks" />
                     </span>
                     <span className="truncate text-xs text-[var(--text-primary)]/90">
                       {elicitationHeadline(elicitation)}
@@ -537,26 +537,6 @@ function PagedList({
   );
 }
 
-/** A line from a message, the words that matched in <mark> (lib/snippet.ts). */
-function Snippet({ text }: { text: string }) {
-  return (
-    <span dir="auto" className="line-clamp-2 text-xs text-[var(--text-muted)]">
-      {splitSnippet(plainTextOfMarkdown(text)).map((part) =>
-        part.match ? (
-          <mark
-            key={part.at}
-            className="rounded-sm bg-[var(--accent-soft)] px-0.5 text-[var(--text-primary)]"
-          >
-            {part.text}
-          </mark>
-        ) : (
-          <span key={part.at}>{part.text}</span>
-        ),
-      )}
-    </span>
-  );
-}
-
 function Heading({ id, children }: { id: string; children: ReactNode }) {
   return (
     <div className="flex h-8 items-center gap-2 px-2">
@@ -570,17 +550,21 @@ function Heading({ id, children }: { id: string; children: ReactNode }) {
 
 const STATUS_TONE: Record<NonNullable<InboxEntry['status']>, string> = {
   approval: 'text-[var(--warning)]',
+  asks: 'text-[var(--warning)]',
   working: 'text-[var(--status-working)]',
   failed: 'text-[var(--danger)]',
   unread: 'text-[var(--success)]',
+  marked: 'text-[var(--success)]',
   woke: 'text-[var(--warning)]',
 };
 
 const STATUS_ICON: Record<NonNullable<InboxEntry['status']>, LucideIcon> = {
   approval: ShieldAlert,
+  asks: MessageCircleQuestion,
   working: CircleDashed,
   failed: CircleAlert,
   unread: CircleCheck,
+  marked: CircleDot,
   woke: AlarmClock,
 };
 
@@ -673,6 +657,9 @@ function Shelf({
 const CORNER =
   'transition-opacity group-focus-within:opacity-0 group-hover:opacity-0 pointer-coarse:mr-7';
 
+/** How long a row's Delete stays, asking to be confirmed. */
+export const CONFIRM_DELETE_MS = 10_000;
+
 const ICON_BUTTON =
   'inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--sidebar-row-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40';
 
@@ -684,7 +671,7 @@ function StatusBadge({
 }: {
   status: NonNullable<InboxEntry['status']>;
   workingSince?: number;
-  /** For `approval`: how many requests wait, said when more than one. */
+  /** For `approval` and `asks`: how many requests wait, said when more than one. */
   count?: number;
 }) {
   const Icon = STATUS_ICON[status];
@@ -700,7 +687,7 @@ function StatusBadge({
         aria-hidden="true"
       />
       {STATUS_LABEL[status]}
-      {status === 'approval' && count !== undefined && count > 1 && (
+      {(status === 'approval' || status === 'asks') && count !== undefined && count > 1 && (
         <span className="font-normal tabular-nums">({count})</span>
       )}
       {status === 'working' && workingSince !== undefined && (
@@ -878,9 +865,10 @@ function InboxRow({
   const confirmButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!confirming) return;
-    // The menu that asked is gone: keep focus on the question.
+    // The menu that asked is gone: keep focus on the question. (The menu, closing, would
+    // take it back to its trigger, which is gone too: see its onCloseAutoFocus.)
     confirmButton.current?.focus();
-    const timer = setTimeout(() => setConfirming(false), 4_000);
+    const timer = setTimeout(() => setConfirming(false), CONFIRM_DELETE_MS);
     return () => clearTimeout(timer);
   }, [confirming]);
 
@@ -916,7 +904,11 @@ function InboxRow({
   const del = (event: { currentTarget: HTMLElement }) => {
     const rowElement = event.currentTarget.closest<HTMLElement>('[data-focus-row]');
     if (rowElement) keepFocusWhenRemoved(rowElement);
-    remove.mutate({ agentId: entry.agentId, threadId: entry.threadId });
+    // The row goes at once (the list drops it), so the outcome is told by the promise.
+    remove.mutateAsync({ agentId: entry.agentId, threadId: entry.threadId }).then(
+      () => toast('Conversation deleted.'),
+      () => toast.error("The conversation couldn't be deleted. Try again."),
+    );
     actions.restore(key, undefined);
     if (active) void navigate({ to: '/', search: { agent: entry.agentId } });
   };
@@ -999,6 +991,8 @@ function InboxRow({
               className={cn(
                 'min-w-0 truncate text-sm',
                 status === 'unread' ||
+                  status === 'marked' ||
+                  status === 'asks' ||
                   status === 'woke' ||
                   status === 'failed' ||
                   status === 'approval' ||
@@ -1122,7 +1116,16 @@ function InboxRow({
                   <Ellipsis className="size-3.5" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuContent
+                align="end"
+                className="w-56"
+                onCloseAutoFocus={(event) => {
+                  // Delete… asked: focus goes to its confirm button, not back to "…" (gone with it).
+                  if (!confirmButton.current) return;
+                  event.preventDefault();
+                  confirmButton.current.focus();
+                }}
+              >
                 {away ? (
                   <DropdownMenuItem onSelect={backToInbox}>
                     {bucket === 'archived' ? (

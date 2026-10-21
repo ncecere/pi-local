@@ -27,9 +27,17 @@ var retiredKinds = []string{"triage"}
 
 // KindDefaults is what a new agent of a kind starts with when the request doesn't say.
 func KindDefaults(kind string, c *Config) {
-	if kind == "coding" && c.Workspace.Tools == nil {
-		// pi's own tools; nothing asks first (pi doesn't), and a person can add approvals for bash.
+	if kind != "coding" {
+		return
+	}
+	if c.Workspace.Tools == nil {
+		// pi's own tools.
 		c.Workspace.Tools = []string{"read", "write", "edit", "bash"}
+	}
+	// Commands ask first: they run as the person, in their real project folder, unconfined. A person can turn that
+	// off on the Tools tab (pi itself doesn't ask), or say otherwise when making the agent.
+	if c.Approvals.Tools == nil && slices.Contains(c.Workspace.Tools, "bash") {
+		c.Approvals.Tools = []string{"bash"}
 	}
 }
 
@@ -250,7 +258,7 @@ func ParseConfig(raw []byte) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
-		return Config{}, &InvalidError{Code: "invalid_yaml", Message: "agent.yaml: " + strings.TrimPrefix(err.Error(), "yaml: ")}
+		return Config{}, &InvalidError{Code: "invalid_yaml", Message: "agent.yaml: " + yamlProblem(err)}
 	}
 	c.Normalize()
 	return c, nil
@@ -309,4 +317,25 @@ func (w *Workspace) checkFolder() error {
 		return invalid("invalid_workspace_folder", "Choose a project folder, not %s: the agent's tools would reach everything in it.", w.Folder)
 	}
 	return nil
+}
+
+// unknownField is the YAML decoder's "line N: field X not found in type agents.Config".
+var unknownField = regexp.MustCompile(`line (\d+): field (\S+) not found in type \S+`)
+
+// yamlProblem says what is wrong with agent.yaml in people's words (no Go type names).
+func yamlProblem(err error) string {
+	msg := strings.TrimPrefix(err.Error(), "yaml: ")
+	msg = strings.TrimPrefix(msg, "unmarshal errors:\n")
+	var lines []string
+	for _, line := range strings.Split(msg, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if m := unknownField.FindStringSubmatch(line); m != nil {
+			line = fmt.Sprintf("line %s: there is no setting %q", m[1], m[2])
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "; ")
 }

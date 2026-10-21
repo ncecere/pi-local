@@ -84,6 +84,25 @@ export function DialogContent({
   );
 }
 
+/**
+ * A long dialog's layout: its body scrolls, while the header and footer stay
+ * in view. For DialogContent's className, with the middle in a DialogBody.
+ */
+export const SCROLLING_DIALOG = 'flex max-h-[calc(100dvh-2rem)] flex-col';
+
+/**
+ * The scrolling middle of a SCROLLING_DIALOG. It reaches the dialog's edges
+ * (and pads back in), so focus rings at the sides are not cut off.
+ */
+export function DialogBody({ className, ...props }: ComponentProps<'div'>) {
+  return (
+    <div
+      className={cn('-mx-6 -my-1 min-h-0 flex-1 overflow-y-auto px-6 py-1', className)}
+      {...props}
+    />
+  );
+}
+
 export function DialogHeader({ className, ...props }: ComponentProps<'div'>) {
   return <div className={cn('mb-4 flex flex-col gap-1.5', className)} {...props} />;
 }

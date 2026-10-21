@@ -22,11 +22,13 @@ import {
 import { Button } from '~/components/ui/button';
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  SCROLLING_DIALOG,
 } from '~/components/ui/dialog';
 import { Spinner } from '~/components/ui/spinner';
 import { Switch } from '~/components/ui/switch';
@@ -327,9 +329,9 @@ function ServerFields({
             }
             hint={
               <>
-                If the server signs in with its own command (like{' '}
-                <span className="font-mono">m365-mcp login</span>), the arguments for that, one per
-                line. It runs with the same command and adds a Sign in button.
+                The full arguments for its sign-in, one per line: usually the same script, then{' '}
+                <span className="font-mono">login</span>. It runs with the same command; it adds a
+                Sign in button.
               </>
             }
           >
@@ -506,8 +508,9 @@ function TransportChoice({
             className={cn(
               'flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--accent-bright)]',
               value === option.id
-                ? 'border-[var(--border-strong)] bg-[var(--bg-control)]'
-                : 'border-[var(--border-subtle)] hover:bg-[var(--bg-control)]/60',
+                ? // In light the control grey is the dialog's own white: the accent marks the choice.
+                  'border-[var(--accent-button-border)] bg-[var(--accent-soft)] dark:border-[var(--border-strong)] dark:bg-[var(--bg-control)]'
+                : 'border-[var(--border-subtle)] hover:bg-[var(--bg-control-hover)]/60 dark:hover:bg-[var(--bg-control)]/60',
             )}
           >
             <input
@@ -726,10 +729,7 @@ export function AddServerDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !create.isPending && onClose()}>
-      <DialogContent
-        className="max-h-[calc(100dvh-2rem)] max-w-xl overflow-y-auto"
-        confirmDiscard={dirty}
-      >
+      <DialogContent className={cn(SCROLLING_DIALOG, 'max-w-xl')} confirmDiscard={dirty}>
         <DialogHeader>
           <DialogTitle>Add an MCP server</DialogTitle>
           <DialogDescription>
@@ -737,30 +737,32 @@ export function AddServerDialog({
             tested as soon as you add it.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="flex flex-col gap-4">
-          <TransportChoice
-            value={form.transport}
-            onChange={(transport) => {
-              setForm({ transport });
-              if (transport === 'http') setPreset(null);
-            }}
-          />
-          {form.transport === 'stdio' && <PresetChips current={preset} onPick={pick} />}
-          <ServerFields form={form} setForm={setForm} server={null} />
-          {problem && <ErrorNotice>{problem}</ErrorNotice>}
-          <RequestError error={create.error} what="This server" />
-          {create.isPending && (
-            <p
-              className="flex items-center gap-2 text-sm text-[var(--text-muted)]"
-              aria-live="polite"
-            >
-              <Spinner className="size-4" />
-              {form.transport === 'stdio'
-                ? 'Starting it and listing its tools. This can take up to a minute (npx may download it first).'
-                : 'Connecting and listing its tools. This can take up to a minute.'}
-            </p>
-          )}
-          <DialogFooter className="mt-2">
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <DialogBody className="flex flex-col gap-4">
+            <TransportChoice
+              value={form.transport}
+              onChange={(transport) => {
+                setForm({ transport });
+                if (transport === 'http') setPreset(null);
+              }}
+            />
+            {form.transport === 'stdio' && <PresetChips current={preset} onPick={pick} />}
+            <ServerFields form={form} setForm={setForm} server={null} />
+            {problem && <ErrorNotice>{problem}</ErrorNotice>}
+            <RequestError error={create.error} what="This server" />
+            {create.isPending && (
+              <p
+                className="flex items-center gap-2 text-sm text-[var(--text-muted)]"
+                aria-live="polite"
+              >
+                <Spinner className="size-4" />
+                {form.transport === 'stdio'
+                  ? 'Starting it and listing its tools. This can take up to a minute (npx may download it first).'
+                  : 'Connecting and listing its tools. This can take up to a minute.'}
+              </p>
+            )}
+          </DialogBody>
+          <DialogFooter>
             <Button type="button" variant="secondary" onClick={onClose} disabled={create.isPending}>
               Cancel
             </Button>
@@ -831,7 +833,7 @@ export function EditServerDialog({ server, onClose }: { server: McpServer; onClo
       onSuccess: (saved) => {
         toast(
           saved.usedBy.length > 0
-            ? `${saved.name} saved. ${plural(saved.usedBy.length, 'agent')} using it restart.`
+            ? `${saved.name} saved. ${plural(saved.usedBy.length, 'agent')} using it ${saved.usedBy.length === 1 ? 'restarts' : 'restart'}.`
             : `${saved.name} saved.`,
         );
         onClose();
@@ -917,8 +919,12 @@ export function DeleteServerDialog({
   onDeleted?: () => void;
 }) {
   const remove = useDeleteMcpServer();
-  const inUse = remove.error ? inUseAgents(remove.error) : null;
+  // `409 in_use` names the agents; without them, its message is said instead.
+  const named = remove.error ? inUseAgents(remove.error) : null;
+  const inUse = named && named.length > 0 ? named : null;
   const users = inUse ?? server.usedBy;
+  // Agents use it: it can't be deleted until it is removed from them (the note says how).
+  const blocked = server.usedBy.length > 0;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
@@ -958,7 +964,7 @@ export function DeleteServerDialog({
           <Button
             type="button"
             variant="danger"
-            disabled={remove.isPending}
+            disabled={blocked || remove.isPending}
             onClick={() =>
               remove.mutate(server.slug, {
                 onSuccess: () => {

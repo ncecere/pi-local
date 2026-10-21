@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activityAt,
   bucketOf,
   change,
   DROPPED_AFTER_MS,
   type InboxEntry,
   isBlank,
+  needsAttention,
   nextWake,
   replyDropped,
   replyFinished,
   STALE_WORKING_MS,
+  STATUS_LABEL,
   sectionsOf,
   snoozePresets,
   statusOf,
@@ -179,9 +182,20 @@ describe('changes', () => {
     expect(bucketOf(before, thread(), NOW)).toBe('pinned');
   });
 
-  it('marks unread by rewinding the visit', () => {
-    const meta = change.markUnread({ visitedAt: NOW }, NOW);
-    expect(statusOf(meta, NOW)).toBe('unread');
+  it('marks unread: shown as unread, keeping its time and place, until the next visit', () => {
+    const before: ThreadMeta = { visitedAt: NOW - HOUR, completedAt: NOW - 2 * HOUR };
+    const meta = change.markUnread(before, NOW);
+    expect(statusOf(meta, NOW)).toBe('marked');
+    expect(STATUS_LABEL.marked).toBe('Unread');
+    // Not a new reply: the time a row shows (and sorts by) is where it was.
+    expect(activityAt(meta, thread())).toBe(activityAt(before, thread()));
+    expect(meta.completedAt).toBe(before.completedAt);
+    expect(needsAttention(meta, NOW)).toBe(false);
+    expect(statusOf(change.visit(meta, NOW + MIN), NOW + MIN)).toBeNull();
+  });
+
+  it('marks unread even when visited this very moment', () => {
+    expect(statusOf(change.markUnread({ visitedAt: NOW }, NOW), NOW)).toBe('marked');
   });
 
   it('records work and its end', () => {
@@ -224,6 +238,15 @@ describe('sectionsOf', () => {
       NOW,
     );
     expect(sections.inbox.map((row) => row.threadId)).toEqual(['unread', 'new', 'old']);
+  });
+
+  it('keeps a conversation marked unread where it was', () => {
+    const rows = [
+      entry('old', {}, NOW - 9 * HOUR),
+      entry('new', {}, NOW - HOUR),
+      entry('mid', change.markUnread({ visitedAt: NOW - 2 * HOUR }, NOW), NOW - 5 * HOUR),
+    ];
+    expect(sectionsOf(rows, NOW).inbox.map((row) => row.threadId)).toEqual(['new', 'mid', 'old']);
   });
 
   it('orders snoozed by wake time, pinned by when pinned, done by when done', () => {

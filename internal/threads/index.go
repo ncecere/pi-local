@@ -226,7 +226,12 @@ func (x *Index) apply(ctx context.Context, tx *sql.Tx, agentID string, s Status,
 	if s.Busy {
 		busy = 1
 	}
+	// Its last activity: a report is about now (a reply ended or began), and so is a sync of a busy thread; a sync of an
+	// idle one (every thread, each time the agent wakes) is not, so it keeps its last reply's time.
 	updated := s.At
+	if adopt && !s.Busy {
+		updated = max(s.CreatedAt, 0)
+	}
 	if s.LastReplyAt != nil && *s.LastReplyAt > updated {
 		updated = *s.LastReplyAt
 	}
