@@ -5,6 +5,7 @@ import type { FeatureId } from '~/api/client';
 import { SkipLink } from '~/components/layout/skip-link';
 import { ThemeMenu } from '~/components/layout/theme-menu';
 import { Button } from '~/components/ui/button';
+import { FOCUS_RING } from '~/components/ui/focus-ring';
 import { useSuggestedFacts } from '~/hooks/use-memory';
 import { useCurrentUser } from '~/hooks/use-session';
 import { INBOX_SHORTCUTS, shortcutLabel } from '~/lib/inbox-shortcuts';
@@ -163,7 +164,7 @@ function SectionNav({ pathname }: { pathname: string }) {
   const waiting = useSuggestedFacts().data?.length ?? 0;
   const waitingOn = (tab: Tab) => (tab.to === '/settings/you' ? waiting : 0);
   const current = TABS.find((tab) => isActive(tab, pathname)) ?? ALL_TABS[0]!;
-  // A window too narrow for every tab scrolls the row: keep the current one in view.
+  // Sections wrap on narrow windows; keep the current link in view after navigation.
   const track = useRef<HTMLDivElement>(null);
   const currentTo = current.to;
   useEffect(() => {
@@ -172,22 +173,21 @@ function SectionNav({ pathname }: { pathname: string }) {
   }, [currentTo]);
   return (
     <nav aria-label="Settings sections">
-      <div
-        ref={track}
-        className="hidden max-w-full flex-wrap gap-1 rounded-xl bg-[var(--bg-segment-track)] p-1 sm:flex"
-      >
+      <div ref={track} className="hidden max-w-full flex-wrap gap-y-1 sm:flex">
         {TABS.map((tab) => {
           const active = isActive(tab, pathname);
           return (
             <Link
               key={tab.to}
               to={tab.to}
+              activeOptions={{ exact: tab.exact }}
               aria-current={active ? 'page' : undefined}
               className={cn(
-                'whitespace-nowrap rounded-lg px-3 py-1.5 text-sm transition-colors',
+                'whitespace-nowrap border-b-2 px-2.5 py-1.5 text-sm transition-colors',
+                FOCUS_RING,
                 active
-                  ? 'bg-[var(--bg-segment-active)] font-medium text-[var(--text-primary)]'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+                  ? 'border-[var(--accent-bright)] font-semibold text-[var(--text-primary)]'
+                  : 'border-transparent text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]',
               )}
             >
               {tab.label}

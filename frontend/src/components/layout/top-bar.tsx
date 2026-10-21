@@ -24,6 +24,7 @@ export function TopBar({ sidebarOpen, onOpenSidebar, onOpenCommandPalette }: Top
 
   return (
     <header
+      data-chat-titlebar
       data-sidebar={sidebarOpen ? 'open' : 'closed'}
       className={cn(
         'relative z-30 shrink-0',
