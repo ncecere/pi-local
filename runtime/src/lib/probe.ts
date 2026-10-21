@@ -147,6 +147,13 @@ export async function runMcpProbe(): Promise<never> {
 		console.log(JSON.stringify({ type: "error", code: "invalid_request", message: (error as Error).message } satisfies ProbeEvent));
 		process.exit(2);
 	}
-	const ok = await probeMcpServer(request, (event) => console.log(JSON.stringify(event)));
+	// Each line written, and flushed before exiting: process.exit doesn't wait for a pipe, so a long result (a server
+	// with many tools) was cut at the pipe's 64 KiB.
+	let written = Promise.resolve();
+	const ok = await probeMcpServer(request, (event) => {
+		const line = `${JSON.stringify(event)}\n`;
+		written = written.then(() => new Promise<void>((resolve) => process.stdout.write(line, () => resolve())));
+	});
+	await written;
 	process.exit(ok ? 0 : 1);
 }

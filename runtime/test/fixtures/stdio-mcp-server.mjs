@@ -19,6 +19,10 @@ const tools = [
 		? [{ name: "confirm", description: "Asks the person before it 'sends' the text", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } }]
 		: []),
 ];
+// FIXTURE_MANY_TOOLS=n: n more tools with long descriptions (a listing bigger than a pipe's 64 KiB).
+for (let i = 0; i < Number(process.env.FIXTURE_MANY_TOOLS ?? 0); i++) {
+	tools.push({ name: `bulk_${i}`, description: `Bulk tool ${i}. ${"x".repeat(1000)}`, inputSchema: { type: "object" } });
+}
 let clientCapabilities = {};
 let nextAsk = 1;
 const asked = new Map(); // our request id → resolve

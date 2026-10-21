@@ -59,6 +59,19 @@ describe("stdio MCP servers", () => {
 		]);
 	});
 
+	it("`runtime mcp-probe` prints a whole result bigger than a pipe's 64 KiB before it exits", async () => {
+		const dir = await tempAgentDir(cleanup);
+		const request = JSON.stringify({ server: stdioServer(dir, { env: { FIXTURE_MANY_TOOLS: "120" } }), timeoutMs: 20_000 });
+		const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts", "mcp-probe"], { cwd: RUNTIME_DIR, stdio: ["pipe", "pipe", "ignore"] });
+		child.stdin.end(request);
+		let out = "";
+		for await (const chunk of child.stdout) out += chunk;
+		const result = JSON.parse(out.trim().split("\n").at(-1)!);
+		expect(out.length).toBeGreaterThan(100_000);
+		expect(result.type).toBe("result");
+		expect(result.tools).toHaveLength(123);
+	}, 30_000);
+
 	it("reports a server that won't start, with what it wrote to stderr", async () => {
 		const dir = await tempAgentDir(cleanup);
 		const { ok, last } = await probe({ server: stdioServer(dir, { env: { FIXTURE_CRASH: "1" } }), timeoutMs: 10_000 });
