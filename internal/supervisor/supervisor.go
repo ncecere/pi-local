@@ -22,8 +22,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/ncecere/pi-local/internal/process"
 )
 
 // Runtime is how to start the runtime process: `Node Args... Script` in Dir.
@@ -119,8 +120,9 @@ func (e *StartError) Error() string {
 
 // Supervisor runs agents.
 type Supervisor struct {
-	opts   Options
-	client *http.Client
+	opts         Options
+	client       *http.Client
+	startProcess process.Starter // process.Start; injectable without launching a native app
 
 	mu      sync.Mutex
 	agents  map[string]*agentState
@@ -145,6 +147,9 @@ type agentState struct {
 type proc struct {
 	agentID  string
 	cmd      *exec.Cmd
+	tree     process.Tree
+	cleanup  sync.Once
+	stdout   io.ReadCloser
 	stdin    io.WriteCloser
 	base     string
 	token    string
@@ -204,7 +209,8 @@ func New(opts Options) *Supervisor {
 		opts.OnStatus = func(StatusChange) {}
 	}
 	s := &Supervisor{
-		opts: opts,
+		opts:         opts,
+		startProcess: process.Start,
 		// No overall timeout: event streams stay open. Loopback only, so dialing is instant or refused.
 		client:  &http.Client{Transport: &http.Transport{Proxy: nil, DisableCompression: true, MaxIdleConnsPerHost: 16}},
 		agents:  map[string]*agentState{},
@@ -406,6 +412,11 @@ func (s *Supervisor) start(ctx context.Context, id string, st *agentState, spec 
 }
 
 func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline time.Time) (*proc, error) {
+	launchCtx, cancelLaunch := context.WithDeadline(ctx, deadline)
+	defer cancelLaunch()
+	if err := launchCtx.Err(); err != nil {
+		return nil, err
+	}
 	logs, err := openLog(spec.LogDir)
 	if err != nil {
 		return nil, err
@@ -434,36 +445,41 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 	}
 	args := append(append([]string{}, s.opts.Runtime.Args...), s.opts.Runtime.Script)
 	cmd := exec.Command(s.opts.Runtime.Node, args...)
+	p.cmd = cmd
 	cmd.Dir = s.opts.Runtime.Dir
 	cmd.Env = make([]string, 0, len(env))
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Bound exec's stderr copier even if an escaped descendant keeps it open.
+	cmd.WaitDelay = 2 * time.Second
 	if s.opts.RedactLog != nil {
 		logs.redact = s.opts.RedactLog(env)
 	}
 	cmd.Stderr = logs
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		logs.Close()
+		p.close()
 		return nil, err
 	}
+	p.stdout = stdout
 	if p.stdin, err = cmd.StdinPipe(); err != nil {
-		logs.Close()
+		p.close()
 		return nil, err
 	}
-	p.cmd = cmd
 	// The key works from the first instant: the runtime reports its threads as soon as it starts.
 	s.registerKey(p)
 	logs.Note(fmt.Sprintf("starting runtime (revision %d)", spec.Revision))
-	if err := cmd.Start(); err != nil {
+	p.tree, err = s.startProcess(launchCtx, cmd)
+	if err != nil {
 		s.unregisterKey(p)
-		logs.Close()
+		p.close()
 		return nil, &StartError{AgentID: id, Code: -1, Message: "could not run node: " + err.Error()}
 	}
 	ready := make(chan int, 1)
+	readDone := make(chan struct{})
 	go func() {
+		defer close(readDone)
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -484,7 +500,8 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 		io.Copy(io.Discard, stdout)
 	}()
 	go func() {
-		err := cmd.Wait()
+		err := p.tree.Wait()
+		<-readDone
 		p.exitCode = cmd.ProcessState.ExitCode()
 		if err != nil && p.exitCode == -1 {
 			p.exitCode = -1
@@ -501,7 +518,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 		return p, nil
 	case <-p.done:
 		s.unregisterKey(p)
-		logs.Close()
+		p.close()
 		return nil, &StartError{AgentID: id, Code: p.exitCode, Message: exitReason(p.exitCode, logs.Tail())}
 	case <-timer.C:
 	case <-ctx.Done():
@@ -509,7 +526,7 @@ func (s *Supervisor) spawn(ctx context.Context, id string, spec Spec, deadline t
 	s.kill(p)
 	<-p.done
 	s.unregisterKey(p)
-	logs.Close()
+	p.close()
 	return nil, &StartError{AgentID: id, Code: -1, Message: "the runtime did not start in time"}
 }
 
@@ -554,7 +571,7 @@ func (s *Supervisor) monitor(id string, st *agentState, p *proc) {
 	defer s.wg.Done()
 	<-p.done
 	s.unregisterKey(p)
-	p.log.Close()
+	p.close()
 	s.mu.Lock()
 	if st.proc == p {
 		st.proc = nil
@@ -595,9 +612,35 @@ func (s *Supervisor) monitor(id string, st *agentState, p *proc) {
 	}()
 }
 
+// close releases launch resources once, including on failures before Start.
+// Keep Tree.Close after stopping/reaping: Windows will need its job handle here.
+func (p *proc) close() {
+	p.cleanup.Do(func() {
+		if p.stdin != nil {
+			p.stdin.Close()
+		}
+		if p.tree != nil {
+			p.tree.Close()
+		} else if p.cmd != nil {
+			// A refusal before cmd.Start leaves both child pipe ends open;
+			// os/exec only cleans them when Start itself is attempted.
+			if f, ok := p.cmd.Stdin.(io.Closer); ok {
+				f.Close()
+			}
+			if f, ok := p.cmd.Stdout.(io.Closer); ok {
+				f.Close()
+			}
+		}
+		if p.stdout != nil {
+			p.stdout.Close()
+		}
+		p.log.Close()
+	})
+}
+
 func (s *Supervisor) kill(p *proc) {
-	if p.cmd.Process != nil {
-		syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+	if p.tree != nil {
+		_ = p.tree.KillTree()
 	}
 }
 
@@ -607,17 +650,9 @@ func (s *Supervisor) stopProc(st *agentState, p *proc) {
 	s.mu.Lock()
 	p.stopping = true
 	s.mu.Unlock()
-	if p.cmd.Process != nil {
-		syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
-	}
-	select {
-	case <-p.done:
-	case <-time.After(s.opts.StopGrace):
-		slog.Warn("agent runtime ignored SIGTERM; killing it", "agent", p.agentID)
-		s.kill(p)
-		<-p.done
-	}
-	p.stdin.Close()
+	_ = p.tree.GracefulStop(s.opts.StopGrace)
+	<-p.done
+	p.close()
 	s.mu.Lock()
 	if st.proc == p {
 		st.proc = nil

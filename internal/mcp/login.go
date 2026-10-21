@@ -92,17 +92,17 @@ func (c *Catalog) Login(ctx context.Context, slug string) (LoginStatus, error) {
 	}
 
 	runCtx, cancel := context.WithTimeout(context.Background(), loginTimeout)
-	cmd := exec.CommandContext(runCtx, *s.Command, s.LoginArgs...)
+	cmd := exec.Command(*s.Command, s.LoginArgs...)
 	cmd.Env = loginEnv(env)
 	cmd.Dir = loginDir(s.Cwd)
 	run := &loginRun{cancel: cancel}
 	cmd.Stdout, cmd.Stderr = run, run // stdin is /dev/null: a sign-in can't wait for typing here
 	cmd.WaitDelay = 3 * time.Second
-	ownGroup(cmd)
 
 	now := time.Now().UnixMilli()
 	run.status = LoginStatus{Slug: slug, State: "running", StartedAt: &now}
-	if err := cmd.Start(); err != nil {
+	tree, err := startCommand(ctx, runCtx, cmd)
+	if err != nil {
 		cancel()
 		end := time.Now().UnixMilli()
 		run.status.State, run.status.FinishedAt = "failed", &end
@@ -140,7 +140,8 @@ func (c *Catalog) Login(ctx context.Context, slug string) (LoginStatus, error) {
 	}()
 	go func() {
 		defer c.loginsWG.Done()
-		err := cmd.Wait()
+		err := tree.Wait()
+		tree.Close()
 		close(done)
 		cancel()
 		end := time.Now().UnixMilli()

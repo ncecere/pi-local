@@ -44,7 +44,7 @@ type probeEvent struct {
 // run starts the probe and hands each event to onEvent; it returns the final event (result or error).
 func (p *Prober) run(ctx context.Context, request map[string]any, onEvent func(probeEvent)) (probeEvent, error) {
 	args := append(append([]string{}, p.Runtime.Args...), p.Runtime.Script, "mcp-probe")
-	cmd := exec.CommandContext(ctx, p.Runtime.Node, args...)
+	cmd := exec.Command(p.Runtime.Node, args...)
 	cmd.Dir = p.Runtime.Dir
 	for k, v := range p.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -58,11 +58,19 @@ func (p *Prober) run(ctx context.Context, request map[string]any, onEvent func(p
 	var stderr strings.Builder
 	cmd.Stderr = &limitedWriter{b: &stderr, max: 16 << 10}
 	cmd.WaitDelay = 2 * time.Second
-	// Cancelled (a timeout, the app quitting): stop the server it started too, not only the probe.
-	ownGroup(cmd)
-	if err := cmd.Start(); err != nil {
+	// JSON owns stdin: cancellation uses TERM then bounded tree escalation,
+	// not the runtime's stdin EOF watchdog or CommandContext's leader-only kill.
+	tree, err := startCommand(ctx, ctx, cmd)
+	if err != nil {
+		stdout.Close()
+		// Before-Start refusal doesn't run os/exec's pipe cleanup.
+		if child, ok := cmd.Stdout.(*os.File); ok {
+			child.Close()
+		}
 		return probeEvent{}, fmt.Errorf("could not run the probe: %w", err)
 	}
+	defer tree.Close()
+	defer stdout.Close()
 	var last probeEvent
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
@@ -76,7 +84,7 @@ func (p *Prober) run(ctx context.Context, request map[string]any, onEvent func(p
 			onEvent(ev)
 		}
 	}
-	cmd.Wait()
+	tree.Wait()
 	if last.Type != "result" && last.Type != "error" {
 		if ctx.Err() != nil {
 			return probeEvent{Type: "error", Code: "timeout", Message: "The server took too long to answer."}, nil
