@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/v05-foundations.yml'
       - 'internal/datalock/**'
+      - 'internal/process/**'
+      - 'internal/runtimeenv/**'
+      - 'internal/supervisor/**'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:
@@ -13,8 +16,8 @@ permissions:
   contents: read
 
 jobs:
-  datalock:
-    name: Data-directory lock (${{ matrix.os }})
+  contracts:
+    name: Lock, process and environment (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -26,14 +29,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Native locking and crash-release contract
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.0
+      - name: Native foundation contracts
         shell: bash
         env:
           CGO_ENABLED: '1'
         run: |
           set -euo pipefail
           go version
-          go test -count=1 -race -v ./internal/datalock
-          go vet ./internal/datalock
-# These are isolated kernel-lock contract tests using synthetic temporary directories.
+          go test -count=1 -race -v ./internal/datalock ./internal/process ./internal/runtimeenv
+          go vet ./internal/datalock ./internal/process ./internal/runtimeenv
+# These are isolated contract tests using synthetic temporary directories and helper processes.
 # Windows Server CI is not Windows 11 UI evidence; no WebView, sandbox, keyring or installer parity is claimed.
