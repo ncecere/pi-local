@@ -145,7 +145,11 @@ describe('Native chat titlebar contract', () => {
     expect(row).toContain('height: var(--native-titlebar-height);');
     expect(row).toContain('flex-shrink: 0;');
     expect(row).toContain('--wails-draggable: drag;');
-    const floating = rule(`${mac} [data-floating-controls]`);
+    // Conversation Documents/Activity buttons share this marker but own their offsets and surface styles.
+    const anyFloating = rule(`${mac} [data-floating-controls]`);
+    expect(anyFloating).toContain('--wails-draggable: no-drag;');
+    expect(anyFloating).not.toMatch(/(?:top|padding|border|background|box-shadow):/);
+    const floating = rule(`${mac} [data-chat-titlebar] [data-floating-controls]`);
     for (const declaration of [
       'top: 11px;',
       'padding: 0;',
@@ -157,7 +161,9 @@ describe('Native chat titlebar contract', () => {
       expect(floating).toContain(declaration);
     }
     expect(rule(`${mac} [data-titlebar]`)).toContain('padding-left: 80px;');
-    expect(rule(`${mac} [data-floating-controls="left"]`)).toContain('left: 80px;');
+    expect(rule(`${mac} [data-chat-titlebar] [data-floating-controls="left"]`)).toContain(
+      'left: 80px;',
+    );
     expect(rule(`${mac} [data-titlebar] :is(a, button)`)).toContain('--wails-draggable: no-drag;');
     expect(rule(`${mac} [data-banners]`)).toContain('padding-top: 0;');
     // This remains a separate drag-region setting, not the measured chrome height.

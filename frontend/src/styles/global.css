@@ -221,6 +221,9 @@ html[data-shell="desktop-mac"] [data-titlebar] :is(a, button) {
   --wails-draggable: no-drag;
 }
 html[data-shell="desktop-mac"] [data-floating-controls] {
+  --wails-draggable: no-drag;
+}
+html[data-shell="desktop-mac"] [data-chat-titlebar] [data-floating-controls] {
   top: 11px;
   padding: 0;
   border: 0;
@@ -228,7 +231,7 @@ html[data-shell="desktop-mac"] [data-floating-controls] {
   box-shadow: none;
   --wails-draggable: no-drag;
 }
-html[data-shell="desktop-mac"] [data-floating-controls="left"] {
+html[data-shell="desktop-mac"] [data-chat-titlebar] [data-floating-controls="left"] {
   left: 80px;
 }
 /* The native header itself reserves the controls' strip; do not reserve it a second time below. */
