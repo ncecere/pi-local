@@ -1215,6 +1215,9 @@ export type ChatDetails = { details?: unknown; detailsOmitted?: true };
 /** A tool call of the current round. */
 export type ChatTool = {
   callId: string;
+  /** Stable occurrence identity; callId remains the provider's protocol ID. */
+  instanceId?: string;
+  taskId?: string;
   name: string;
   status: string;
   output?: string;
@@ -1222,6 +1225,9 @@ export type ChatTool = {
 
 export type ChatToolCall = {
   id: string;
+  /** Stable across reloads, pagination and delta frames. Absent on older runtimes. */
+  instanceId?: string;
+  taskId?: string;
   name: string;
   arguments: unknown;
   startedAt?: number;
@@ -1232,6 +1238,8 @@ export type ChatToolCall = {
 /** A request to approve a tool call: pending, or how it was decided. */
 export type ChatApproval = {
   id: string;
+  /** Opaque durable tool-task identity, not a reusable provider call ID. */
+  taskId?: string;
   callId: string;
   tool: string;
   status: ApprovalStatus;
@@ -1285,6 +1293,8 @@ export type ChatToolMessage = {
   id: string;
   role: 'tool';
   toolCallId: string;
+  instanceId?: string;
+  taskId?: string;
   name: string;
   text: string;
   isError: boolean;

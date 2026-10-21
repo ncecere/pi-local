@@ -178,6 +178,9 @@ describe("the chat view", () => {
 				entry(5, "pi.tool", [{ role: "toolResult", toolCallId: "call1", toolName: "get_time", content: [{ type: "text", text: "noon" }], isError: false, timestamp: 3200 }]),
 			],
 			undefined,
+			undefined,
+			undefined,
+			{ byTask: new Map(), byInstance: new Map(), liveSources: new Map(), results: new Map([["e5", "e4/tool/call1"]]) },
 		);
 		expect(view.messages[0]).toEqual({ id: "e1", role: "user", text: "old message", at: 1000 });
 		expect(view.messages[1]).toEqual({ id: "e2", role: "user", text: "no time" });

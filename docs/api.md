@@ -473,6 +473,16 @@ type Approval = {
 
 Live events: `event: approval`, `data: {agentId, approval: Approval}` whenever one is asked or changes. In a
 thread's view, `ChatView.approvals` lists its pending requests and a tool call carries `approval` (runtime view.ts).
+
+Tool calls, results and live slots may carry an optional `instanceId`, a stable transcript-occurrence identity, and
+an optional opaque `taskId` identifying the durable tool task. Approval objects carry the same `taskId`. Provider
+`id`/`callId`/`toolCallId` fields are unchanged and may repeat across rounds or replies; they are not approval or
+transcript identities. Match results by `instanceId` and pending requests by `taskId` (or an already attached exact
+approval record ID), including in paged views and delta streams. When that exact association is unavailable, display
+the pending request separately with its own record ID and arguments, never suppress it because an older call with the
+same provider ID completed. Older runtimes omit these optional identities; their requests remain decidable as separate
+cards. Identity is presentation metadata only: decisions still name the exact approval record, and permissions are not
+reused.
 A view's `ChatApproval` has `source`: what made the call ask, one of `builtin`, `rule` (an ask rule), `profile`,
 `tools` (the custom list), `judge` (fast judgments) or `author` (an agent's own code). Its `summary` says why for
 `builtin`, `rule` and `judge`.

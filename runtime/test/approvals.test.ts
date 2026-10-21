@@ -64,6 +64,92 @@ function apiTool() {
 }
 
 describe("tool approvals", () => {
+	for (const sameReply of [false, true]) {
+		it(`reused provider IDs keep exact approvals and results ${sameReply ? "across rounds of one reply" : "across user replies"}, reloads and paged deltas`, async () => {
+			const model = fakeModel();
+			const { runs, definition } = apiTool();
+			const firstArgs = { url: "https://example.com/a" };
+			const secondArgs = { url: "https://example.com/b" };
+			model.reply(toolCall("call_api", firstArgs, { id: "call_1" }));
+			if (sameReply) model.reply(toolCall("call_api", secondArgs, { id: "call_1" }), "Done.");
+			else model.reply("A done.");
+			let agent = track(await startTestAgent(definition, { model, env: marks(["call_api"]) }));
+			await agent.send("t", "first");
+			const a = await agent.pendingApproval("t");
+			await agent.decide(a.id, "approve");
+			if (!sameReply) {
+				await agent.settled("t");
+				model.reply(toolCall("call_api", secondArgs, { id: "call_1" }), "B done.");
+				await agent.send("t", "second");
+			}
+			const b = await agent.pendingApproval("t");
+			expect(b.id).not.toBe(a.id);
+			expect(b.arguments).toEqual(secondArgs);
+			const calls = (v: ChatView) => v.messages.flatMap((m) => m.role === "assistant" ? m.toolCalls ?? [] : []);
+			const waiting = (await agent.view("t"))!;
+			const [old, current] = calls(waiting);
+			expect(old).toMatchObject({ id: "call_1", approval: { id: a.id, status: "approved" }, endedAt: expect.any(Number) });
+			expect(current).toMatchObject({ id: "call_1", arguments: secondArgs, approval: { id: b.id, status: "pending" } });
+			expect(current).not.toHaveProperty("endedAt");
+			expect(current!.instanceId).not.toBe(old!.instanceId);
+			expect(waiting.approvals).toEqual([expect.objectContaining({ id: b.id, taskId: current!.taskId, arguments: secondArgs })]);
+			expect(runs).toEqual([firstArgs]);
+			const result = waiting.messages.find((m) => m.role === "tool");
+			expect(result).toMatchObject({ instanceId: old!.instanceId, taskId: old!.taskId });
+
+			// A fresh server/index reads the exact same associations from durable task inputs.
+			agent = track(await agent.restart({ graceful: true }));
+			const restored = (await agent.view("t"))!;
+			expect(calls(restored)).toEqual(calls(waiting));
+			const getPage = async () => {
+				const res = await fetch(`${agent.baseUrl}/threads/t?limit=1`, { headers: { authorization: `Bearer ${agent.token}` } });
+				return (await res.json() as { data: ChatView }).data;
+			};
+			const page = await getPage();
+			expect(calls(page)).toEqual([current]);
+			expect(page.approvals).toEqual(restored.approvals);
+			const aborter = new AbortController();
+			cleanup.push(async () => aborter.abort());
+			const stream = follow(`${agent.baseUrl}/threads/t/events?format=delta&v=1&limit=1`, agent.token, aborter.signal);
+			let projected: ChatView | undefined;
+			const project = () => {
+				projected = undefined;
+				for (const e of stream.events) projected = applyDelta(projected, JSON.parse(e.data) as DeltaEvent);
+			};
+			await until(() => { project(); return projected !== undefined; });
+			expect(projected).toEqual(page);
+			await agent.decide(b.id, "approve");
+			const final = await agent.settled("t");
+			await until(() => { project(); return projected?.busy === false && calls(projected).at(-1)?.approval?.status === "approved"; });
+			expect(projected).toEqual({ ...final, messages: final.messages.slice(final.messages.findIndex((m) => m.id === page.messages[0]!.id)), earlierCursor: page.earlierCursor });
+			expect(runs).toEqual([firstArgs, secondArgs]);
+			expect(calls(final)[0]).toEqual(old);
+			expect(calls(final)[1]).toMatchObject({ instanceId: current!.instanceId, approval: { id: b.id, status: "approved" }, endedAt: expect.any(Number) });
+		}, 30_000);
+	}
+
+	it("parallel pending tools retain separate durable identities and exact arguments", async () => {
+		const model = fakeModel();
+		const { runs, definition } = apiTool();
+		const first = toolCall("call_api", { url: "https://example.com/a" }, { id: "a" });
+		const second = toolCall("call_api", { url: "https://example.com/b" }, { id: "b" });
+		model.reply({ ...first, content: [...first.content, ...second.content] }, "Done.");
+		const agent = track(await startTestAgent(definition, { model, env: marks(["call_api"]) }));
+		await agent.send("t", "both");
+		await until(async () => (await agent.approvals("t")).filter((a) => a.status === "pending").length === 2);
+		const view = (await agent.view("t"))!;
+		const calls = view.messages.flatMap((m) => m.role === "assistant" ? m.toolCalls ?? [] : []);
+		expect(new Set(calls.map((c) => c.instanceId)).size).toBe(2);
+		expect(new Set(calls.map((c) => c.taskId)).size).toBe(2);
+		for (const pending of view.approvals ?? []) {
+			const call = calls.find((c) => c.taskId === pending.taskId)!;
+			expect(call.approval?.id).toBe(pending.id);
+			expect(call.arguments).toEqual(pending.arguments);
+			await agent.decide(pending.id, "deny");
+		}
+		await agent.settled("t");
+		expect(runs).toEqual([]);
+	});
 	it("a marked tool waits until a person approves it, then runs; the view shows the request and the decision", async () => {
 		const model = fakeModel();
 		model.reply(toolCall("get_time", {}, { id: "c1" }), "Done.");

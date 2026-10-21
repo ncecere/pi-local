@@ -109,6 +109,20 @@ function windowOf(view: ChatView, client: ChatView): ChatView {
 }
 
 describe("delta events", () => {
+	it("replaces reused provider IDs and newly assigned task identities between coalesced frames", () => {
+		const stream = new DeltaStream(undefined, 0, () => 10_000);
+		let view: ChatView = { busy: true, messages: [], tools: [{ callId: "call_1", instanceId: "e1/tool/call_1", taskId: "t1", name: "bash", status: "running", output: "old" }] };
+		let held = applyDelta(undefined, stream.next(view)[0]!);
+		view = { ...view, tools: [{ callId: "call_1", instanceId: "e2/tool/call_1", taskId: "t2", name: "bash", status: "pending" }] };
+		const events = stream.next(view);
+		expect(events.map((e) => e.type)).toEqual(["tools.set"]);
+		for (const event of events) held = applyDelta(held, event);
+		expect(held).toEqual(view);
+		view = { ...view, tools: [{ callId: "call_1", instanceId: "e2/tool/call_1", name: "bash", status: "pending" }] };
+		for (const event of stream.next(view)) held = applyDelta(held, event);
+		expect(held).toEqual(view);
+	});
+
 	it("applied in order, give the view a snapshot would (random evolutions)", () => {
 		for (let seed = 1; seed <= 400; seed++) {
 			const r = rng(seed);
