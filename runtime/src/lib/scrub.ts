@@ -1,6 +1,6 @@
 import { format } from "node:util";
 import { defineExtension, type Extension, hook, type ToolExecutionResult, ToolTask, type ToolRegistration } from "@earendil-works/pi-durable";
-import { isSecretKey, type RedactMarks, redactText } from "./redact.ts";
+import { isSecretKey, isSecretValue, type RedactMarks, redactText } from "./redact.ts";
 
 /**
  * Secret scrubbing (docs/api.md, "Hiding secrets"): what a tool returns is cleaned before the model sees it and before
@@ -34,8 +34,8 @@ const MIN_SECRET = 6;
 
 /**
  * The values to hide from one setting: all of it, from 6 characters, except what is plainly no credential (a flag, a
- * number, a path, a URL without a password, a media type: `true`, `8080`, `/usr/bin`, `application/json`). The app keeps
- * an MCP server's env and header values as secrets, so every one of them is hidden by its value, whatever its name.
+ * number, a path, a URL without a password, a media type: `true`, `8080`, `/usr/bin`, `application/json`). For a
+ * setting whose name doesn't say whether it is a credential, see `settingSecrets`.
  */
 export function secretsFrom(_name: string, value: unknown): string[] {
 	if (typeof value !== "string") return [];
@@ -48,6 +48,25 @@ export function secretsFrom(_name: string, value: unknown): string[] {
 	if (userinfo) found.add(decodeURIComponentSafe(userinfo[1]!)).add(userinfo[1]!);
 	if (userinfo || !noCredential(v)) found.add(v);
 	return [...found].filter((x) => x.length >= MIN_SECRET);
+}
+
+/**
+ * The values to hide from an MCP server's env or header setting, or a provider's extra header. The app keeps them all
+ * in the keychain, but most are plain settings (`MODE=production`, `X-Org: acme`), and hiding those would corrupt tool
+ * output wherever the word appears. So a value is hidden when its name says it's a credential (`API_KEY`,
+ * `Authorization`), when it looks like one (a known token format, a JWT), or when it is long and random-looking (20+
+ * characters mixing letters and digits, no spaces: a key or an ID whose name doesn't say so). A URL's password always.
+ */
+export function settingSecrets(name: string, value: unknown): string[] {
+	if (typeof value !== "string") return [];
+	const v = value.trim();
+	if (isSecretKey(name) || isSecretValue(v) || tokenLike(v)) return secretsFrom(name, v);
+	// Not itself a credential, but a URL may carry one (https://user:pass@host), and a header a scheme's token.
+	return secretsFrom(name, v).filter((x) => x !== v);
+}
+
+function tokenLike(v: string): boolean {
+	return v.length >= 20 && !/\s/.test(v) && /[0-9]/.test(v) && /[A-Za-z]/.test(v) && !noCredential(v);
 }
 
 /** A value that is no credential for want of looking like one: a flag, a number, a path, a URL, a media type. */
@@ -70,8 +89,8 @@ function decodeURIComponentSafe(v: string): string {
 /** What the secrets of an MCP server are: its env and header values, and what its URL carries (a password, a key). */
 export function serverSecrets(server: ServerSecrets): string[] {
 	const out: string[] = [];
-	for (const [name, value] of Object.entries(server.env ?? {})) out.push(...secretsFrom(name, value));
-	for (const [name, value] of Object.entries(server.headers ?? {})) out.push(...secretsFrom(name, value));
+	for (const [name, value] of Object.entries(server.env ?? {})) out.push(...settingSecrets(name, value));
+	for (const [name, value] of Object.entries(server.headers ?? {})) out.push(...settingSecrets(name, value));
 	if (typeof server.url === "string") {
 		try {
 			const url = new URL(server.url);
@@ -94,7 +113,7 @@ export function environmentSecrets(env: Record<string, string | undefined>): str
 	try {
 		// The provider's extra request headers (MODEL_HEADERS, a JSON object) are credentials too.
 		const headers = JSON.parse(env.MODEL_HEADERS || "{}") as unknown;
-		if (headers && typeof headers === "object") for (const [name, value] of Object.entries(headers)) out.push(...secretsFrom(name, value));
+		if (headers && typeof headers === "object") for (const [name, value] of Object.entries(headers)) out.push(...settingSecrets(name, value));
 	} catch {
 		// not JSON: nothing to hide
 	}

@@ -41,15 +41,15 @@ func TestAStdioMCPServer(t *testing.T) {
 	// Added and tested at once: its tools, the app-only one marked.
 	s := decodeInto[mcpServerJSON](t, h.mustDo("POST", "/api/mcp/servers", map[string]any{
 		"name": "Fixture", "transport": "stdio", "command": node, "args": []string{fixture("stdio-mcp-server.mjs")},
-		"env": map[string]string{"FIXTURE_VALUE": "from-the-keychain"},
+		"env": map[string]string{"FIXTURE_VALUE": "fk9f8e7d6c5b4a3210fedcba"},
 	}, 201))
 	if s.Slug != "fixture" || s.TestedAt == nil || len(s.Tools) != 3 || s.Tools[1].Name != "app_only" || s.Tools[1].ModelVisible {
 		t.Fatalf("the tested server: %+v (error %v)", s, s.LastError)
 	}
-	if v, _ := keychain.Get("mcp:fixture:env"); !strings.Contains(v, "from-the-keychain") {
+	if v, _ := keychain.Get("mcp:fixture:env"); !strings.Contains(v, "fk9f8e7d6c5b4a3210fedcba") {
 		t.Fatalf("the env value should be in the keychain: %q", v)
 	}
-	if strings.Contains(string(dbBytes(t, h.app.cfg.DataDir)), "from-the-keychain") {
+	if strings.Contains(string(dbBytes(t, h.app.cfg.DataDir)), "fk9f8e7d6c5b4a3210fedcba") {
 		t.Fatal("an env value was written to app.db")
 	}
 
@@ -59,7 +59,7 @@ func TestAStdioMCPServer(t *testing.T) {
 	v := h.sendAndWait(agent, "t1", `CALL:mcp__fixture__echo:{"text":"hi"}`, "r1")
 	reply := lastReply(v)
 	ws, _ := filepath.EvalSymlinks(filepath.Join(h.app.cfg.DataDir, "agents", agent, "workspace"))
-	if !strings.Contains(reply, "echo: hi") || !strings.Contains(reply, "value: [redacted secret]") || strings.Contains(reply, "from-the-keychain") || !strings.Contains(reply, "cwd: "+ws) {
+	if !strings.Contains(reply, "echo: hi") || !strings.Contains(reply, "value: [redacted secret]") || strings.Contains(reply, "fk9f8e7d6c5b4a3210fedcba") || !strings.Contains(reply, "cwd: "+ws) {
 		t.Fatalf("the MCP tool's answer: %q (workspace %s)", reply, ws)
 	}
 
@@ -290,7 +290,7 @@ func TestALocalServersSignInCommand(t *testing.T) {
 	node, _ := exec.LookPath("node")
 	h.mustDo("POST", "/api/mcp/servers", map[string]any{
 		"name": "Fixture", "transport": "stdio", "command": node, "args": []string{fixture("stdio-mcp-server.mjs")},
-		"env": map[string]string{"FIXTURE_VALUE": "from-the-keychain"},
+		"env": map[string]string{"FIXTURE_VALUE": "fk9f8e7d6c5b4a3210fedcba"},
 		// Prints a link (in colour, as CLIs do), sees the server's env, and succeeds.
 		"loginArgs": []string{"-e", `console.log("\x1b[1mOpen https://login.example.test/device and enter ABCD-1234\x1b[0m"); console.error("value=" + process.env.FIXTURE_VALUE); setTimeout(() => process.exit(0), 300)`},
 	}, 201)
@@ -315,7 +315,7 @@ func TestALocalServersSignInCommand(t *testing.T) {
 	if !strings.Contains(st.Output, "Open https://login.example.test/device and enter ABCD-1234\n") || strings.Contains(st.Output, "\x1b") {
 		t.Fatalf("output (escape codes dropped): %q", st.Output)
 	}
-	if !strings.Contains(st.Output, "value=from-the-keychain") {
+	if !strings.Contains(st.Output, "value=fk9f8e7d6c5b4a3210fedcba") {
 		t.Fatalf("the sign-in should run with the server's env: %q", st.Output)
 	}
 	sawLogin := false

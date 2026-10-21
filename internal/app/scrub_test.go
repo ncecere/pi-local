@@ -156,15 +156,15 @@ func TestAnMCPServersOwnSecretsAreScrubbedAndKeptOutOfTheLog(t *testing.T) {
 	node, _ := exec.LookPath("node")
 	h.mustDo("POST", "/api/mcp/servers", map[string]any{
 		"name": "Fixture", "transport": "stdio", "command": node, "args": []string{fixture("stdio-mcp-server.mjs")},
-		"env": map[string]string{"FIXTURE_VALUE": "from-the-keychain", "FIXTURE_LOG_VALUE": "1"},
+		"env": map[string]string{"FIXTURE_VALUE": "fk9f8e7d6c5b4a3210fedcba", "FIXTURE_LOG_VALUE": "1"},
 	}, 201)
 	agent, fake := scrubAgent(t, h, map[string]any{"mcp": []map[string]any{{"server": "fixture"}}})
 
 	v := h.sendAndWait(agent, "t1", `CALL:mcp__fixture__echo:{"text":"hi"}`, "r1")
-	if got := toolResults(v); len(got) != 1 || !strings.Contains(got[0], "echo: hi") || !strings.Contains(got[0], "value: [redacted secret]") || strings.Contains(got[0], "from-the-keychain") {
+	if got := toolResults(v); len(got) != 1 || !strings.Contains(got[0], "echo: hi") || !strings.Contains(got[0], "value: [redacted secret]") || strings.Contains(got[0], "fk9f8e7d6c5b4a3210fedcba") {
 		t.Fatalf("the MCP result: %q", got)
 	}
-	if body := lastChat(fake); strings.Contains(body, "from-the-keychain") {
+	if body := lastChat(fake); strings.Contains(body, "fk9f8e7d6c5b4a3210fedcba") {
 		t.Fatalf("the model was shown the server's secret: %.600s", body)
 	}
 	// The server wrote its secret to stderr; the agent's log has it hidden.
@@ -174,19 +174,19 @@ func TestAnMCPServersOwnSecretsAreScrubbedAndKeptOutOfTheLog(t *testing.T) {
 		log = string(raw)
 		return strings.Contains(log, "fixture: value")
 	})
-	if strings.Contains(log, "from-the-keychain") || strings.Contains(log, scrubModelKey) || !strings.Contains(log, "fixture: value [redacted secret]") {
+	if strings.Contains(log, "fk9f8e7d6c5b4a3210fedcba") || strings.Contains(log, scrubModelKey) || !strings.Contains(log, "fixture: value [redacted secret]") {
 		t.Fatalf("the log:\n%s", log)
 	}
 
 	// Off for this agent: the result shows it.
 	h.mustDo("PATCH", "/api/agents/"+agent, map[string]any{"security": map[string]any{"scrubSecrets": false}}, 200)
 	v = h.sendAndWait(agent, "t2", `CALL:mcp__fixture__echo:{"text":"hi"}`, "r2")
-	if got := toolResults(v); len(got) != 1 || !strings.Contains(got[0], "value: from-the-keychain") {
+	if got := toolResults(v); len(got) != 1 || !strings.Contains(got[0], "value: fk9f8e7d6c5b4a3210fedcba") {
 		t.Fatalf("with scrubbing off: %q", got)
 	}
 	// The log is clean whatever the switch says.
 	raw, _ := os.ReadFile(h.agentFile(agent, "logs", "runtime.log"))
-	if strings.Contains(string(raw), "from-the-keychain") {
+	if strings.Contains(string(raw), "fk9f8e7d6c5b4a3210fedcba") {
 		t.Fatalf("the log has the secret with scrubbing off:\n%s", raw)
 	}
 }

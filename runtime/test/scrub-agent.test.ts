@@ -74,7 +74,7 @@ describe("tool results are scrubbed before the model sees them and before they a
 			command: process.execPath,
 			args: [FIXTURE],
 			cwd: dir,
-			env: { FIXTURE_VALUE: "resolved-secret" },
+			env: { FIXTURE_VALUE: "rs9f8e7d6c5b4a3210fedcba" },
 			tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object", properties: { text: { type: "string" } } } }],
 		};
 		const agent = await startTestAgent(undefined, { env: { MCP_SERVERS: JSON.stringify([server]) } });
@@ -90,7 +90,7 @@ describe("tool results are scrubbed before the model sees them and before they a
 		expect(text).toContain("echo: my token is [redacted secret]");
 		expect(text).toContain("value: [redacted secret]");
 		expect(text).toContain("cwd:");
-		expect(JSON.stringify(view) + seen.join("")).not.toContain("resolved-secret");
+		expect(JSON.stringify(view) + seen.join("")).not.toContain("rs9f8e7d6c5b4a3210fedcba");
 		// The token is in the model's own call (its argument); the server's reply, stored and shown to the model, has none.
 		expect(seen.join("")).toContain('"content":[{"type":"text","text":"echo: my token is [redacted secret]');
 	}, 20_000);

@@ -958,10 +958,12 @@ command printed or a server returned never reaches the model, the transcript or 
   lower case and digits). Hashes, UUIDs, git SHAs, long paths, identifiers and prose are left alone. A word judged by its
   parts when it holds `=`, `?`, `&`, `@` or `:` (`SHA=<hash>`, a URL's query), and a path only for a known token shape.
 - **The runtime's own secrets, found by value**: its model key (`MODEL_API_KEY`), the provider's extra headers
-  (`MODEL_HEADERS`), its gateway key (`PLATFORM_KEY`, `MODEL_USAGE_KEY`, `MCP_KEY`), and every env and header value of its
-  MCP servers (the app keeps them as secrets), including the servers apps give a thread. At least 6 characters; not a flag,
-  a number, a path, a URL without a password or a media type; also as JSON-escaped or URL-encoded. The values are never
-  listed in a message, a log or a setting.
+  (`MODEL_HEADERS`), its gateway key (`PLATFORM_KEY`, `MODEL_USAGE_KEY`, `MCP_KEY`), and its MCP servers' env and header
+  values that are credentials, including the servers apps give a thread: named like one (`API_KEY`, `Authorization`,
+  `…_TOKEN`), looking like one (a known token format, a JWT), or long and random-looking (20+ characters of letters and
+  digits, no spaces), plus a URL's password. Plain settings (`MODE=production`, `X-Org: acme`) are not hidden: they
+  would corrupt every output that says the word. At least 6 characters; also as JSON-escaped or URL-encoded. The values
+  are never listed in a message, a log or a setting.
 
 Where: the tool task's `afterTool` hook (every tool's final result: MCP results, `bash`, `read`, web fetch and search,
 `ask_person` answers, subagents', a program's nested calls) and, for a tool still running, what it reports on the way

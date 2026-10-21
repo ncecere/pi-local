@@ -98,18 +98,20 @@ describe("agreement with the approvals view", () => {
 
 describe("the runtime's own secrets", () => {
 	const mcp = JSON.stringify([
-		{ slug: "gh", name: "GitHub", url: "https://mcp.example/gh", headers: { Authorization: "Bearer tok_live_zzzz1111", "X-Team": "alpha-team-42" } },
-		{ slug: "fs", name: "Files", transport: "stdio", command: "node", env: { PLAIN: "production", WORKSPACE: "/Users/ann/work", PORT: "8080", NOTE: "hello world there", DB: "postgres://app:pa55-w0rd@db.local/x" } },
+		{ slug: "gh", name: "GitHub", url: "https://mcp.example/gh", headers: { Authorization: "Bearer tok_live_zzzz1111", "X-Team": "alpha-team-42", "X-Api-Key": "plainish-key" } },
+		{ slug: "fs", name: "Files", transport: "stdio", command: "node", env: { PLAIN: "production", WORKSPACE: "/Users/ann/work", PORT: "8080", NOTE: "hello world there", DB: "postgres://app:pa55-w0rd@db.local/x", TENANT: "7c1e0f3a9b2d4e6f8a0b1c2d" } },
 	]);
 	const env = { MODEL_API_KEY: "pdpm.agent.ABCDEFGH1234", PLATFORM_KEY: "pl.ag_x.0123456789abcdef", MODEL_USAGE_KEY: "pl.ag_x.usage-key-xyz", MCP_SERVERS: mcp, TOOL_APPROVALS: "{}", AGENT_NAME: "Hardac" };
 
 	it("finds them by value: the keys and every env and header value of its MCP servers", () => {
 		const found = environmentSecrets(env);
-		for (const secret of ["pdpm.agent.ABCDEFGH1234", "pl.ag_x.0123456789abcdef", "pl.ag_x.usage-key-xyz", "tok_live_zzzz1111", "Bearer tok_live_zzzz1111", "alpha-team-42", "production", "pa55-w0rd"]) {
+		// Named like a credential, looking like one, long and random, or a URL's password.
+		for (const secret of ["pdpm.agent.ABCDEFGH1234", "pl.ag_x.0123456789abcdef", "pl.ag_x.usage-key-xyz", "tok_live_zzzz1111", "Bearer tok_live_zzzz1111", "plainish-key", "7c1e0f3a9b2d4e6f8a0b1c2d", "pa55-w0rd"]) {
 			expect(found, secret).toContain(secret);
 		}
-		// Flags, numbers, paths and plain URLs are no credentials; other settings are not secrets.
-		for (const not of ["8080", "/Users/ann/work", "https://mcp.example/gh", "Hardac", "{}"]) expect(found).not.toContain(not);
+		// Plain settings stay: hiding "production" would corrupt every tool output that says it. Flags, numbers, paths
+		// and plain URLs are no credentials either.
+		for (const not of ["alpha-team-42", "production", "hello world there", "8080", "/Users/ann/work", "https://mcp.example/gh", "Hardac", "{}"]) expect(found).not.toContain(not);
 	});
 
 	it("hides them wherever they show up in text, encoded or not, longest first", () => {
@@ -124,8 +126,8 @@ describe("the runtime's own secrets", () => {
 	});
 
 	it("hides the provider's extra headers, but not the stand-in key of a keyless server", () => {
-		const s = new Scrubber({ MODEL_API_KEY: "no-key", MODEL_HEADERS: JSON.stringify({ "X-Org": "org-abc-123456" }) });
-		expect(s.text("no-key org-abc-123456")).toBe(`no-key ${REDACTED}`);
+		const s = new Scrubber({ MODEL_API_KEY: "no-key", MODEL_HEADERS: JSON.stringify({ "X-Api-Key": "org-abc-123456", "X-Org": "acme-corp" }) });
+		expect(s.text("no-key org-abc-123456 acme-corp")).toBe(`no-key ${REDACTED} acme-corp`);
 	});
 
 	it("leaves short values and non-secrets alone", () => {
