@@ -1,0 +1,58 @@
+name: v0.5 offline Linux helper candidate
+on:
+  push:
+    branches: [v05/linux-sandbox-helper]
+    paths:
+      - '.github/workflows/v05-linux-helper.yml'
+      - 'cmd/pi-local-sandbox/**'
+      - 'internal/linuxsandbox/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  confinement:
+    name: Ubuntu 24.04 candidate confinement
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install distribution engine and record topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap gcc
+          test "$(id -u)" != 0
+          id
+          uname -a
+          dpkg-query -W bubblewrap
+          /usr/bin/bwrap --version
+          /usr/bin/bwrap --help
+          for path in / /usr /tmp; do findmnt -T "$path" -o TARGET,FSTYPE,PROPAGATION; done
+          # Read only: missing keys are diagnostic, never a request to change policy.
+          sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns || true
+      - name: Unit contracts and static helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race -count=1 -timeout=5m ./internal/linuxsandbox ./cmd/pi-local-sandbox
+          go vet ./internal/linuxsandbox ./cmd/pi-local-sandbox
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/pi-local-sandbox" ./cmd/pi-local-sandbox
+      - name: Explicit native candidate gate
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          PI_LOCAL_SANDBOX_NATIVE_TESTS: '1'
+        run: |
+          set -euo pipefail
+          go test -count=1 -timeout=8m -v ./internal/linuxsandbox
+# The shipped helper remains hard-disabled. This executes a test-only driver
+# using synthetic temporary data. An unavailable engine/topology is a FAILURE,
+# never a skip or permission to weaken AppArmor, namespaces or mount policies.
