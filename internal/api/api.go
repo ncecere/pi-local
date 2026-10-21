@@ -33,6 +33,7 @@ import (
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/update"
 	"github.com/ncecere/pi-local/internal/usage"
+	"github.com/ncecere/pi-local/internal/web"
 )
 
 // Runtimes is what the API needs from the supervisor.
@@ -62,6 +63,8 @@ type API struct {
 	// Desktop is the desktop app's own settings (nil in the headless server).
 	Desktop Desktop
 	Updater *update.Updater
+	// Web: the search service's settings (and a test search).
+	Web *web.Service
 	// Elicitations: MCP servers' questions to the person.
 	Elicitations *elicitations.Store
 	// SaveDialog asks where to save a file (the desktop app's native dialog); "" means cancelled. Nil: no dialog.
@@ -359,6 +362,7 @@ func (a *API) AgentJSON(ag *agents.Agent) map[string]any {
 		"dir":              ag.Dir,
 		"piDurableVersion": nullIfEmpty(ag.PiDurableVersion),
 		"workspace":        map[string]any{"tools": nonNil(ag.Config.Workspace.Tools), "folder": ag.Config.Workspace.Folder, "dir": ag.WorkspaceDir()},
+		"web":              ag.Config.Web,
 		"approvals":        map[string]any{"tools": nonNil(ag.Config.Approvals.Tools), "timeoutSeconds": ag.Config.Approvals.Timeout()},
 		"pendingApprovals": a.pendingApprovals(ag.ID),
 		"mcp":              mcpChoices(ag.Config.MCP),
@@ -462,6 +466,7 @@ type agentInput struct {
 	Approvals    *agents.Approvals      `json:"approvals"`
 	MCP          *[]agents.MCPChoice    `json:"mcp"`
 	Schedules    *agents.AgentSchedules `json:"schedules"`
+	Web          *agents.WebTools       `json:"web"`
 }
 
 func (in agentInput) apply(c *agents.Config) error {
@@ -488,6 +493,9 @@ func (in agentInput) apply(c *agents.Config) error {
 	}
 	if in.Workspace != nil {
 		c.Workspace = *in.Workspace
+	}
+	if in.Web != nil {
+		c.Web = *in.Web
 	}
 	if in.MCP != nil {
 		c.MCP = *in.MCP
@@ -539,6 +547,10 @@ func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agents.KindDefaults(cfg.Kind, &cfg)
+	// New agents can search and read the web unless the request says otherwise (read-only tools).
+	if in.Web == nil {
+		cfg.Web = agents.WebTools{Search: true, Fetch: true}
+	}
 	ag, err := a.Agents.Create(r.Context(), cfg)
 	if err != nil {
 		agentFailure(w, err)

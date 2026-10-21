@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/ncecere/pi-local/internal/agents"
 	"github.com/ncecere/pi-local/internal/models"
 	"github.com/ncecere/pi-local/internal/usage"
+	"github.com/ncecere/pi-local/internal/web"
 )
 
 func (a *API) modelRoutes(m *http.ServeMux) {
@@ -16,6 +18,11 @@ func (a *API) modelRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/providers", a.createProvider)
 	m.HandleFunc("PATCH /api/providers/{provider}", a.updateProvider)
 	m.HandleFunc("DELETE /api/providers/{provider}", a.deleteProvider)
+	m.HandleFunc("GET /api/settings/web", a.webSettings)
+	m.HandleFunc("PUT /api/settings/web", a.saveWebSettings)
+	m.HandleFunc("POST /api/settings/web/test", a.testWebSearch)
+	m.HandleFunc("GET /api/providers/detect", a.detectProviders)
+	m.HandleFunc("POST /api/providers/setup", a.setupProvider)
 	m.HandleFunc("POST /api/providers/{provider}/discover", a.discover)
 	m.HandleFunc("PUT /api/providers/{provider}/models/{model...}", a.putModel)
 	m.HandleFunc("DELETE /api/providers/{provider}/models/{model...}", a.deleteModel)
@@ -186,4 +193,71 @@ func modelRef(id string) (agents.ModelRef, bool) {
 		return agents.ModelRef{}, false
 	}
 	return agents.ModelRef{Provider: provider, ID: model}, true
+}
+
+// detectProviders: model servers running on this computer (Ollama, LM Studio), for the first run.
+func (a *API) detectProviders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ok(w, a.Catalog.Detect(r.Context()))
+}
+
+// setupProvider: a provider from a preset in one step (create, list models, add, default).
+func (a *API) setupProvider(w http.ResponseWriter, r *http.Request) {
+	var in models.SetupInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	res, err := a.Catalog.Setup(r.Context(), in)
+	if err != nil {
+		catalogFailure(w, err)
+		return
+	}
+	a.Catalog.WithUsage([]*models.Provider{res.Provider})
+	ok(w, res)
+}
+
+func webFailure(w http.ResponseWriter, err error) {
+	var we *web.Error
+	if errors.As(err, &we) {
+		fail(w, we.Status, we.Code, we.Message)
+		return
+	}
+	fail(w, http.StatusInternalServerError, "internal", err.Error())
+}
+
+// webSettings: the search service agents use (the key is never returned).
+func (a *API) webSettings(w http.ResponseWriter, r *http.Request) {
+	ok(w, a.Web.Settings())
+}
+
+func (a *API) saveWebSettings(w http.ResponseWriter, r *http.Request) {
+	var in web.SettingsInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	st, err := a.Web.Save(in)
+	if err != nil {
+		webFailure(w, err)
+		return
+	}
+	ok(w, st)
+}
+
+// testWebSearch runs one search with the saved settings: {query?} → {results}.
+func (a *API) testWebSearch(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Query string `json:"query"`
+	}
+	if r.ContentLength != 0 && !decodeBody(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Query) == "" {
+		in.Query = "Pi Local test search"
+	}
+	results, err := a.Web.Search(r.Context(), in.Query, 3)
+	if err != nil {
+		webFailure(w, err)
+		return
+	}
+	ok(w, map[string]any{"results": results})
 }

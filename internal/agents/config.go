@@ -88,6 +88,14 @@ type Config struct {
 	MCP []MCPChoice `yaml:"mcp,omitempty"`
 	// Schedules: whether it may set its own reminders and recurring work (its schedule tools).
 	Schedules AgentSchedules `yaml:"schedules,omitempty"`
+	// Web: searching the web (through the search service in Settings) and reading pages.
+	Web WebTools `yaml:"web,omitempty"`
+}
+
+// WebTools are an agent's web tools (read-only: they change nothing).
+type WebTools struct {
+	Search bool `yaml:"search,omitempty" json:"search"`
+	Fetch  bool `yaml:"fetch,omitempty" json:"fetch"`
 }
 
 // AgentSchedules is what an agent may do with schedules.

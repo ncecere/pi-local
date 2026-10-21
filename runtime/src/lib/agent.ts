@@ -24,6 +24,7 @@ import { createRuntimeServer } from "./server.ts";
 import { AgentOwnedElsewhereError, openSqliteAgentStorage } from "./storage/sqlite.ts";
 import { gatewayCall, gatewayPost, ThreadStatusReporter } from "./thread-status.ts";
 import { ThreadStore } from "./threads.ts";
+import { parseWebTools, webExtension } from "./web.ts";
 import { createWorkspaceEnv, parseWorkspaceTools, workspaceExtension } from "./workspace.ts";
 
 /** Everything one agent needs, from the environment the app starts the runtime with. */
@@ -114,11 +115,17 @@ export async function startAgent(config: AgentConfig, definition: AgentDefinitio
 	const workspaceTools = parseWorkspaceTools(config.modelEnv.WORKSPACE_TOOLS);
 	if (workspaceTools.length > 0 && !workspaceDir) throw new AgentDefinitionError("WORKSPACE_TOOLS needs WORKSPACE_DIR");
 	const workspace = workspaceExtension(workspaceTools);
+	// Web search and reading (WEB_TOOLS), through the gateway.
+	const web =
+		config.modelEnv.PLATFORM_GATEWAY_URL && config.modelEnv.PLATFORM_KEY
+			? webExtension({ gatewayUrl: config.modelEnv.PLATFORM_GATEWAY_URL, key: config.modelEnv.PLATFORM_KEY, tools: parseWebTools(config.modelEnv.WEB_TOOLS) })
+			: undefined;
 	// Asking other agents (AGENT_CALLS, with the gateway): the app decides who may be asked (agent-calls.ts).
 	const calling = config.modelEnv.AGENT_CALLS === "true" && !!config.modelEnv.PLATFORM_GATEWAY_URL && !!config.modelEnv.PLATFORM_KEY;
 	const extensions = [
 		...resolveExtensions(definition, context),
 		...(workspace ? [workspace] : []),
+		...(web ? [web] : []),
 		...(calling
 			? [
 					agentCallsExtension({

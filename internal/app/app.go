@@ -43,6 +43,7 @@ import (
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/update"
 	"github.com/ncecere/pi-local/internal/usage"
+	"github.com/ncecere/pi-local/internal/web"
 )
 
 // Config configures an App.
@@ -76,6 +77,8 @@ type App struct {
 	Schedules *schedules.Store
 	Search    *search.Store
 	Updater   *update.Updater
+	// Web is web search and page reading for agents.
+	Web *web.Service
 	// Elicitations are MCP servers' questions to the person, while a tool call waits (memory only).
 	Elicitations *elicitations.Store
 	// DB is app.db (diagnostics and tests).
@@ -190,6 +193,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.MCP.OnChange = a.mcpChanged
 	a.MCP.OnLogin = func(st mcp.LoginStatus) { a.Hub.Publish("mcp-login", st) }
+	a.Web = web.New(db, cfg.Secrets)
 	a.Elicitations = elicitations.New(0)
 	a.Elicitations.OnChange = func(e elicitations.Elicitation) { a.Hub.Publish("elicitation", e) }
 	a.Elicitations.AgentName = func(id string) string {
@@ -266,14 +270,14 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		a.Hub.Publish("approval", map[string]any{"agentId": ap.AgentID, "approval": ap})
 		a.publishAgent(ap.AgentID) // its pendingApprovals count
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
 		}
 	}()
 
-	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations}
+	a.API = &api.API{DB: db, Agents: a.Agents, Threads: a.Threads, Runtimes: a.Sup, Hub: a.Hub, Catalog: a.Catalog, Usage: a.Usage, Teams: a.Teams, Manager: a, Approvals: a.Approvals, MCP: a.MCP, Schedules: a.Schedules, Search: a.Search, Elicitations: a.Elicitations, Web: a.Web}
 	a.Agents.OnChange(func(c agents.Change) {
 		if c.Deleted {
 			a.Hub.Publish("agent", map[string]any{"agentId": c.AgentID, "deleted": true})
@@ -399,6 +403,17 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 			// The servers may ask the person a question mid-call (MCP elicitation); the runtime relays it here.
 			env["MCP_ELICIT_URL"] = a.gatewayURL + "/mcp/elicitations"
 		}
+	}
+	// Web tools (through the gateway, which holds the search key and refuses private addresses).
+	var webTools []string
+	if ag.Config.Web.Search {
+		webTools = append(webTools, "search")
+	}
+	if ag.Config.Web.Fetch {
+		webTools = append(webTools, "fetch")
+	}
+	if len(webTools) > 0 {
+		env["WEB_TOOLS"] = strings.Join(webTools, ",")
 	}
 	// Its own schedules (the schedule tools), when its agent.yaml allows them.
 	if ag.Config.Schedules.AgentMade {
@@ -748,4 +763,23 @@ func lockDir(dir string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// webGateway gives runtimes the web, for agents whose agent.yaml allows each tool.
+type webGateway struct{ a *App }
+
+func (g webGateway) Allowed(agentID, tool string) bool {
+	ag, err := g.a.Agents.Get(agentID)
+	if err != nil {
+		return false
+	}
+	return (tool == "search" && ag.Config.Web.Search) || (tool == "fetch" && ag.Config.Web.Fetch)
+}
+
+func (g webGateway) Search(ctx context.Context, query string, count int) ([]web.Result, error) {
+	return g.a.Web.Search(ctx, query, count)
+}
+
+func (g webGateway) Fetch(ctx context.Context, url string, offset, maxChars int) (*web.Page, error) {
+	return g.a.Web.Fetch(ctx, url, offset, maxChars)
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/threads"
 	"github.com/ncecere/pi-local/internal/usage"
+	"github.com/ncecere/pi-local/internal/web"
 )
 
 // Keys tells which agent a runtime key belongs to.
@@ -69,6 +70,13 @@ type OAuth interface {
 	SaveOAuthState(slug string, state json.RawMessage) error
 }
 
+// Web is web search and page reading, for agents allowed each tool.
+type Web interface {
+	Allowed(agentID, tool string) bool
+	Search(ctx context.Context, query string, count int) ([]web.Result, error)
+	Fetch(ctx context.Context, url string, offset, maxChars int) (*web.Page, error)
+}
+
 // Handler is the gateway's routes.
 type Handler struct {
 	Keys      Keys
@@ -78,6 +86,8 @@ type Handler struct {
 	Approvals Approvals
 	OAuth     OAuth
 	Schedules *schedules.Store
+	// Web: search and page reading for agents (nil: not offered).
+	Web Web
 	// Elicitations: MCP servers' questions to the person, relayed by the runtime (nil: not offered).
 	Elicitations *elicitations.Store
 	// AppKey authenticates the app's own MCP probe, for /mcp/oauth only.
@@ -202,6 +212,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveSchedules(w, r, agentID)
 	case h.OAuth != nil && strings.HasPrefix(r.URL.Path, "/mcp/oauth/"):
 		h.serveOAuth(w, r, agentID)
+	case h.Web != nil && r.Method == http.MethodPost && (r.URL.Path == "/web/search" || r.URL.Path == "/web/fetch"):
+		h.serveWeb(w, r, agentID)
 	case h.Elicitations != nil && (r.URL.Path == "/mcp/elicitations" || strings.HasPrefix(r.URL.Path, "/mcp/elicitations/")):
 		h.serveElicitations(w, r, agentID)
 	case h.Asks != nil && strings.HasPrefix(r.URL.Path, "/a2a/"):
@@ -273,6 +285,48 @@ func (h *Handler) serveAsks(w http.ResponseWriter, r *http.Request, caller strin
 	default:
 		fail(w, http.StatusNotFound, "not_found", "not offered")
 	}
+}
+
+// serveWeb: POST /web/search {query, count} → {results}; POST /web/fetch {url, offset, maxChars} → a page.
+func (h *Handler) serveWeb(w http.ResponseWriter, r *http.Request, agentID string) {
+	tool := strings.TrimPrefix(r.URL.Path, "/web/")
+	if !h.Web.Allowed(agentID, tool) {
+		fail(w, http.StatusForbidden, "forbidden", "this agent's web "+tool+" tool is turned off")
+		return
+	}
+	var body struct {
+		Query    string `json:"query"`
+		Count    int    `json:"count"`
+		URL      string `json:"url"`
+		Offset   int    `json:"offset"`
+		MaxChars int    `json:"maxChars"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	failWith := func(err error) {
+		var we *web.Error
+		if errors.As(err, &we) {
+			fail(w, we.Status, we.Code, we.Message)
+			return
+		}
+		fail(w, http.StatusInternalServerError, "internal", err.Error())
+	}
+	if tool == "search" {
+		results, err := h.Web.Search(r.Context(), body.Query, body.Count)
+		if err != nil {
+			failWith(err)
+			return
+		}
+		ok(w, map[string]any{"results": results})
+		return
+	}
+	page, err := h.Web.Fetch(r.Context(), body.URL, body.Offset, body.MaxChars)
+	if err != nil {
+		failWith(err)
+		return
+	}
+	ok(w, page)
 }
 
 // serveElicitations: an MCP server's question to the person, for the runtime that relays it.
