@@ -2,6 +2,12 @@
 
 Each version's section is its release notes on GitHub.
 
+## UNRELEASED
+
+- **Security:** raise the Go toolchain minimum from 1.26.7 to 1.26.10, including the compromised-intermediate
+  certificate distrust fix and earlier standard-library security fixes. Refresh exact-release license provenance;
+  no production application-source or dependency-version changes. See `docs/qa/go1.26.10-security.md` for scope and checks.
+
 ## 0.4.1
 
 - **Settings navigation:** grouped sections in a compact left sidebar instead of two rows of tabs. Narrow windows
