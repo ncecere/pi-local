@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ncecere/pi-local/internal/activity"
@@ -36,6 +35,7 @@ import (
 	"github.com/ncecere/pi-local/internal/asks"
 	"github.com/ncecere/pi-local/internal/backup"
 	"github.com/ncecere/pi-local/internal/budget"
+	"github.com/ncecere/pi-local/internal/datalock"
 	"github.com/ncecere/pi-local/internal/diagnostics"
 	"github.com/ncecere/pi-local/internal/elicitations"
 	"github.com/ncecere/pi-local/internal/events"
@@ -140,7 +140,7 @@ type App struct {
 	contractVersion int
 	nodeVersion     string
 	gatewayURL      string
-	lock            *os.File
+	lock            *datalock.Lock
 	gateway         *http.Server
 	closeDB         func() error
 }
@@ -990,25 +990,17 @@ func (a *App) Close() {
 		a.closeDB()
 	}
 	if a.lock != nil {
-		syscall.Flock(int(a.lock.Fd()), syscall.LOCK_UN)
 		a.lock.Close()
 	}
 }
 
 // lockDir takes the data directory's single-instance lock (released by the OS if the app dies).
-func lockDir(dir string) (*os.File, error) {
-	f, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
+func lockDir(dir string) (*datalock.Lock, error) {
+	lock, err := datalock.Acquire(dir)
+	if errors.Is(err, datalock.ErrLocked) {
+		return nil, ErrAlreadyRunning
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, ErrAlreadyRunning
-		}
-		return nil, err
-	}
-	return f, nil
+	return lock, err
 }
 
 // webGateway gives runtimes the web, for agents whose agent.yaml allows each tool.
