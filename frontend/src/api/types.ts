@@ -69,6 +69,8 @@ export interface Agent {
    * Phase 7; absent from an older backend (read as off).
    */
   schedules?: { agentMade: boolean };
+  /** Explicit opt-in: create agents and update only agents it made; always human-approved. */
+  builder?: boolean;
   /**
    * Its web tools: search (through the search service in Settings → Models) and
    * reading pages. Absent from an older backend (read as both off).
@@ -304,6 +306,7 @@ export type TemplateCategory = 'everyday' | 'work' | 'life' | 'meta' | 'yours';
  * `templates`): its kind, instructions, tools and maybe a first schedule.
  */
 export interface AgentTemplate {
+  builder?: boolean;
   /** 1–48 of [a-z0-9-]. */
   id: string;
   name: string;

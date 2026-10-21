@@ -329,6 +329,25 @@ function ToolsForm({
 
       <SandboxPanel agent={agent} disabled={dirty} />
 
+      <Panel
+        title="Agent builder"
+        description="Lets this agent propose new agents and update only agents it created. Every creation or update asks for your approval of the complete configuration, even under Trusting or an allow rule. It cannot change itself or unrelated agents."
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span id={`${id}-builder-label`} className="text-sm font-medium">
+            Build agents
+          </span>
+          <Switch
+            aria-labelledby={`${id}-builder-label`}
+            checked={agent.builder === true}
+            disabled={update.isPending}
+            onCheckedChange={(builder) =>
+              void saveAgentChange(agent, () => update.mutateAsync({ id: agent.id, builder }))
+            }
+          />
+        </div>
+      </Panel>
+
       <WebPanel agent={agent} />
 
       <SecretsPanel agent={agent} />

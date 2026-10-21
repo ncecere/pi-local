@@ -86,6 +86,8 @@ var DemoModel = ModelRef{Provider: "demo", ID: "demo-1"}
 // Config is an agent's agent.yaml: everything that makes the agent what it is, portable with its folder, never a
 // secret. Later phases add workspace tools, MCP servers, approvals and schedules.
 type Config struct {
+	// Builder explicitly grants create_agent and ownership-scoped update_agent. Both always ask a person.
+	Builder      bool           `yaml:"builder,omitempty" json:"builder"`
 	Name         string         `yaml:"name"`
 	Description  string         `yaml:"description,omitempty"`
 	Kind         string         `yaml:"kind"`

@@ -28,6 +28,7 @@ var builtinFS embed.FS
 
 // Template is a starting point for an agent.
 type Template struct {
+	Builder      bool                   `yaml:"builder,omitempty" json:"builder"`
 	ID           string                 `yaml:"id" json:"id"`
 	Name         string                 `yaml:"name" json:"name"`
 	Description  string                 `yaml:"description" json:"description"`
@@ -104,7 +105,7 @@ func New(dir string) (*Store, error) {
 		t.Builtin = true
 		s.builtin = append(s.builtin, *t)
 	}
-	order := map[string]int{"assistant": 0, "researcher": 1, "writer": 2, "daily-briefing": 3, "translator": 4, "planner": 5, "coding": 6, "meeting-helper": 7}
+	order := map[string]int{"assistant": 0, "researcher": 1, "writer": 2, "daily-briefing": 3, "translator": 4, "planner": 5, "coding": 6, "agent-builder": 7, "concierge": 8, "meeting-helper": 9}
 	sort.SliceStable(s.builtin, func(i, j int) bool { return order[s.builtin[i].ID] < order[s.builtin[j].ID] })
 	return s, nil
 }
@@ -159,6 +160,7 @@ func (t *Template) check() error {
 // Apply sets an agent's configuration from the template (the request's own fields come after, and win).
 func (t *Template) Apply(c *agents.Config) {
 	c.Kind = t.Kind
+	c.Builder = t.Builder
 	if t.Description != "" && c.Description == "" {
 		c.Description = t.Description
 	}
@@ -186,7 +188,7 @@ func (t *Template) Apply(c *agents.Config) {
 // FromAgent makes a template from an agent's configuration (no model, no agents it may ask, no project folder: those
 // belong to this computer).
 func FromAgent(id string, c agents.Config) *Template {
-	t := &Template{ID: id, Name: c.Name, Description: c.Description, Kind: c.Kind, Instructions: c.Instructions, Category: "yours"}
+	t := &Template{ID: id, Name: c.Name, Description: c.Description, Kind: c.Kind, Instructions: c.Instructions, Category: "yours", Builder: c.Builder}
 	if len(c.Workspace.Tools) > 0 {
 		t.Workspace = &agents.Workspace{Tools: append([]string(nil), c.Workspace.Tools...), Sandbox: c.Workspace.Sandbox, Network: c.Workspace.Network}
 	}

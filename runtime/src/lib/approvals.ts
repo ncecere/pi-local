@@ -13,7 +13,7 @@ import {
 	type ToolHookCall,
 	ToolTask,
 } from "@earendil-works/pi-durable";
-import { builtinSummary, changesThings, DENIED_MESSAGE, evaluate, parsePolicy, type RulePolicy, type Source, type ToolInfo, toolMatches } from "./approval-rules.ts";
+import { builtinSummary, changesThings, DENIED_MESSAGE, evaluate, isBuilderTool, parsePolicy, type RulePolicy, type Source, type ToolInfo, toolMatches } from "./approval-rules.ts";
 import { redactArguments } from "./redact.ts";
 import type { ThreadStore } from "./threads.ts";
 import { type Author, type ChatApproval, USER_ENTRY, type ViewApprovals } from "./view.ts";
@@ -172,6 +172,8 @@ export class Approvals implements ApprovalRequester {
 	 * only for a shell that is confined, whatever a policy was told.
 	 */
 	shellSandboxed = false;
+	/** Builder calls are prepared by the app before asking, with their complete immutable configuration. */
+	prepareBuilder: ((call: ToolHookCall, api: HookApi) => Promise<ToolHookCall>) | undefined;
 
 	constructor(public policy: ApprovalPolicy) {}
 
@@ -192,7 +194,7 @@ export class Approvals implements ApprovalRequester {
 	/** Whether the policy can ask or refuse anything at all (rules, built-in rules, a profile that asks, or a tools list). */
 	active(): boolean {
 		const p = this.policy;
-		return p.rules.length > 0 || p.builtin.length > 0 || p.tools.length > 0 || p.profile === "careful" || p.profile === "balanced";
+		return this.prepareBuilder !== undefined || p.rules.length > 0 || p.builtin.length > 0 || p.tools.length > 0 || p.profile === "careful" || p.profile === "balanced";
 	}
 
 	/** Whether the policy asks first for this tool whatever its arguments (custom profile's list). */
@@ -208,6 +210,7 @@ export class Approvals implements ApprovalRequester {
 		const info = this.toolInfo(call.name);
 		const v = evaluate({ ...this.policy, sandboxed: this.policy.sandboxed === true && this.shellSandboxed }, call.name, call.arguments ?? {}, info);
 		if (v.action === "deny") return { block: DENIED_MESSAGE };
+		if (isBuilderTool(call.name)) return { ask: { source: "builtin", summary: "Agent creation and updates always need your approval of the full configuration." } };
 		if (v.action === "ask") {
 			const summary = v.source === "builtin" ? builtinSummary(v.rule!) : v.source === "rule" ? "Asked because of one of your approval rules." : v.source === "profile" ? `${this.policy.profile === "careful" ? "Careful" : "Balanced"} asks before this tool changes something.` : undefined;
 			return { ask: { source: v.source, ...(summary === undefined ? {} : { summary }) } };
@@ -223,12 +226,13 @@ export class Approvals implements ApprovalRequester {
 			name: "pdp-approvals",
 			hooks: [
 				hook(ToolTask, {
-					beforeTool: async (call, api, context) => {
+					beforeTool: async (original, api, context) => {
+						const call = this.prepareBuilder ? await this.prepareBuilder(original, api) : original;
 						const id = approvalId(api.taskId as unknown as number);
 						// A request already made for this call stays what it was (a rerun after a restart finds its decision), also
 						// after the policy changed; only a new refusal overrides it.
 						const known = this.cache.has(id);
-						const verdict = await this.verdict(call, context.abortSignal);
+						const verdict = await this.verdict(original, context.abortSignal);
 						if (verdict !== undefined && "block" in verdict) return verdict;
 						if (!known && verdict === undefined) return undefined;
 						const decision = await this.request(call, api, context, verdict?.ask ?? {});
@@ -503,7 +507,7 @@ export class Approvals implements ApprovalRequester {
 			taskId: api.taskId as unknown as number,
 			callId: call.id,
 			tool: call.name,
-			arguments: redactArguments(call.arguments ?? {}),
+			arguments: isBuilderTool(call.name) ? structuredClone(call.arguments ?? {}) : redactArguments(call.arguments ?? {}),
 			requestedAt: now,
 			expiresAt: now + timeoutMs,
 			status: "pending",

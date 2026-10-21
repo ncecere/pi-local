@@ -27,6 +27,8 @@ const BLOCK =
 /** What the request asks, as a question: "Run this command?" */
 function questionFor(tool: string): string {
   const name = tool.toLowerCase();
+  if (name === 'create_agent') return 'Create this agent?';
+  if (name === 'update_agent') return 'Update this agent?';
   if (name === 'bash') return 'Run this command?';
   if (name === 'write') return 'Create or replace this file?';
   if (name === 'edit') return 'Change this file?';

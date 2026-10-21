@@ -367,7 +367,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			a.recordApproval(ap)
 		}
 	}
-	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, Activity: a.Activity, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, JudgeApproval: a.Judge.RiskyCall, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
+	a.gateway = &http.Server{Handler: &gateway.Handler{Keys: a.Sup, Builder: func(ctx context.Context, caller, action string, body json.RawMessage) (any, error) {
+		return a.API.BuilderCall(ctx, caller, action, body)
+	}, Threads: a.Threads, Usage: a, Asks: askGateway{a}, Approvals: a.Approvals, Activity: a.Activity, OAuth: oauthGateway{a}, AppKey: appKey, Schedules: a.Schedules, Elicitations: a.Elicitations, Web: webGateway{a}, Memory: memoryGateway{a}, PickTools: a.Judge.PickTools, JudgeApproval: a.Judge.RiskyCall, Notify: a.notifyPerson, ModelEnv: a.conversationModelEnv}, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := a.gateway.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("gateway stopped", "err", err)
@@ -610,6 +612,10 @@ func (a *App) resolve(ctx context.Context, id string) (supervisor.Spec, error) {
 	// Memory: the "about you" and "your notes" sections and the remember / recall / forget tools (on unless off).
 	if !ag.Config.Memory.Off {
 		env["MEMORY"] = "on"
+	}
+	// Builder tools are explicit opt-in, never installed on ordinary agents.
+	if ag.Config.Builder {
+		env["AGENT_BUILDER"] = "true"
 	}
 	// Its own schedules (the schedule tools), when its agent.yaml allows them.
 	if ag.Config.Schedules.AgentMade {
