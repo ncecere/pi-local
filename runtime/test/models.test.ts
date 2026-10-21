@@ -69,3 +69,38 @@ describe("agent models", () => {
 		expect(() => createAgentModels({ ...catalog, MODEL_API: "openai-responses", MODEL_HEADERS: "[1]" })).toThrow(/JSON object/);
 	});
 });
+
+describe("tool schemas sent to a Responses API server", () => {
+	it("say strict: false, so optional fields stay optional (no strict default that makes the model fill them all)", async () => {
+		const { createServer } = await import("node:http");
+		const bodies: Record<string, unknown>[] = [];
+		const server = createServer(async (req, res) => {
+			let raw = "";
+			for await (const chunk of req) raw += chunk;
+			bodies.push(JSON.parse(raw));
+			res.writeHead(500, { "content-type": "application/json" });
+			res.end(JSON.stringify({ error: { message: "test stops here" } }));
+		});
+		await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+		try {
+			const port = (server.address() as { port: number }).port;
+			const { models, model } = createAgentModels({ ...catalog, MODEL_API: "openai-responses", MODEL_BASE_URL: `http://127.0.0.1:${port}/v1`, MODEL_API_KEY: "k" });
+			const m = models.getModel(model.provider, model.modelId)!;
+			const tool = {
+				name: "search_tickets",
+				description: "Search",
+				parameters: { type: "object", properties: { search_text: { type: "string" }, ticket_id: { type: "integer" } }, required: [] },
+			};
+			const events = models.stream(m, { messages: [{ role: "user", content: "find VPN tickets", timestamp: 0 }], tools: [tool] } as never, { maxRetries: 0 } as never);
+			for await (const _ of events) {
+				// drain: the server answers 500 after recording the request
+			}
+			const sent = (bodies.at(-1)?.tools as { name: string; strict?: boolean; parameters: { required?: string[] } }[]) ?? [];
+			expect(sent).toHaveLength(1);
+			expect(sent[0]!.strict).toBe(false);
+			expect(sent[0]!.parameters.required).toEqual([]);
+		} finally {
+			server.close();
+		}
+	});
+});

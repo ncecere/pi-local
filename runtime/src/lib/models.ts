@@ -67,6 +67,9 @@ function registerModel(models: MutableModels, env: Env, api: string): AgentModel
 		// Compatible servers implement the core of chat completions; some (Open Model Gateway) refuse fields they
 		// don't know, such as store.
 		...(api === "openai-completions" ? { compat: { supportsDeveloperRole: false, supportsStore: false } } : {}),
+		// The Responses API treats a function tool without `strict` as strict: every field required, so the model must
+		// invent a value for each optional one (a ticket id of 1, "" dates). Say strict: false, as tools are written.
+		...(api === "openai-responses" ? { compat: { supportsStrictMode: true } } : {}),
 	} as Model<Api>;
 	const label = env.MODEL_PROVIDER_NAME?.trim() || host;
 	const usage = env.MODEL_USAGE_URL && env.MODEL_USAGE_KEY ? new UsageReporter(env.MODEL_USAGE_URL, env.MODEL_USAGE_KEY) : undefined;
