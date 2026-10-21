@@ -432,112 +432,140 @@ export function createRuntimeServer(options: RuntimeOptions): {
 	 * the latest messages.
 	 */
 	const streamThread = async (threadId: string, request: IncomingMessage, response: ServerResponse, options: StreamOptions) => {
-		const conversation = await threads.get(threadId);
-		if (conversation === undefined) return fail(response, 404, "thread_not_found", "Thread not found");
-		const watch = await conversation.watch(ctx);
-		// The exposed documents are watched too: a change to one is a `document.updated` (deltas), or a view with its
-		// new revision.
-		const docs = new DocumentWatches(harness, conversation.id, exposed);
-		await docs.refresh();
-		response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
-		touch();
-		// The transcript is rebuilt only when the entries (or the thread's approvals) changed: a frame that only moves the
-		// reply in progress or a tool keeps the same entries (pi-durable shares unchanged parts between frames).
-		let entries: unknown;
-		let messages: ChatMessage[] = [];
-		let approvalsSeen = -1;
-		let approvalsVersion = 0;
-		let shown = approvals?.viewOf(threadId, conversation.id as unknown as number);
-		const current = async (value: typeof watch.value): Promise<{ view: ChatView; changed: boolean }> => {
-			const live = value.docs["pi.live"] as never as Parameters<typeof liveParts>[0];
-			const identities = await callIdentities.read(value.entries, live);
-			const changed = value.entries !== entries || approvalsSeen !== approvalsVersion;
-			if (changed) {
-				entries = value.entries;
-				approvalsSeen = approvalsVersion;
-				shown = approvals?.viewOf(threadId, conversation.id as unknown as number);
-				messages = buildMessages(value.entries, shown?.byTask, identities);
-			}
-			const documents = docs.refs();
-			const pending = shown === undefined || shown.pending.length === 0 ? {} : { approvals: shown.pending };
-			return {
-				view: { busy: live?.run !== undefined, messages, ...liveParts(live, identities), ...(documents === undefined ? {} : { documents }), ...pending },
-				changed,
-			};
-		};
-		const deltas = options.format === "delta" ? new DeltaStream(options.limit, options.lastSeq) : undefined;
-		const page: MessagePage | undefined = options.limit === undefined ? undefined : { limit: options.limit };
-		// Resolving task inputs is asynchronous. Serialize frames so an older read cannot overtake a newer delta.
-		let sending: Promise<void> = Promise.resolve();
-		const send = (value: typeof watch.value) => {
-			const next = sending.then(async () => {
-				const { view, changed } = await current(value);
-				if (deltas === undefined) {
-					response.write(`event: view\ndata: ${JSON.stringify(page === undefined ? view : pageView(view, page))}\n\n`);
-					return;
-				}
-				let out = "";
-				for (const event of deltas.next(view, changed)) out += `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-				if (out !== "") response.write(out);
-			});
-			sending = next.catch((error) => console.error("[runtime] chat identities:", error));
-			return next;
-		};
-		await send(watch.value);
-		if (options.once) {
-			await watch.stop();
-			await docs.stop();
-			response.end();
-			return;
-		}
-		let latest = watch.value;
+		// Install cleanup before acquiring anything asynchronously: a disconnect can happen during any lookup.
+		let closed = false;
+		let counted = false;
+		let watch: Awaited<ReturnType<Conversation["watch"]>> | undefined;
+		let docs: DocumentWatches | undefined;
 		let timer: NodeJS.Timeout | undefined;
-		const schedule = () => {
-			touch();
-			timer ??= setTimeout(() => {
-				timer = undefined;
-				void send(latest).catch(() => response.end());
-			}, 100);
-		};
-		docs.onChange = schedule;
-		watch.start(async (value) => {
-			latest = value;
-			// A document a thread didn't have yet (one declared after the thread began) is watched once it exists.
-			await docs.refresh().catch(() => {});
-			schedule();
-		});
-		// An approval asked or decided in this thread changes the view without a commit to the conversation.
-		const unsubscribe = approvals?.onChange((changed) => {
-			if (changed !== threadId) return;
-			approvalsVersion++;
-			schedule();
-		});
-		const keepAlive = setInterval(() => response.write(": keep-alive\n\n"), 15_000);
-		openStreams++;
-		let ended = false;
+		let keepAlive: NodeJS.Timeout | undefined;
+		let unsubscribe: (() => void) | undefined;
 		const end = () => {
+			if (closed) return;
+			closed = true;
 			unsubscribe?.();
-			clearInterval(keepAlive);
+			if (keepAlive !== undefined) clearInterval(keepAlive);
 			if (timer !== undefined) clearTimeout(timer);
-			void watch.stop();
-			void docs.stop();
-			if (ended) return;
-			ended = true;
-			openStreams--;
-			// Someone was watching until now: the idle clock starts here.
+			void watch?.stop().catch(() => {});
+			void docs?.stop().catch(() => {});
+			if (counted) openStreams--;
 			touch();
 		};
-		request.on("close", end);
-		void watch.closed.then(() => {
+		const finish = () => {
+			if (closed) return;
 			end();
-			response.end();
-		});
+			if (!response.destroyed && !response.writableEnded) response.end();
+		};
+		request.once("close", end);
+		response.once("close", end);
+		response.once("error", end);
+		if (request.destroyed || response.destroyed || response.writableEnded) { end(); return; }
+		try {
+			const conversation = await threads.get(threadId);
+			if (closed) return;
+			if (conversation === undefined) {
+				end();
+				return fail(response, 404, "thread_not_found", "Thread not found");
+			}
+			watch = await conversation.watch(ctx);
+			if (closed) { await watch.stop(); return; }
+			const watchEnded = () => { if (!closed) finish(); };
+			void watch.closed.then(watchEnded, watchEnded);
+			// Documents are stopped even if initialization fails or a task lookup never finishes.
+			docs = new DocumentWatches(harness, conversation.id, exposed);
+			await docs.refresh();
+			if (closed) return;
+			response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
+			touch();
+			const activeWatch = watch;
+			const activeDocs = docs;
+			let entries: unknown;
+			let messages: ChatMessage[] = [];
+			let approvalsSeen = -1;
+			let approvalsVersion = 0;
+			let shown = approvals?.viewOf(threadId, conversation.id as unknown as number);
+			const current = async (value: typeof activeWatch.value): Promise<{ view: ChatView; changed: boolean }> => {
+				const live = value.docs["pi.live"] as never as Parameters<typeof liveParts>[0];
+				const identities = await callIdentities.read(value.entries, live);
+				const changed = value.entries !== entries || approvalsSeen !== approvalsVersion;
+				if (changed) {
+					entries = value.entries;
+					approvalsSeen = approvalsVersion;
+					shown = approvals?.viewOf(threadId, conversation.id as unknown as number);
+					messages = buildMessages(value.entries, shown?.byTask, identities);
+				}
+				const documents = activeDocs.refs();
+				const pending = shown === undefined || shown.pending.length === 0 ? {} : { approvals: shown.pending };
+				return {
+					view: { busy: live?.run !== undefined, messages, ...liveParts(live, identities), ...(documents === undefined ? {} : { documents }), ...pending },
+					changed,
+				};
+			};
+			const deltas = options.format === "delta" ? new DeltaStream(options.limit, options.lastSeq) : undefined;
+			const page: MessagePage | undefined = options.limit === undefined ? undefined : { limit: options.limit };
+			// Serialize frames, and guard both sides of the asynchronous read. Already queued frames die on close too.
+			let sending: Promise<void> = Promise.resolve();
+			const send = (value: typeof activeWatch.value) => {
+				const next = sending.then(async () => {
+					if (closed) return;
+					const { view, changed } = await current(value);
+					if (closed) return;
+					if (deltas === undefined) {
+						response.write(`event: view\ndata: ${JSON.stringify(page === undefined ? view : pageView(view, page))}\n\n`);
+						return;
+					}
+					let out = "";
+					for (const event of deltas.next(view, changed)) out += `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+					if (out !== "") response.write(out);
+				});
+				sending = next.catch(() => {}); // callers own error cleanup; keep the serialization chain handled
+				return next;
+			};
+			await send(activeWatch.value);
+			if (closed) return;
+			if (options.once) { finish(); return; }
+			let latest = activeWatch.value;
+			const schedule = () => {
+				if (closed) return;
+				touch();
+				timer ??= setTimeout(() => {
+					timer = undefined;
+					void send(latest).catch((error) => {
+						if (closed) return;
+						console.error("[runtime] chat identities:", error);
+						finish();
+					});
+				}, 100);
+			};
+			activeDocs.onChange = schedule;
+			activeWatch.start(async (value) => {
+				if (closed) return;
+				latest = value;
+				await activeDocs.refresh().catch(() => {});
+				if (!closed) schedule();
+			});
+			if (closed) return;
+			unsubscribe = approvals?.onChange((changed) => {
+				if (closed || changed !== threadId) return;
+				approvalsVersion++;
+				schedule();
+			});
+			if (closed) { unsubscribe?.(); return; }
+			keepAlive = setInterval(() => { if (!closed) response.write(": keep-alive\n\n"); }, 15_000);
+			openStreams++;
+			counted = true;
+		} catch (error) {
+			const alreadyClosed = closed;
+			end();
+			if (!alreadyClosed) throw error;
+		}
 	};
 
 	const handler: RequestListener = (request, response) => {
 		route(request, response).catch((error: unknown) => {
 			const status = error instanceof RequestError || error instanceof ArtifactError ? error.status : 500;
 			if (status === 500) console.error("[runtime] request failed", error);
+			if (response.destroyed || response.writableEnded) return;
 			if (!response.headersSent) fail(response, status, error instanceof ArtifactError ? error.code : status === 500 ? "internal" : "invalid_request", status === 500 ? "Internal error" : (error as Error).message);
 			else response.end();
 		});

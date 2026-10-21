@@ -320,10 +320,15 @@ export class Approvals implements ApprovalRequester {
 	viewOf(threadId: string, conversationId: number): ViewApprovals {
 		const records = this.list(threadId);
 		const byTask = new Map<string, ChatApproval>();
-		for (const r of records) if (r.conversationId === conversationId) {
+		const priority = (status: ApprovalStatus) => status === "pending" ? 2 : status === "approved" ? 0 : 1;
+		for (const r of this.cache.values()) if (r.threadId === threadId && r.conversationId === conversationId) {
 			const key = taskIdentity(r.taskId);
-			// Several keyed hooks can ask about the same task. Do not let a completed hook hide a pending one.
-			if (!byTask.has(key) || r.status === "pending") byTask.set(key, chatApproval(r, false));
+			// Keyed hooks share a task. Pending stays decidable; once settled, the first blocking request wins
+			// just as in forCall, regardless of requestedAt. Timestamps only order the separate pending list.
+			const previous = byTask.get(key);
+			if (previous === undefined || priority(r.status) > priority(previous.status) || (r.status === "approved" && previous.status === "approved")) {
+				byTask.set(key, chatApproval(r, false));
+			}
 		}
 		const pending = records
 			.filter((r) => r.status === "pending")
