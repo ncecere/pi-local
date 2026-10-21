@@ -1,0 +1,14 @@
+Roboto-Regular.ttf name-table notices (verbatim values, duplicate encodings removed)
+
+0: Copyright 2011 Google Inc. All Rights Reserved.
+1: Roboto
+2: Regular
+3: Roboto
+4: Roboto
+5: Version 2.137; 2017
+6: Roboto-Regular
+7: Roboto is a trademark of Google.
+9: Google
+11: Google.com
+13: Licensed under the Apache License, Version 2.0
+14: http://www.apache.org/licenses/LICENSE-2.0

@@ -22,7 +22,10 @@ Trust and control.
   reply is stopped.
 - **Security:** fast-judgments requests cannot redirect credentials or judged text to another origin. Command rules
   remembered from an approval respect whole-word boundaries (`ls` never allows `lsof`). Workspace file tools refuse
-  dangling symlinks and check normalized home/file-URL paths before permitting access.
+  dangling symlinks and check normalized home/file-URL paths before permitting access. Document conversion uses
+  the same guarded cache operations.
+- **Distribution notices:** packaged dependency licenses, copyright notices and pinned provenance now ship inside
+  the app, assembled and checked before signing.
 
 ## 0.2.0
 

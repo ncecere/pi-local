@@ -2,6 +2,8 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { writeBuildReceipt } from "../../packaging/licenses/build-receipt.mjs";
 
 // Photon's WebAssembly (image resizing), inlined: the app runs this one file, with no node_modules beside it.
 // src/lib/photon-wasm.ts reads it from the installed package; the bundle gets these bytes instead.
@@ -32,5 +34,6 @@ const result = await build({
 	logLevel: "warning",
 	plugins: [inlinePhoton],
 });
+writeBuildReceipt(fileURLToPath(new URL("../..", import.meta.url)), "runtime", Object.keys(result.metafile.inputs));
 const kb = (f) => `${(statSync(f).size / 1024).toFixed(0)} KiB`;
 console.log(`dist/runtime.mjs ${kb("dist/runtime.mjs")}; inputs: ${Object.keys(result.metafile.inputs).length}`);
