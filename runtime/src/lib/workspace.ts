@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { mkdir, mkdtemp, realpath, rename, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { Context } from "@earendil-works/chord/context";
+import { lstat, mkdir, mkdtemp, realpath, rename, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { defineExtension, type Extension } from "@earendil-works/pi-durable";
 import { err, type ExecutionEnv, FileError, ok } from "@earendil-works/pi-durable/env";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -108,7 +108,8 @@ class AgentTempEnv extends NodeExecutionEnv {
 
 /**
  * The real path of `path`, even when it doesn't exist yet: the real path of its deepest existing ancestor plus the
- * rest, so a symlink anywhere on the way is followed before deciding where a path really is.
+ * rest, so a symlink anywhere on the way is followed before deciding where a path really is. An unresolved symlink
+ * is never an absent component: refuse it, even if its missing target might have been inside the workspace.
  */
 async function realPathOf(path: string): Promise<string> {
 	const missing: string[] = [];
@@ -118,6 +119,14 @@ async function realPathOf(path: string): Promise<string> {
 			return join(await realpath(current), ...missing.reverse());
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+			// realpath follows the final link, so ENOENT alone cannot distinguish a missing name from a dangling link.
+			// Check each component as we ascend, including parents hidden by a missing descendant. Only genuinely
+			// absent components may be appended to a resolved ancestor; all other lstat failures fail closed.
+			const info = await lstat(current).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+				return undefined;
+			});
+			if (info?.isSymbolicLink()) throw new Error(`Unresolved symbolic link: ${current}`);
 			const parent = dirname(current);
 			if (parent === current) return join(current, ...missing.reverse());
 			missing.push(basename(current));
@@ -135,7 +144,9 @@ const inside = (root: string, path: string) => {
  * An ExecutionEnv whose file operations stay inside the workspace (and the agent's temp directory). Every path is
  * resolved against the workspace, symlinks followed, and refused with `permission_denied` when it lands outside, for
  * read, write, edit and anything else that uses the environment's files. A guard against the model's file tools
- * wandering off, including through prompt injection.
+ * wandering off, including through prompt injection. Unresolved symlinks are refused, including contained dangling
+ * links. This is a path-based check, not a race-safe filesystem sandbox: a concurrent file or parent-directory swap
+ * between validation and the underlying operation can still change its target (Node has no openat-style API).
  *
  * `bash` runs in the workspace, and without `options.sandbox` a shell can reach anything the person can, which is why
  * it asks for approval by default (the app's policy). With it, every command runs in the OS sandbox (lib/sandbox) and
@@ -153,10 +164,13 @@ export function createWorkspaceEnv(options: WorkspaceEnvOptions): ExecutionEnv {
 	const check = async (path: unknown): Promise<FileError | undefined> => {
 		if (typeof path !== "string") return new FileError("invalid", "A path must be a string");
 		if (path.includes("\0")) return new FileError("invalid", "A path cannot contain a NUL character", path);
-		const absolute = isAbsolute(path) ? resolve(path) : resolve(roots[0]!, path);
 		let real: string;
 		try {
-			real = await realPathOf(absolute);
+			// Use the adapter's pure path normalization: it also expands ~/ and file:// aliases. Checking those as
+			// ordinary relative names would approve a different path from the one the underlying operation uses.
+			const absolute = await base.absolutePath(path, BACKGROUND_CONTEXT);
+			if (!absolute.ok) return absolute.error;
+			real = await realPathOf(absolute.value);
 		} catch (error) {
 			return new FileError("permission_denied", `Cannot resolve ${path}: ${(error as Error).message}`, path);
 		}

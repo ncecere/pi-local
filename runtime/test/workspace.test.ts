@@ -1,14 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { answer, startTestAgent, toolCall } from "@pdp/runtime/testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWorkspaceEnv, parseWorkspaceTools } from "../src/lib/workspace.ts";
 import { tempAgentDir } from "./support.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
+	vi.unstubAllEnvs();
 	for (const fn of cleanup.splice(0).reverse()) await fn().catch(() => {});
 });
 
@@ -80,6 +82,85 @@ describe("the workspace environment", () => {
 		expect(existsSync(join(agentDir, "planted.txt"))).toBe(false);
 		expect(readFileSync(join(agentDir, "secret.txt"), "utf8")).toBe("TOP SECRET");
 		expect(existsSync(join(agentDir, "escape"))).toBe(false);
+	});
+
+	it.each(["absolute", "relative"])("refuses a dangling file symlink (%s target) before it creates an outside file", async (targetKind) => {
+		const { env, agentDir, workspace } = await layout();
+		const outside = join(agentDir, "new.txt");
+		symlinkSync(targetKind === "absolute" ? outside : "../new.txt", join(workspace, "report.txt"));
+		for (const path of ["report.txt", join(workspace, "report.txt")]) {
+			expect(denied(await env.writeFile(path, "escaped", ctx))).toBe(true);
+			expect(denied(await env.appendFile(path, "escaped", ctx))).toBe(true);
+			expect(denied(await env.fileInfo(path, ctx))).toBe(true);
+			expect(denied(await env.readTextFile(path, ctx))).toBe(true);
+			expect(denied(await env.exists(path, ctx))).toBe(true);
+		}
+		expect(existsSync(outside)).toBe(false);
+	});
+
+	it("refuses dangling parent directories, including through chains and an existing contained directory link", async () => {
+		const { env, agentDir, workspace } = await layout();
+		const outside = join(agentDir, "missing-directory");
+		symlinkSync(outside, join(workspace, "dangling-dir"));
+		symlinkSync("dangling-dir", join(workspace, "chain"));
+		symlinkSync(workspace, join(workspace, "alias"));
+		for (const path of ["dangling-dir/deep/new.txt", "chain/deep/new.txt", "alias/dangling-dir/deep/new.txt"]) {
+			expect(denied(await env.writeFile(path, "escaped", ctx)), path).toBe(true);
+			expect(denied(await env.appendFile(path, "escaped", ctx)), path).toBe(true);
+			expect(denied(await env.createDir(path, { recursive: true }, ctx)), path).toBe(true);
+			expect(denied(await env.renameFile("hello.txt", path, ctx)), path).toBe(true);
+			expect(denied(await env.renameFile(path, "renamed.txt", ctx)), path).toBe(true);
+		}
+		expect(existsSync(outside)).toBe(false);
+		expect(readFileSync(join(workspace, "hello.txt"), "utf8")).toBe("hello");
+	});
+
+	it("also refuses unresolved links in the allowed temp root and links to missing contained targets", async () => {
+		const { env, workspace, agentDir, temp } = await layout();
+		const outside = join(agentDir, "new.txt");
+		symlinkSync(outside, join(temp, "dangling.txt"));
+		symlinkSync("not-created.txt", join(workspace, "contained-dangling.txt"));
+		for (const path of [join(temp, "dangling.txt"), "contained-dangling.txt"]) {
+			expect(denied(await env.writeFile(path, "escaped", ctx))).toBe(true);
+		}
+		expect(existsSync(outside)).toBe(false);
+		expect(existsSync(join(workspace, "not-created.txt"))).toBe(false);
+	});
+
+	it("preserves existing contained file and directory links, including new descendants and temp files", async () => {
+		const { env, workspace, temp } = await layout();
+		symlinkSync("hello.txt", join(workspace, "file-link"));
+		symlinkSync(workspace, join(workspace, "dir-link"));
+		symlinkSync(temp, join(workspace, "temp-link"));
+		expect((await env.readTextFile("file-link", ctx)).ok).toBe(true);
+		expect((await env.writeFile("file-link", "updated", ctx)).ok).toBe(true);
+		expect((await env.writeFile("dir-link/new/deep.txt", "inside", ctx)).ok).toBe(true);
+		expect((await env.writeFile("temp-link/new.txt", "temporary", ctx)).ok).toBe(true);
+		expect(readFileSync(join(workspace, "hello.txt"), "utf8")).toBe("updated");
+		expect(readFileSync(join(workspace, "new/deep.txt"), "utf8")).toBe("inside");
+		expect(readFileSync(join(temp, "new.txt"), "utf8")).toBe("temporary");
+	});
+
+	it("checks the adapter's file-URL and home-relative aliases before following links", async () => {
+		const { env, workspace, agentDir } = await layout();
+		vi.stubEnv("HOME", workspace); // only a synthetic home, never the person's files
+		symlinkSync(join(agentDir, "new.txt"), join(workspace, "dangling.txt"));
+		symlinkSync(join(agentDir, "missing-dir"), join(workspace, "dangling-dir"));
+		for (const path of [
+			"~/dangling.txt", "~/dangling-dir/deep/new.txt",
+			pathToFileURL(join(workspace, "dangling.txt")).href,
+			pathToFileURL(join(workspace, "dangling-dir/deep/new.txt")).href,
+			pathToFileURL(join(agentDir, "new.txt")).href,
+		]) {
+			expect(denied(await env.writeFile(path, "escaped", ctx)), path).toBe(true);
+		}
+		expect(existsSync(join(agentDir, "new.txt"))).toBe(false);
+		expect(existsSync(join(agentDir, "missing-dir"))).toBe(false);
+		for (const path of ["~/hello.txt", pathToFileURL(join(workspace, "hello.txt")).href]) {
+			expect((await env.readTextFile(path, ctx)).ok).toBe(true);
+			expect((await env.writeFile(path, "inside", ctx)).ok).toBe(true);
+		}
+		expect(readFileSync(join(workspace, "hello.txt"), "utf8")).toBe("inside");
 	});
 
 	it("puts temporary files in the agent's own temp directory, where they can be read", async () => {

@@ -103,6 +103,58 @@ func TestACommandWaitsForApproval(t *testing.T) {
 	}
 }
 
+// The shared workspace guard must reject unresolved symlinks before the real Node runtime writes through them.
+func TestWorkspaceWritesRefuseDanglingSymlinks(t *testing.T) {
+	h := start(t, t.TempDir(), Config{}) // isolated data and secrets.NewMemory(), never the keychain
+	agent := toolsAgent(t, h, []string{"write"}, []string{})
+	ws := filepath.Join(h.app.cfg.DataDir, "agents", agent, "workspace")
+	outside := t.TempDir()
+	if err := os.MkdirAll(ws, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, link, target, path string
+	}{
+		{"file", "report.txt", filepath.Join(outside, "new.txt"), "report.txt"},
+		{"directory", "dangling-dir", filepath.Join(outside, "missing-dir"), "dangling-dir/deep/new.txt"},
+		{"chain", "chain", "dangling-dir", "chain/deep/new.txt"},
+		{"file-url", "url-link", filepath.Join(outside, "url-new.txt"), (&url.URL{Scheme: "file", Path: filepath.Join(ws, "url-link")}).String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.Symlink(tc.target, filepath.Join(ws, tc.link)); err != nil {
+				t.Fatal(err)
+			}
+			args, err := json.Marshal(map[string]string{"path": tc.path, "content": "must stay inside"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := h.sendAndWait(agent, "t-"+tc.name, "CALL:write:"+string(args), "r-"+tc.name)
+			if out := strings.Join(toolResults(v), "\n"); !strings.Contains(out, "Unresolved symbolic link") {
+				t.Fatalf("the runtime did not report the symlink refusal: %q", out)
+			}
+			if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+				t.Fatalf("outside directory changed: %v, %v", entries, err)
+			}
+		})
+	}
+	// Existing contained links and ordinary missing descendants still work through the same write tool.
+	if err := os.WriteFile(filepath.Join(ws, "contained.txt"), []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("contained.txt", filepath.Join(ws, "contained-link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ path, request string }{
+		{"contained-link", "r-contained"},
+		{"new/deep.txt", "r-nested"},
+	} {
+		h.sendAndWait(agent, "t-ok", "WRITE:"+tc.path+":inside", tc.request)
+		if raw, err := os.ReadFile(filepath.Join(ws, tc.path)); err != nil || string(raw) != "inside" {
+			t.Fatalf("contained write %q: %q, %v", tc.path, raw, err)
+		}
+	}
+}
+
 func TestADenialAndATimeoutReachTheModel(t *testing.T) {
 	h := start(t, t.TempDir(), Config{})
 	agent := toolsAgent(t, h, []string{"bash"}, []string{"bash"})
