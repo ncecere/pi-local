@@ -2,7 +2,6 @@ package process
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,8 +41,10 @@ func TestOutputPrestartCleanup(t *testing.T) {
 			}
 			wg.Wait()
 			for _, f := range []*os.File{p.reader, p.writer} {
-				if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
-					t.Fatalf("endpoint left open: %v", err)
+				// Fd's documented closed-file sentinel is portable. Stat on a
+				// closed Windows pipe instead reports ERROR_INVALID_HANDLE.
+				if fd := f.Fd(); fd != ^uintptr(0) {
+					t.Fatalf("endpoint left open: handle %v", fd)
 				}
 			}
 		})
