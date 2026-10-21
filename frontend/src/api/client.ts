@@ -8,6 +8,10 @@ export { ApiError, apiErrorFrom } from './errors';
  */
 export type {
   About,
+  ActivityEntry,
+  ActivityFilters,
+  ActivityKind,
+  ActivityPage,
   Agent,
   AgentApprovals,
   AgentBudget,

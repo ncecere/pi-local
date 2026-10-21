@@ -1050,6 +1050,84 @@ and files are never included. The app's own log is its recent `slog` lines (kept
 | `POST /api/diagnostics` | Desktop app: asks where to save (the system Save dialog) and writes the zip. `{path}`, or `{cancelled: true}`; `501 not_supported` in a browser (use `GET`). |
 | `GET /api/diagnostics` | The zip as a download (`Content-Disposition: attachment`). |
 
+## Activity (v0.3)
+
+The audit log: what agents did and what was done to them. Each entry is one line in table `activity` of app.db. Entries
+are kept 90 days and pruned daily (at start, then every 24 hours); the log survives an agent that is deleted, under the
+name the agent had. Nothing here is a conversation: the most a message leaves is its first 120 characters.
+
+```ts
+type ActivityKind = "tool" | "message" | "schedule" | "ask" | "approval" | "sign_in" | "budget" | "error";
+
+interface ActivityEntry {
+  id: number;                 // grows with each entry; unique
+  at: number;                 // Unix ms: when it happened (a tool call: when it ended; a schedule run: when it fired)
+  kind: ActivityKind;
+  agentId: string | null;     // null for what belongs to no agent (an MCP sign-in)
+  agentName: string;          // as it was then
+  threadId: string | null;
+  actor: string;              // who: the agent, the person (the OS user's name), "Schedule: <name>", "Pi Local"
+  title: string;              // one line: the tool's name, "Message sent", "Approved bash", …
+  outcome: string;            // ok | error | denied | declined | refused | cancelled ("" when there is none)
+  durationMs: number | null;
+  detail: object;             // bounded (16 KiB) and redacted; its fields depend on the kind, below
+}
+```
+
+| Kind | Recorded when | `actor` | `outcome` | `detail` |
+|---|---|---|---|---|
+| `tool` | a tool call ended, reported by the agent's runtime | the agent | `ok`; `error` (it failed, or never ran: unavailable, invalid arguments, interrupted); `denied` (a rule, or a person, refused it); `declined` (it asked, and nobody decided: the request timed out or was cancelled) | `{callId, arguments, error?, approval?: {status: approved \| denied \| timed_out \| cancelled, by?, source?: builtin \| rule \| profile \| tools \| judge \| author, waitedMs?}}`. `error` is what the model was told when the call failed or was refused. `durationMs` is how long the tool ran, and absent when it never ran; the time waiting for a decision is `approval.waitedMs`. |
+| `message` | the person sent a message (the API accepted it) | the person | `ok` | `{preview, chars, attachments?, model?}`: `preview` is the first 120 characters on one line, anything that looks like a credential removed; `chars` the message's length. Messages from a schedule or another agent are recorded as `schedule` and `ask`. |
+| `schedule` | a schedule's run ended (its reply finished, or it failed to start) | `Schedule: <name>` | `ok`, `error` | `{scheduleId, runId, error?}`; `at` is when it fired, `durationMs` how long the run took; `threadId` is the run's conversation |
+| `ask` | an agent's ask to another ended | the asking agent | `ok`, `error` | `{askId, targetAgentId, targetAgent, targetThread, preview, error?}`; the entry is the asking agent's, in its conversation (`threadId`); `targetThread` is the conversation that answered |
+| `approval` | a request was decided: by the person, by running out of time, or cancelled because its call went away | the person, or `Pi Local` | `ok` (approved), `denied`, `declined` (timed out), `cancelled` | `{approvalId, tool, summary?, reason?}`; `durationMs` is how long it waited |
+| `sign_in` | an MCP server's sign-in ended, or it was signed out | the person | `ok`, `error`, `cancelled` | `{server, action: sign_in \| sign_out, error?}`; no agent |
+| `budget` | work was refused because a budget that says stop is used up | `Pi Local` | `refused` | `{via: message \| ask \| schedule, scope: app \| agent, monthlyUsd, spentUsd}`; `title` is the message the person or model was shown. `agentId` is the agent refused. |
+| `error` | a reply ended in an error; a message could not be delivered; an agent could not run | the agent, the person, or `Pi Local` | `error` | `{error}` |
+
+Everything free-form is redacted with the approvals rules (`internal/agents/redact.go`): a tool call's arguments by key
+and by value (`[redacted, N characters]`) and then word by word, so a key pasted into a command or a note is hidden too;
+errors and previews as text. The runtime redacts the arguments first, and the app does it again.
+
+| Route | Answer |
+|---|---|
+| `GET /api/activity` | `{items: ActivityEntry[], nextBefore: string \| null}`, newest first (by `at`, then `id`). Filters, all optional: `agent` (ID), `thread`, `kind` (one or more, comma-separated), `outcome` (one or more), `q` (matches the title, the actor, the agent's name and the detail, ignoring case), `since` (Unix ms: entries at or after it), `before` (the `nextBefore` of the previous page; a bare Unix ms time also works: entries before it), `limit` (1 to 500, default 100). `nextBefore` is null when there is nothing older. `400 invalid_kind`, `invalid_limit`, `invalid_since`, `invalid_before`, `invalid_filter`. |
+| `GET /api/activity/export` | The same filters (`before` and `limit` are ignored: every match, up to 200,000) as a CSV download, `pi-local-activity-<date-time>.csv`. Columns: `time` (ISO 8601, UTC, to the millisecond), `kind`, `agent`, `agent_id`, `thread_id`, `actor`, `title`, `outcome`, `duration_ms`, `detail` (the JSON). A cell that begins with `=`, `+`, `-`, `@`, a tab or a carriage return gets an apostrophe in front, so a spreadsheet never runs it as a formula. |
+| `POST /api/activity/export` | The same, for the desktop app: asks where to save (the system Save dialog) and writes the file. `{path}`, or `{cancelled: true}`; `501 not_supported` in a browser (use `GET`). |
+
+Entries are not pushed: there is no event for them. The UI reads again when a page is shown again, and now and then
+while a conversation's "What happened" panel is open.
+
+### Tool calls, from the runtime
+
+A runtime reports each tool call when it ends, to the gateway (the loopback port each runtime is started with, keyed by
+`PLATFORM_KEY`): `POST /activity`, batched (a batch is sent after a second, or when 200 are waiting; at most 200 per
+request).
+
+```ts
+// body
+{ items: [{
+    entryId: string,        // the call's result entry in the agent's storage: names the call even where providers repeat call IDs
+    callId: string,
+    threadId?: string,      // the thread whose run made the call (a subagent's call: its owner's)
+    tool: string,
+    arguments: unknown,     // bounded and redacted by the runtime (runtime/src/lib/redact.ts)
+    outcome: "ok" | "error" | "denied" | "declined",
+    durationMs?: number,
+    endedAt: number,        // Unix ms
+    approval?: { status, by?, source?, waitedMs? },
+    error?: string          // at most 300 characters
+}] }
+// answer
+{ data: { recorded: number } }
+```
+
+An item with no tool name, an unknown outcome, or neither `entryId` nor `callId` is dropped. A call reported twice
+(`entryId` is the key) is kept once. Where it is read: pi-durable's `afterTool` hook only runs for calls that ran, so
+the runtime reads each round's result entries in the generation task's `afterTools` hook, which covers a call that was
+blocked, refused or never run as well. Reporting is best effort: the runtime retries a failed batch five times (1 s, then
+doubling), keeps at most 2,000 waiting calls, and a call still queued when its process dies is not in the log.
+
 ## Not yet (later phases)
 
 Signing, notarizing and bundling Node into the app (Phase 8).

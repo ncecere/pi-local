@@ -2,7 +2,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowDown, ArrowUp, Clock, CornerUpLeft, LoaderCircle, Sparkles } from 'lucide-react';
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { errorMessage, type McpElicitation } from '~/api/client';
+import { type ChatMessage, errorMessage, type McpElicitation } from '~/api/client';
 import { AgentPicker } from '~/components/agent/agent-picker';
 import { publishAgentLive } from '~/components/agent/avatar/agent-live';
 import {
@@ -19,6 +19,7 @@ import { textOf } from '~/components/chat/message-content';
 import { MessageList } from '~/components/chat/message-list';
 import { ModelPicker } from '~/components/chat/model-picker';
 import { NoReplyNote } from '~/components/chat/reply-outcome-note';
+import { WhatHappened } from '~/components/chat/what-happened';
 import { Button } from '~/components/ui/button';
 import { FullPageSpinner } from '~/components/ui/spinner';
 import { UnavailableState } from '~/components/ui/unavailable-state';
@@ -51,6 +52,7 @@ import { findSnippetMessage } from '~/lib/search-find';
 import { rememberAgent } from '~/routes/chat/home';
 
 const NO_ELICITATIONS: McpElicitation[] = [];
+const NO_MESSAGES: ChatMessage[] = [];
 
 /** How long an idle agent leaves the person's message unanswered before the page says so. */
 const DROPPED_NOTICE_MS = 4_000;
@@ -554,6 +556,14 @@ function ThreadConversation({
           />
         </div>
         <DocumentsPanel agentId={agentId} threadId={threadId} documents={session.documents} />
+        <WhatHappened
+          agentId={agentId}
+          threadId={threadId}
+          messages={session.shownView?.messages ?? NO_MESSAGES}
+          hasEarlier={session.hasEarlier}
+          busy={busy}
+          below={Object.keys(session.documents ?? {}).length > 0}
+        />
       </div>
     </>
   );

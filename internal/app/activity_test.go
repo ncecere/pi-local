@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -230,6 +232,22 @@ func TestTheActivityLogRecordsMessagesToolCallsAndApprovals(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "sk-proj-") {
 		t.Fatalf("the export holds a credential")
+	}
+
+	// The desktop app saves through a dialog; a browser, which has none, is told to download.
+	if code, data := h.do("POST", "/api/activity/export?agent="+agent, nil); code != 501 || !strings.Contains(string(data), "not_supported") {
+		t.Fatalf("saving without a dialog: %d %s", code, data)
+	}
+	dir := t.TempDir()
+	h.app.API.SaveDialog = func(name string) (string, error) { return filepath.Join(dir, name), nil }
+	saved := decodeInto[struct{ Path string }](t, h.mustDo("POST", "/api/activity/export?agent="+agent+"&kind=message", nil, 200))
+	file, err := os.ReadFile(saved.Path)
+	if err != nil || !strings.HasPrefix(filepath.Base(saved.Path), "pi-local-activity-") || strings.Count(string(file), "\n") != 4 {
+		t.Fatalf("saved file: %v %q", err, file)
+	}
+	h.app.API.SaveDialog = func(string) (string, error) { return "", nil }
+	if got := decodeInto[struct{ Cancelled bool }](t, h.mustDo("POST", "/api/activity/export", nil, 200)); !got.Cancelled {
+		t.Fatalf("a cancelled dialog: %+v", got)
 	}
 }
 

@@ -37,6 +37,10 @@ reply finishes the next time you open the app.
   - notifications when something needs you
   - launch at login
 
+- **Activity:** an audit log of what your agents did: each tool call with its arguments (keys and tokens removed), how
+  it ended and how long it took, and the messages sent, schedules run, approvals decided, asks between agents,
+  sign-ins, budget refusals and errors. Browse and export it from Settings → Activity or an agent's Activity tab; a
+  conversation's **What happened** button lists its steps with times and durations. Kept 90 days.
 - **Backups:** a daily backup of your agents, conversations and settings (keeping 7), one before each update, and
   yours when you want; restore from Settings → Backups. **Diagnostics** to send when something goes wrong: logs and
   settings with keys and tokens removed.
@@ -99,6 +103,7 @@ A local release build: `make release VERSION=0.2.0` (signs when `RELEASE_SIGNING
 | `internal/models`, `internal/mcp`, `internal/secrets` | Providers and models, MCP servers, the OS keychain |
 | `internal/approvals`, `internal/asks`, `internal/teams` | Tool approvals, agents asking agents, teams |
 | `internal/schedules`, `internal/search`, `internal/usage` | Schedules, message search (FTS5), usage |
+| `internal/activity` | The audit log: what runtimes report (tool calls) and the app records, kept 90 days, CSV export |
 | `internal/backup`, `internal/diagnostics` | Backups, restoring them at the next start, the daily one; the diagnostics zip |
 | `internal/api` | The UI's API ([docs/api.md](docs/api.md)) |
 | `runtime/` | The agent runtime (TypeScript, from pi-durable-platform, on SQLite), bundled to `runtime.mjs` |
@@ -111,7 +116,7 @@ The data directory is `~/Library/Application Support/Pi Local`, or `-data` / `PI
 
 | Path | What |
 |---|---|
-| `app.db` | The index of agents and threads, settings, providers, MCP servers, approvals, asks, schedules, usage, search |
+| `app.db` | The index of agents and threads, settings, providers, MCP servers, approvals, asks, schedules, usage, activity, search |
 | `agents/<id>/agent.yaml` | The agent's config: model, instructions, tools, approvals, MCP servers, schedules |
 | `agents/<id>/state.sqlite` | Its conversations; only its runtime opens it |
 | `agents/<id>/workspace/` | Its files (attachments under `attachments/`) |

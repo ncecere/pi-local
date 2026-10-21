@@ -1188,3 +1188,55 @@ export interface BackupList {
   canRestart: boolean;
   lastRestore: LastRestore | null;
 }
+
+// ── Activity (docs/api.md, "Activity (v0.3)") ──────────────────────────────────────────────
+
+export type ActivityKind =
+  | 'tool'
+  | 'message'
+  | 'schedule'
+  | 'ask'
+  | 'approval'
+  | 'sign_in'
+  | 'budget'
+  | 'error';
+
+/** One thing that happened: a tool call, a message sent, a schedule run, an approval decided, an error. */
+export interface ActivityEntry {
+  id: number;
+  /** Unix ms: when it happened (a tool call: when it ended). */
+  at: number;
+  kind: ActivityKind;
+  /** Null for what belongs to no agent (an MCP sign-in). */
+  agentId: string | null;
+  /** The agent's name as it was then. */
+  agentName: string;
+  threadId: string | null;
+  /** Who: the agent, the person, a schedule, another agent, or Pi Local. */
+  actor: string;
+  title: string;
+  /** `ok`, `error`, `denied`, `declined`, `refused` or `cancelled`. */
+  outcome: string;
+  durationMs: number | null;
+  /** What more is known; its fields depend on the kind. */
+  detail: Record<string, unknown>;
+}
+
+/** `GET /api/activity`: a page, newest first. */
+export interface ActivityPage {
+  items: ActivityEntry[];
+  /** Pass as `before` for the next page; null at the end. */
+  nextBefore: string | null;
+}
+
+/** What `GET /api/activity` and its export filter by. */
+export interface ActivityFilters {
+  agent?: string;
+  thread?: string;
+  kind?: ActivityKind[];
+  outcome?: string[];
+  /** Matches the title, the actor, the agent's name and the detail. */
+  q?: string;
+  /** Only entries at or after this time (Unix ms). */
+  since?: number;
+}

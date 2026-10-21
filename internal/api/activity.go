@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 func (a *API) activityRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/activity", a.listActivity)
 	m.HandleFunc("GET /api/activity/export", a.exportActivity)
+	m.HandleFunc("POST /api/activity/export", a.saveActivity)
 }
 
 // activityQuery reads the filters both routes share; a bad one is a 400 already answered.
@@ -81,21 +83,57 @@ func (a *API) listActivity(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"items": items, "nextBefore": nextBefore})
 }
 
-func (a *API) exportActivity(w http.ResponseWriter, r *http.Request) {
+// activityCSV is the export of what the request's filters match (built in memory first: an error part-way is then a
+// clean 500 and not a half file). It answers false when the request was refused or failed, having already said so.
+func (a *API) activityCSV(w http.ResponseWriter, r *http.Request) ([]byte, string, bool) {
 	q, good := a.activityQuery(w, r)
 	if !good {
-		return
+		return nil, "", false
 	}
-	// Built in memory first: an error part-way is then a clean 500 and not a half file.
 	var buf bytes.Buffer
 	if err := a.Activity.WriteCSV(r.Context(), &buf, q); err != nil {
 		if r.Context().Err() == nil {
 			fail(w, http.StatusInternalServerError, "internal", "could not export the activity")
 		}
+		return nil, "", false
+	}
+	return buf.Bytes(), "pi-local-activity-" + time.Now().Format("2006-01-02-150405") + ".csv", true
+}
+
+// exportActivity is the browser's way: the CSV as a download.
+func (a *API) exportActivity(w http.ResponseWriter, r *http.Request) {
+	data, name, good := a.activityCSV(w, r)
+	if !good {
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Disposition", `attachment; filename="pi-local-activity-`+time.Now().Format("2006-01-02-150405")+`.csv"`)
-	w.Write(buf.Bytes())
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Write(data)
+}
+
+// saveActivity is the desktop app's way: the system Save dialog, then the file.
+func (a *API) saveActivity(w http.ResponseWriter, r *http.Request) {
+	if a.SaveDialog == nil {
+		fail(w, http.StatusNotImplemented, "not_supported", "Saving through a dialog needs the desktop app.")
+		return
+	}
+	data, name, good := a.activityCSV(w, r)
+	if !good {
+		return
+	}
+	path, err := a.SaveDialog(name)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "The save dialog failed: "+err.Error())
+		return
+	}
+	if path == "" {
+		ok(w, map[string]any{"cancelled": true})
+		return
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		fail(w, http.StatusInternalServerError, "internal", "Could not write "+path+": "+err.Error())
+		return
+	}
+	ok(w, map[string]any{"path": path})
 }

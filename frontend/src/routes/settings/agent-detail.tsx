@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { ChevronLeft, MessageSquarePlus } from 'lucide-react';
 import { type KeyboardEvent, useId, useState } from 'react';
 import { AgentAvatar } from '~/components/agent/agent-avatar';
+import { ActivityTab } from '~/components/agent-manager/activity-tab';
 import { AgentActions } from '~/components/agent-manager/agent-actions';
 import { AgentStatus } from '~/components/agent-manager/agent-status';
 import { CanAskTab } from '~/components/agent-manager/can-ask-tab';
@@ -29,6 +30,7 @@ type TabId =
   | 'memory'
   | 'can-ask'
   | 'schedules'
+  | 'activity'
   | 'config'
   | 'logs';
 
@@ -40,6 +42,7 @@ const TAB_IDS: readonly string[] = [
   'memory',
   'can-ask',
   'schedules',
+  'activity',
   'config',
   'logs',
 ];
@@ -90,6 +93,7 @@ export function SettingsAgentDetailPage({
     { id: 'memory', label: 'Memory' },
     { id: 'can-ask', label: 'Can ask' },
     { id: 'schedules', label: 'Schedules' },
+    { id: 'activity', label: 'Activity' },
     { id: 'config', label: 'agent.yaml' },
     { id: 'logs', label: 'Logs' },
   ];
@@ -188,6 +192,7 @@ export function SettingsAgentDetailPage({
         {current === 'memory' && <MemoryTab agent={agent} />}
         {current === 'can-ask' && <CanAskTab agent={agent} agents={agents.data} />}
         {current === 'schedules' && <SchedulesTab agent={agent} />}
+        {current === 'activity' && <ActivityTab agent={agent} />}
         {current === 'config' && <ConfigTab agent={agent} />}
         {current === 'logs' && <LogsTab agent={agent} />}
       </div>
