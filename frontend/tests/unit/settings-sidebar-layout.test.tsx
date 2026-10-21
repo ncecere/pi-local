@@ -42,7 +42,7 @@ afterEach(() => {
   route.navigate.mockClear();
 });
 
-async function settings(pathname = '/settings') {
+async function settings(pathname = '/settings', secretsInKeychain = false) {
   route.pathname = pathname;
   fakeBackend({
     'GET /api/you/memories?status=suggested': () => [
@@ -53,33 +53,71 @@ async function settings(pathname = '/settings') {
     <ThemeProvider>
       <SettingsLayout />
     </ThemeProvider>,
+    { features: { secretsInKeychain } },
   );
   await settle();
   return document.querySelector('nav[aria-label="Settings sections"]')!;
 }
 
 describe('Settings section navigation', () => {
-  it('is a flat wrapping set of real links, with an underline instead of nested pills', async () => {
-    const nav = await settings();
-    const track = nav.firstElementChild!;
-    expect(track.classList.contains('flex-wrap')).toBe(true);
-    expect(track.className).not.toMatch(/rounded-|bg-|(?:^|\s)p-1(?:\s|$)/);
-    const links = [...nav.querySelectorAll('a')];
-    expect(links).toHaveLength(14);
-    expect(links.map((link) => link.getAttribute('href'))).toEqual(
-      [...nav.querySelectorAll('option')].map((option) => option.value),
-    );
-    const current = nav.querySelector('a[aria-current="page"]')!;
-    expect(current.getAttribute('href')).toBe('/settings');
-    expect(current.className).toContain('border-[var(--accent-bright)]');
-    expect(current.className).toContain('font-semibold');
-    for (const link of links) {
-      expect(link.className).not.toMatch(/rounded-|bg-/);
-      expect(link.className).toContain('border-b-2');
-      expect(link.className).toContain('px-2.5');
-      for (const token of FOCUS_RING.split(' ')) expect(link.classList.contains(token)).toBe(true);
-    }
-  });
+  it.each([false, true])(
+    'groups all sections into vertical semantic lists (keychain feature: %s)',
+    async (feature) => {
+      const nav = await settings('/settings', feature);
+      const track = nav.firstElementChild!;
+      expect(track.classList.contains('flex-col')).toBe(true);
+      expect(track.classList.contains('md:flex')).toBe(true);
+      expect(track.classList.contains('flex-wrap')).toBe(false);
+      const expected = [
+        ['Personal', ['/settings/you', '/settings/customization']],
+        [
+          'Agents & work',
+          [
+            '/settings/agents',
+            '/settings/teams',
+            '/settings/schedules',
+            '/settings/conversations',
+            '/settings/prompts',
+          ],
+        ],
+        ['Models & connections', ['/settings/models', '/settings/connections', '/settings/mcp']],
+        ['App', ['/settings', '/settings/usage', '/settings/activity', '/settings/backups']],
+      ];
+      const groups = [...track.querySelectorAll('section')];
+      expect(groups).toHaveLength(4);
+      groups.forEach((group, index) => {
+        const heading = group.querySelector('h2')!;
+        expect(group.getAttribute('aria-labelledby')).toBe(heading.id);
+        expect(heading.textContent).toBe(expected[index]?.[0]);
+        expect(
+          [...group.querySelectorAll('ul > li > a')].map((link) => link.getAttribute('href')),
+        ).toEqual(expected[index]?.[1]);
+        expect(group.querySelector('ul')?.classList.contains('flex-col')).toBe(true);
+      });
+      const links = [...nav.querySelectorAll('a')];
+      expect(links).toHaveLength(14);
+      expect(new Set(links.map((link) => link.getAttribute('href'))).size).toBe(14);
+      expect(links.map((link) => link.getAttribute('href'))).toEqual(
+        [...nav.querySelectorAll('option')].map((option) => option.value),
+      );
+      const current = nav.querySelector('a[aria-current="page"]')!;
+      expect(current.getAttribute('href')).toBe('/settings');
+      expect(current.className).toContain('before:bg-[var(--accent-bright)]');
+      expect(current.className).toContain('bg-[var(--bg-control-hover)]');
+      expect(current.className).toContain('font-semibold');
+      for (const link of links) {
+        expect(link.className).toContain('rounded-md');
+        expect(link.className).not.toContain('border-b-2');
+        for (const token of FOCUS_RING.split(' '))
+          expect(link.classList.contains(token)).toBe(true);
+      }
+      const sidebar = document.querySelector('[data-settings-sidebar]')!;
+      expect(sidebar.contains(nav)).toBe(true);
+      expect(sidebar.classList.contains('md:sticky')).toBe(true);
+      expect(sidebar.classList.contains('md:overflow-y-auto')).toBe(true);
+      expect(document.querySelector('main')?.querySelector('nav')).toBeNull();
+    },
+  );
 
   it('keeps active-page semantics on nested routes and badges on both responsive navigators', async () => {
     const nav = await settings('/settings/you/details');
@@ -92,13 +130,46 @@ describe('Settings section navigation', () => {
     );
     const select = nav.querySelector('select')!;
     expect(select.value).toBe('/settings/you');
-    expect(select.selectedOptions[0]?.textContent).toBe('You (1)');
-    expect(select.className).toContain('sm:hidden');
-    await act(async () => {
-      select.value = '/settings/backups';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(route.navigate).toHaveBeenCalledWith({ to: '/settings/backups' });
+    expect(select.selectedOptions[0]?.textContent).toBe('You (1 suggestion waiting)');
+    expect(select.className).toContain('md:hidden');
+    expect([...select.querySelectorAll('optgroup')].map((group) => group.label)).toEqual([
+      'Personal',
+      'Agents & work',
+      'Models & connections',
+      'App',
+    ]);
+    for (const token of FOCUS_RING.split(' ')) expect(select.classList.contains(token)).toBe(true);
+    for (const option of select.options) {
+      await act(async () => {
+        select.value = option.value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      expect(route.navigate).toHaveBeenLastCalledWith({ to: option.value });
+    }
+    expect(route.navigate).toHaveBeenCalledTimes(14);
+  });
+  it('keeps identity compact and shortcuts/help closed until requested', async () => {
+    await settings();
+    const profile = document.querySelector('[aria-label="Your profile"]')!;
+    expect(profile.textContent).toContain('Ada');
+    expect(profile.querySelector('span')?.classList.contains('size-10')).toBe(true);
+    expect(profile.innerHTML).not.toContain('lg:size-24');
+    const footer = document.querySelector('section[aria-label="Shortcuts and help"]')!;
+    const details = [...footer.querySelectorAll('details')];
+    expect(details.map((detail) => detail.querySelector('summary')?.textContent?.trim())).toEqual([
+      'Keyboard shortcuts',
+      'Need help?',
+    ]);
+    for (const detail of details) {
+      expect(detail.open).toBe(false);
+      for (const token of FOCUS_RING.split(' '))
+        expect(detail.querySelector('summary')?.classList.contains(token)).toBe(true);
+    }
+    expect(details[0]?.classList.contains('any-pointer-fine:block')).toBe(true);
+    expect(details[0]?.querySelectorAll('kbd').length).toBeGreaterThan(0);
+    await click(details[1]?.querySelector('summary'));
+    expect(details[1]?.open).toBe(true);
+    expect(details[1]?.textContent).toContain("in each agent's own folder");
   });
 });
 

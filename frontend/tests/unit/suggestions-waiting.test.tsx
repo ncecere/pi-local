@@ -67,7 +67,7 @@ describe('Suggestions waiting, outside Settings → You', () => {
     const option = [
       ...document.querySelectorAll('select[aria-label="Settings section"] option'),
     ].find((o) => o.textContent?.startsWith('You'));
-    expect(option?.textContent).toBe('You (2)');
+    expect(option?.textContent).toBe('You (2 suggestions waiting)');
   });
 
   it('shows nothing when there are none', async () => {
