@@ -112,8 +112,10 @@ test('packaging uses frozen installs and assembles notices after Node LICENSE, b
   const generator = shell.indexOf('node packaging/licenses/generate.mjs');
   assert.ok(generator > shell.indexOf('"$APP/Contents/Resources/node-LICENSE"'));
   assert.ok(generator < shell.indexOf('codesign --force'));
-  assert.match(shell, /runtime install --frozen-lockfile/);
-  assert.match(shell, /frontend install --frozen-lockfile/);
+  // Corepack must see each project's packageManager before pnpm starts; --dir from the root is too late.
+  assert.match(shell, /\(cd runtime && pnpm install --frozen-lockfile\)/);
+  assert.match(shell, /\(cd frontend && pnpm install --frozen-lockfile\)/);
+  assert.doesNotMatch(shell, /pnpm --dir (?:runtime|frontend) install/);
   assert.match(shell, /third-party" --node-version "\$NODE_VERSION" "\$GO_NOTICE_ARCH"/);
 });
 

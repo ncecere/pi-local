@@ -2,9 +2,11 @@
 
 Each version's section is its release notes on GitHub.
 
-## 0.3.0
+## 0.3.1
 
-Trust and control.
+Trust and control. This is the first published v0.3 build: the v0.3.0 tag passed application checks, but its packaging
+job stopped before publication because Corepack selected the wrong pnpm version. Packaging now enters each project's
+directory before running its pinned package manager. The original tag is retained unchanged.
 
 - **Approval profiles and rules:** choose Careful, Balanced, Trusting or Custom. Add rules for tools and arguments,
   approve once or remember a command, and always ask before built-in risky operations. Optional fast judgments can
@@ -26,6 +28,11 @@ Trust and control.
   the same guarded cache operations.
 - **Distribution notices:** packaged dependency licenses, copyright notices and pinned provenance now ship inside
   the app, assembled and checked before signing.
+
+## 0.3.0
+
+Unpublished packaging attempt. The tag is retained for traceability; use v0.3.1 for the tested application features
+and corrected distribution packaging.
 
 ## 0.2.0
 
