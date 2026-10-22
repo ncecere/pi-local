@@ -487,6 +487,7 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 	if err != nil {
 		t.Fatal("semantic diagnostic API unavailable")
 	}
+	shapeAPI := candidateShapeNativeAPI(t)
 	primary, err := candidateAcquirePrimary(primaryAPI)
 	if err != nil {
 		t.Fatal(err)
@@ -553,6 +554,8 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				defer cancel()
 				checked, resumed := 0, 0
 				var accessReport candidateAccessReport
+				var shapeReport candidateShapeReport
+				var shapeErr error
 				var diagnosticErr error
 				var attributes []uintptr
 				injected := errors.New("injected failure after REAL token/job verification")
@@ -575,7 +578,8 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 						if diagnosticErr == nil && !accessReport.matches(true) {
 							diagnosticErr = errors.New("semantic control mismatch")
 						}
-						return diagnosticErr
+						shapeReport, shapeErr = candidateDiagnoseShape(primary.derived.token, process, shapeAPI)
+						return errors.Join(diagnosticErr, shapeErr)
 					}, &cleanup.cleanupErr),
 					verification: dependencies, // explicit complete native FIXED contract
 					beforeResume: func(pi windows.ProcessInformation, job windows.Handle) error {
@@ -620,7 +624,8 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 					}
 				}
 				candidateLogAccessReport(t, accessReport, diagnosticErr)
-				if cleanup.cleanupErr != nil || !accessReport.matches(true) {
+				candidateLogShapeReport(t, shapeReport, shapeErr)
+				if cleanup.cleanupErr != nil || !accessReport.matches(true) || !shapeReport.complete || shapeErr != nil {
 					t.Error("semantic diagnostic/witness failed (no verification authority)")
 				}
 				// The launcher must neither close nor replace this borrowed token,
