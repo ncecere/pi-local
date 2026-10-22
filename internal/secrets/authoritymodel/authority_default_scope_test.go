@@ -416,7 +416,9 @@ func TestDefaultScopeCancelledDefaultHasZeroBackendActivity(t *testing.T) {
 	scopeUnchanged(t, before, m.snapshot())
 }
 
-func TestAuthorityModelNilAdmissionHookPreservesOriginalBehavior(t *testing.T) {
+// This checks wrapper delegation, not an independent historical implementation.
+// Preservation evidence also relies on the minimal diff and unchanged old tests.
+func TestAuthorityModelOpenWrapperDelegatesToNilAdmission(t *testing.T) {
 	for _, ref := range []string{"default", modelProfile, "invalid"} {
 		for _, alias := range []string{"observed-main", "observed-alias", "observed-other", "unknown"} {
 			for _, fault := range []modelFault{{}, {Point: "pending.write", When: "after"}, {Point: "pending.readback", When: "mismatch"}} {
