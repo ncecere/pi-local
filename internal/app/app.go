@@ -431,8 +431,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	})
 	// Updates from GitHub releases: checking works anywhere; installing needs the installed app (the desktop sets how
 	// it relaunches).
-	exe, _ := os.Executable()
-	a.Updater = update.New(Version, update.BundleOf(exe))
+	a.Updater = update.New(Version, update.CurrentBundle())
 	a.Updater.LoadAutoCheck = func() bool {
 		var v string
 		db.QueryRow(`SELECT value FROM settings WHERE key = 'update_auto_check'`).Scan(&v)
