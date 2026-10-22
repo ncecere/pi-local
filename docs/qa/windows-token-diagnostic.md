@@ -118,9 +118,32 @@ output, independent candidate reporting, CI prerequisites and owned lifetime
 failures. These Windows fake cases have been compiled, **not run on macOS**.
 
 Parent full-source review and independent security review approved only this
-diagnostic scope; no findings blocked the measurement. Pending: deliberate
-commit/push and native CI. Do not infer an available qualifying token or passing native
-fake/race/checkptr result from compilation. No launch/profile stage is approved.
+diagnostic scope; no findings blocked the measurement. The first native result
+is recorded below. Compilation alone does not establish qualifying tokens or
+native fake/race/checkptr acceptance. No launch/profile stage is approved.
+
+## First native measurement — no qualifying token
+
+Windows CI [39705935257](https://github.com/ncecere/pi-local/actions/runs/39705935257)
+at `7a9fe47` completed normal fake cases and real token inspection, then correctly
+failed because neither supported candidate qualified. The current primary token
+was Default(1), elevated(1), Primary(1), High integrity (0x3000), with enabled
+Administrators membership. Default has no UAC-linked limited token; no linked
+query was attempted.
+
+SAFER NORMALUSER inspection completed with matching user/session, Primary type,
+deny-only Administrators membership and no enabled administrative/unknown
+privileges, but retained elevation=1 and High integrity (0x3000). It was refused
+for both reasons. No child, profile, account or policy mutation occurred. No
+cleanup error was reported; native handle-growth behavior was not measured.
+The workflow stopped at the failed normal diagnostic; race/vet steps were not
+established by this run. The red prerequisite is not a token-parser failure,
+unsupported success, or permission to relax elevation/integrity requirements.
+
+A separate owned-token restriction-only experiment may be evaluated next,
+after independent review. It must not mutate the input/process token, launch a child or alter global
+policy, and its metadata eligibility still cannot authorize launch. Otherwise,
+a separately provisioned genuine standard-user runner remains required.
 
 ### Official API references
 
