@@ -9,6 +9,7 @@ on:
       - 'runtime/**'
       - 'frontend/**'
       - 'packaging/licenses/build-receipt.mjs'
+      - 'packaging/licenses/build-receipt.test.mjs'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:
@@ -47,6 +48,10 @@ jobs:
           test "$(node --version)" = v22.23.0
           (cd runtime && test "$(pnpm --version)" = 11.18.0)
           (cd frontend && test "$(pnpm --version)" = 11.18.0)
+      - name: Receipt path regressions on native Windows before assets
+        run: |
+          set -euo pipefail
+          node --test packaging/licenses/build-receipt.test.mjs
       - name: Frozen package-cwd assets before Go embed
         run: |
           set -euo pipefail
