@@ -27,7 +27,7 @@ Application Support or real user-profile data. Build/test caches are harness
 activity, not diagnostic fixtures.
 
 The test opens only its own explicit primary token with TOKEN_QUERY |
-TOKEN_DUPLICATE, then calls SystemDLL advapi32 CreateRestrictedToken with
+TOKEN_DUPLICATE | TOKEN_ADJUST_DEFAULT, then calls SystemDLL advapi32 CreateRestrictedToken with
 DISABLE_MAX_PRIVILEGE (0x1) | LUA_TOKEN (0x4), all three counts zero and all
 three array pointers NULL. Current Microsoft Learn and Microsoft's SDK
 winnt.h document LUA_TOKEN, not a reserved flag. No claim that it normalizes
@@ -42,10 +42,12 @@ medium is refused (no increase); exact medium requires no Set. Higher known
 IL permits only a downward SetTokenInformation(TokenIntegrityLevel) attempt on
 that derived object, using an aligned TOKEN_MANDATORY_LABEL and embedded,
 Go-owned S-1-16-8192 SID, exact header+12-byte extent and KeepAlive through return.
-No access widening or privilege enabling is attempted. IMPORTANT: the documented
-CreateRestrictedToken output retains input handle access rights; QUERY |
-DUPLICATE does not promise sufficient Set access. A denied label attempt stays
-red even if later metadata happens to qualify. No fallback is authorized.
+CreateRestrictedToken retains input handle access rights, so the derived-label
+prerequisite TOKEN_ADJUST_DEFAULT is requested explicitly on the initial open,
+not added by reopening after a failure. The input handle is never a label-write
+target: distinct owned-output checks and before/after inspected-field witnesses
+remain mandatory. No privilege enabling or access-retry fallback is attempted.
+A denied label operation stays red even if later metadata happens to qualify.
 
 Full actual postlabel metadata is re-queried, including after Set failure.
 Qualification requires primary=1, elevation EXACTLY 0, canonical non-Full type,
@@ -83,8 +85,9 @@ are saved and any nonzero makes the aggregate fail. No old profile/child test
 is selected. Only a completely non-opted-in developer Windows native function
 may skip; explicit CI missing prerequisites/qualification/API/cleanup fails.
 
-Pending: parent reads ALL new source, independent review, deliberate push and
-Windows native/fake/race/checkptr CI. No local Windows API execution was possible.
+Parent full-source and independent security reviews approved DIAGNOSTIC ONLY,
+including the explicit initial rights and known-RID corrections. No findings
+blocked this measurement. Pending: deliberate push and Windows native/fake/race/checkptr CI. No local Windows API execution was possible.
 All APIs/flags used are documented; behavior/elevation normalization and label
 access success remain unmeasured, not assurances. No push was performed here.
 
@@ -101,3 +104,10 @@ Final post-edit process Windows amd64 compilation **exit 0**, cross-vet
 **exit 0**, diff whitespace check **exit 0**. Attempted actionlint returned
 **exit 127** (command unavailable); actionlint is NOT validated here. YAML
 validation above passed, but does not replace actionlint or Windows execution.
+
+After the explicit up-front rights and conservative known-RID correction, the
+parent repeated Go 1.26.10 Mac normal/race/vet, Windows compilation/vet, YAML and
+whitespace checks; all passed (`v05-owned-restriction-diagnostic-parent-gate`,
+exit 0). The parent also ran actionlint v1.7.7 through its pinned Go command;
+that check passed, superseding the earlier unavailable-command result. These
+checks still do not execute Windows-only native or fake cases.

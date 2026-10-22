@@ -19,6 +19,11 @@ import (
 // an assurance that elevation, integrity, groups or privileges will qualify.
 const restrictionFlags = uint32(0x1 | 0x4) // DISABLE_MAX_PRIVILEGE | LUA_TOKEN
 
+// CreateRestrictedToken preserves input handle rights. Request the derived
+// label-operation prerequisite up front; never reopen with wider rights after
+// failure. Possession of this input handle is not permission to write its label.
+const restrictionInputAccess = windows.TOKEN_QUERY | windows.TOKEN_DUPLICATE | windows.TOKEN_ADJUST_DEFAULT
+
 type restrictionAPI struct {
 	inspect diagAPI
 	create  func(windows.Token, uint32, uint32, *windows.SIDAndAttributes, uint32, *windows.LUIDAndAttributes, uint32, *windows.SIDAndAttributes, *windows.Token) error
@@ -81,7 +86,7 @@ func restrictionCreate(in windows.Token, api restrictionAPI) (*diagOwned, error)
 func restrictionKnownIL(il uint32) bool {
 	// Explicit SDK RIDs only; do not interpret arbitrary values as a known IL.
 	switch il {
-	case 0, 0x1000, 0x2000, 0x200a, 0x2100, 0x3000, 0x4000, 0x5000:
+	case 0, 0x1000, 0x2000, 0x2100, 0x3000, 0x4000, 0x5000:
 		return true
 	}
 	return false
@@ -100,10 +105,10 @@ func restrictionLower(in windows.Token, owner *diagOwned, pre, current diagSnaps
 	if pre.il == 0x2000 {
 		return nil // exact medium already; still re-inspect, never assume success
 	}
-	// Only the newly derived object may be lowered. No access widening,
-	// DuplicateTokenEx, privilege enabling or fallback if this call is denied.
-	// CreateRestrictedToken preserves input handle rights (QUERY|DUPLICATE),
-	// so the label attempt may fail for insufficient access; that stays RED.
+	// Only the newly derived object may be lowered. Its input handle rights
+	// included ADJUST_DEFAULT up front so the derived handle can inherit that
+	// prerequisite. No reopen/rights escalation, privilege enabling or fallback
+	// if the label call is denied; the input process token is never a Set target.
 	header := uint32(unsafe.Sizeof(windows.Tokenmandatorylabel{}))
 	size := header + 12 // exact TOKEN_MANDATORY_LABEL + S-1-16-8192 SID
 	word := uint32(unsafe.Sizeof(uintptr(0)))
@@ -143,7 +148,7 @@ func restrictionRun(api restrictionAPI, log func(string)) (err error) {
 		return e
 	}
 	var in windows.Token
-	openErr := api.inspect.open(windows.CurrentProcess(), windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE, &in)
+	openErr := api.inspect.open(windows.CurrentProcess(), restrictionInputAccess, &in)
 	input := &diagOwned{h: windows.Handle(in), close: api.inspect.closeToken}
 	defer func() { err = errors.Join(err, input.release()) }()
 	if openErr != nil {

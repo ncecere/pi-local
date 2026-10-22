@@ -74,6 +74,15 @@ func newRestrictionFake(t *testing.T) *restrictionFake {
 			return nil
 		},
 	}
+	open := r.api.inspect.open
+	r.api.inspect.open = func(process windows.Handle, access uint32, out *windows.Token) error {
+		if access != windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE|windows.TOKEN_ADJUST_DEFAULT {
+			t.Fatal("restriction input access must request the exact derived-label prerequisite up front")
+		}
+		// Reuse only the original fake's ownership encoder; the requested
+		// restriction-stage access mask has already been independently asserted.
+		return open(process, windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE, out)
+	}
 	r.api.inspect.query = func(token windows.Token, class uint32, out *byte, n uint32, used *uint32) error {
 		if class == windows.TokenLinkedToken {
 			t.Fatal("third experiment must not query linked tokens")
@@ -116,6 +125,7 @@ func TestWindowsTokenRestrictionDiagnosticFakeMeasuresActualMetadata(t *testing.
 		{"low-never-raised", func(s *diagSnapshot) { s.il = 0x1000 }, 0, "label increase refused"},
 		{"untrusted-never-raised", func(s *diagSnapshot) { s.il = 0 }, 0, "label increase refused"},
 		{"unknown-integrity-refused", func(s *diagSnapshot) { s.il = 0x2222 }, 0, "known-integrity gate refused"},
+		{"unverified-integrity-refused", func(s *diagSnapshot) { s.il = 0x200a }, 0, "known-integrity gate refused"},
 		{"elevation-one-never-waived", func(s *diagSnapshot) { s.elevation = 1 }, 1, "elevation-not-exact-zero"},
 		{"noncanonical-elevation-refused", func(s *diagSnapshot) { s.elevation = 2 }, 1, "elevation-not-exact-zero"},
 		{"Full-type-refused", func(s *diagSnapshot) { s.elevationType = 2 }, 1, "Full-elevation-type-refused"},
