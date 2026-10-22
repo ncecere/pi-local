@@ -21,24 +21,31 @@ function DesktopSection() {
   const desktop = useDesktopSettings();
   const setLaunch = useSetLaunchAtLogin();
   if (!desktop.data?.available) return null;
+  const capability = desktop.data.capabilities?.launchAtLogin;
+  const supported = capability?.available === true;
   return (
     <SettingsSection title="Desktop">
       <SettingsRow
         id="launch-at-login"
         label="Open Pi Local when you log in"
-        description="It starts in the menu bar with its window closed, so your schedules run and agents can reach you without you opening it. Click its menu bar icon to open the window."
+        description={
+          supported
+            ? 'It starts in the menu bar with its window closed, so your schedules run and agents can reach you without you opening it. Click its menu bar icon to open the window.'
+            : capability?.reason || 'Launching at login is not supported on this platform.'
+        }
       >
         <Switch
-          checked={desktop.data.launchAtLogin}
-          disabled={setLaunch.isPending}
+          checked={supported && desktop.data.launchAtLogin}
+          disabled={!supported || setLaunch.isPending}
           aria-labelledby="launch-at-login-label"
           aria-describedby="launch-at-login-description"
-          onCheckedChange={(on) =>
+          onCheckedChange={(on) => {
+            if (!supported) return;
             setLaunch.mutate(on, {
               onError: (error) =>
                 toast.error(errorMessage(error, 'The setting could not be changed.')),
-            })
-          }
+            });
+          }}
         />
       </SettingsRow>
     </SettingsSection>

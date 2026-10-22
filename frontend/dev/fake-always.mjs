@@ -468,11 +468,22 @@ export function createAlways({
     };
     if (path === '/api/settings/desktop') {
       const available = process.env.FAKE_BROWSER !== '1';
+      const supported = available && process.env.FAKE_STARTUP_UNSUPPORTED !== '1';
+      const capabilities = {
+        launchAtLogin: {
+          available: supported,
+          reason: !available
+            ? 'Launching at login needs the desktop app.'
+            : supported
+              ? 'macOS LaunchAgent startup is implemented.'
+              : 'Launching at login is not supported on this platform.',
+        },
+      };
       if (m === 'PUT') {
-        if (!available) return refuse(409, 'unavailable', 'Only the desktop app opens at login.');
+        if (!supported) return refuse(501, 'not_supported', capabilities.launchAtLogin.reason);
         launchAtLogin = Boolean(body.launchAtLogin);
       }
-      return json({ available, launchAtLogin: available && launchAtLogin });
+      return json({ available, launchAtLogin: supported && launchAtLogin, capabilities });
     }
     if (path === '/api/search' && m === 'GET') {
       const q = url.searchParams.get('q') ?? '';

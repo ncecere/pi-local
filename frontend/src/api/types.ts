@@ -1168,9 +1168,13 @@ export type ChosenFolder =
 
 /** `GET /api/settings/desktop`. */
 export interface DesktopSettings {
-  /** False in a browser (the headless server): there is nothing to set. */
+  /** Desktop presence only; individual operations can still be unsupported. */
   available: boolean;
   launchAtLogin: boolean;
+  /** Missing/unknown capabilities must never enable an operation. */
+  capabilities: {
+    launchAtLogin: { available: boolean; reason: string };
+  };
 }
 
 // ── The runtime's chat view (runtime/src/lib/view.ts) ─────────────────────────────────────────
