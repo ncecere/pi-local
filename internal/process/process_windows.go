@@ -36,11 +36,13 @@ func inExactJob(process, job windows.Handle) (bool, error) {
 // Hooks are package-private and only used by native synthetic tests. Production
 // never exposes a suspended process or its handles to a caller.
 type windowsLaunchHooks struct {
-	fileType       func(windows.Handle) (uint32, error)
-	duplicateStdio func(windows.Handle) (windows.Handle, error)
-	verify         func(windows.Handle, windows.Handle) (bool, error)
-	beforeResume   func(windows.ProcessInformation, windows.Handle) error
-	resume         func(windows.Handle) (uint32, error)
+	fileType         func(windows.Handle) (uint32, error)
+	duplicateStdio   func(windows.Handle) (windows.Handle, error)
+	verify           func(windows.Handle, windows.Handle) (bool, error)
+	beforeResume     func(windows.ProcessInformation, windows.Handle) error
+	resume           func(windows.Handle) (uint32, error)
+	beforeAttribute  func(uintptr) error
+	tokenInformation windowsTokenInformation
 }
 
 func platformStart(ctx context.Context, cmd *exec.Cmd) (Tree, error) {
@@ -48,6 +50,13 @@ func platformStart(ctx context.Context, cmd *exec.Cmd) (Tree, error) {
 }
 
 func startWindows(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks) (Tree, error) {
+	// Ordinary Start always passes nil: its two attributes and Job lifecycle do
+	// not silently become a security sandbox. The private candidate has no caller
+	// outside synthetic package tests.
+	return startWindowsOwned(ctx, cmd, hooks, nil)
+}
+
+func startWindowsOwned(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks, policy *windowsAppContainerPolicy) (Tree, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -59,11 +68,37 @@ func startWindows(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks) 
 	if err := isProcessInJobProc.Find(); err != nil {
 		return nil, err
 	}
-	attrs, err := windows.NewProcThreadAttributeList(2)
+	policy, err = policy.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	attributeCount := uint32(2)
+	if policy != nil {
+		attributeCount++
+		if policy.lpac {
+			attributeCount++
+		}
+	}
+	attrs, err := windows.NewProcThreadAttributeList(attributeCount)
 	if err != nil {
 		return nil, fmt.Errorf("process: required startup attributes: %w", err)
 	}
 	defer attrs.Delete()
+	updateAttribute := func(attribute uintptr, value unsafe.Pointer, size uintptr) error {
+		if hooks.beforeAttribute != nil {
+			if err := hooks.beforeAttribute(attribute); err != nil {
+				return err
+			}
+		}
+		return attrs.Update(attribute, value, size)
+	}
+	// All restricted attributes must install successfully before CreateProcess.
+	// In particular LPAC is never retried as ordinary AppContainer or Job-only.
+	if policy != nil {
+		if err := policy.install(updateAttribute); err != nil {
+			return nil, err
+		}
+	}
 	job, err := windows.CreateJobObject(nil, nil) // unnamed, non-inheritable
 	if err != nil {
 		return nil, err
@@ -97,7 +132,7 @@ func startWindows(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks) 
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
 		return nil, err
 	}
-	if err := attrs.Update(procThreadAttributeJobList, unsafe.Pointer(&job), unsafe.Sizeof(job)); err != nil {
+	if err := updateAttribute(procThreadAttributeJobList, unsafe.Pointer(&job), unsafe.Sizeof(job)); err != nil {
 		return nil, fmt.Errorf("process: atomic job assignment unavailable: %w", err)
 	}
 	streams, err = prepareWindowsStreams(cmd)
@@ -142,7 +177,7 @@ func startWindows(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks) 
 			return nil, err
 		}
 	}
-	if err := attrs.Update(windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, unsafe.Pointer(&handles[0]), unsafe.Sizeof(handles)); err != nil {
+	if err := updateAttribute(windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, unsafe.Pointer(&handles[0]), unsafe.Sizeof(handles)); err != nil {
 		return nil, err
 	}
 	si := windows.StartupInfoEx{StartupInfo: windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfoEx{})), Flags: windows.STARTF_USESTDHANDLES, StdInput: handles[0], StdOutput: handles[1], StdErr: handles[2]}, ProcThreadAttributeList: attrs.List()}
@@ -153,6 +188,7 @@ func startWindows(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks) 
 	err = windows.CreateProcess(descriptor.app, descriptor.argv, nil, nil, true, flags, &descriptor.env[0], descriptor.dir, &si.StartupInfo, &pi)
 	runtime.KeepAlive(descriptor)
 	runtime.KeepAlive(handles)
+	runtime.KeepAlive(policy)
 	if err != nil {
 		return nil, fmt.Errorf("process: atomic job CreateProcessW: %w", err)
 	}
@@ -167,6 +203,18 @@ func startWindows(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks) 
 	if !member {
 		return nil, errors.New("process: suspended child not in owned job")
 	}
+	if policy != nil {
+		// Open only through the retained owned process HANDLE, never its PID.
+		// Keep the query-only token handle until this launch attempt has finished.
+		var token windows.Token
+		if err := windows.OpenProcessToken(pi.Process, windows.TOKEN_QUERY, &token); err != nil {
+			return nil, fmt.Errorf("process: AppContainer OpenProcessToken: %w", err)
+		}
+		defer token.Close()
+		if err := verifyWindowsAppContainerToken(token, policy, hooks.tokenInformation); err != nil {
+			return nil, err
+		}
+	}
 	if hooks.beforeResume != nil {
 		if err := hooks.beforeResume(pi, job); err != nil {
 			return nil, err
@@ -174,6 +222,12 @@ func startWindows(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks) 
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if policy != nil {
+		// Deliberately NOT an executable sandbox yet. No private caller can
+		// resume a restricted target until owned FS fixtures and loopback/IPC
+		// exposure checks have a reviewed implementation and native evidence.
+		return nil, errWindowsAppContainerExecutionDisabled
 	}
 	resume := windows.ResumeThread
 	if hooks.resume != nil {

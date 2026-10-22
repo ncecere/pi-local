@@ -150,6 +150,130 @@ policy is a structured **failure**, never a skipped or generically accepted erro
 The helper reports then exits without closing its own last job handle prematurely;
 the kernel closes it at helper death. This fixture too requires native CI execution.
 
+## Disabled AppContainer candidate: policy/token slice only
+
+This is **not runtime activation or Windows confinement evidence**. `Start` still
+calls `startWindows` with no restricted policy, installs exactly JOB_LIST and
+HANDLE_LIST, and retains the same wait/exit/close semantics. `win32.ts`, shell
+selection, UI, defaults, trusted platforms and runtime integration are unchanged.
+
+The only candidate entry is package-private `startWindowsOwned`, with private
+`windowsAppContainerPolicy` and synthetic launch hooks inside `internal/process`.
+There is no public SID/capability API. The policy snapshots an exact profile SID
+into Go-owned memory. Its capabilities pointer/count/reserved are always zero.
+A non-nil policy adds SECURITY_CAPABILITIES (0x20009), and explicit LPAC also adds
+ALL_APPLICATION_PACKAGES_POLICY (0x2000f), DWORD opt-out=1. Attribute failure has
+no retry as ordinary AppContainer or Job-only. The original three validated stdio
+duplicates remain the **entire** inherited handle list.
+
+After suspended CreateProcessW and exact owned-job verification, the candidate
+opens TOKEN_QUERY through the retained process handle, never the numeric PID.
+Before reaching the common resume gate it requires:
+
+- TokenIsAppContainer (29) = 1 and TokenElevation (20) = 0;
+- TokenAppContainerSid (31) exactly matching the copied profile SID;
+- TokenCapabilities (30) GroupCount = 0 (no network capability);
+- TokenIntegrityLevel (25) with an integrity label exactly S-1-16-4096 (Low);
+- TokenIsLessPrivilegedAppContainer (46) = 1 when LPAC was selected. Unsupported
+  LPAC attributes/queries are refusal, not permission to downgrade.
+
+Token queries use an aligned, at-most-64-KiB allocation, one bounded sizing call
+and one fetch, explicit returned-length checks, and SDK-shaped native headers.
+Embedded SIDs must fit entirely after their header inside the returned allocation
+before any SID API interprets them. No returned pointers escape verification.
+The query-only token closes on every exit; existing owned-process/job
+termination, reaping, stdio and attribute cleanup cover candidate failures too.
+
+**Even a successfully verified candidate is deliberately refused before
+ResumeThread**, with `errWindowsAppContainerExecutionDisabled`. There is no
+switch or environment variable that enables execution. This hard stop is needed
+because zero capabilities alone do not establish the required network/IPC and
+filesystem boundary. In particular loopback exemptions have not been queried.
+No candidate profile, ACL, named pipe or network mutation is implemented here.
+No user profile, installed executable or real credential store is a fixture.
+
+### Prepared tests and missing evidence
+
+`appcontainer_windows_test.go` has synthetic SID/layout/ownership checks; exact
+zero-capability/LPAC attribute checks; malformed, oversized, truncated and failed
+token-query cases; wrong/missing profile SID, capabilities, integrity, elevation
+and LPAC refusal; invalid embedded SID bounds; and required-attribute failures
+before target creation/stdio duplication with no marker. A native ordinary-child
+negative control queries its retained token while suspended, refuses it as not
+AppContainer, and checks that ordinary launch still has exactly two attributes
+and no earliest child marker. The existing Job suite still supplies
+verify/membership/cancel/resume, strict handle inheritance, descendants, abrupt
+owner death, Unicode and cleanup regressions. Synthetic token buffers are **not**
+observations of a real AppContainer token. The candidate restricted-child token
+path and its resource lifetime still need native fixture coverage.
+
+Run the existing native gate above, or focus on this first slice with:
+
+```
+go test -count=1 -timeout=3m -run 'TestWindowsAppContainer|TestWindowsAtomicSuspendedLaunch|TestWindowsFailuresNeverExecute' ./internal/process
+```
+
+On the development Mac, targeted process/supervisor/MCP normal tests, race tests
+and vet passed. Windows amd64 `go test -exec=true` cross-compilation and vet
+passed; **no Windows tests executed**. This does not count as a native pass, nor
+as a full-repository pass. Independent security review approved only this
+disabled, private policy/token slice and repeated those local checks. The
+API/SDK sources below inform the boundary; they do not replace native evidence.
+
+### Blockers before any restricted target may resume
+
+All of the following remain unimplemented/unproven, not silently weakened:
+
+- Disposable Windows-only fixture provisioning in `*_windows_test.go`: fresh
+  GUID profile names, zero capabilities, HRESULT handling (not GetLastError),
+  refuse existing profiles, copy the returned SID before FreeSid, delete only
+  the exact owned profile after job termination/reap, and report cleanup errors.
+  A trusted parent must retain the exact generated name for explicit crash
+  cleanup; no profile reuse, foreign deletion, scanning or orphan recovery.
+- Fresh private single-link/no-reparse NTFS fixtures only: a copied static Go
+  helper exe (RX), blank workspace/temp (RW), and minimum SID ACLs plus Low
+  integrity labels before target access. Never rewrite the existing test exe,
+  installed application or an existing tree. Outside-fixture ACL/content
+  negative controls must stay unchanged. General filesystem grants, migration
+  and profile journals require a separate review.
+- Real positive execution and earliest-marker ordering only after both exact
+  token and job verification; failures at all gates must terminate/reap without
+  a marker. Add restricted-child capability/SID/query/membership/cancel/resume
+  fault injections and restricted success/failure handle-growth measurements.
+- Query NetworkIsolation loopback exemptions for that exact profile; refuse
+  unexpected exposure without modifying global exemptions. Prove IPv4/IPv6
+  loopback and synthetic control named-pipe denial where possible, never using
+  internet or live application endpoints. Record common OS/SystemDLL/intrinsic
+  access rather than claiming only fixture directories exist.
+- Prove workspace writes, outside fake credentials/other-agent/control denial,
+  parent inspection and unexpected-handle denial; restricted descendants,
+  parent death, Close and profile cleanup; quoted Unicode paths/arguments and a
+  reviewed environment allowlist. No real secrets, providers or user installs.
+- A managed Go-helper-only network-off prototype comes first. Bash/cmd/
+  PowerShell substitution is not a fallback. pi-durable 1.3 hardcoded Bash,
+  taskkill and environment integration remain future work. Elevated GHA
+  Windows Server execution would not prove standard-user Windows 11 product
+  behavior; unsupported APIs or unsafe ACL uncertainty must remain blockers.
+
+Additional sources inspected for this slice:
+
+- Pinned x/sys v0.49.0 `windows/security_windows.go`,
+  `zsyscall_windows.go`, `exec_windows.go`: SID Copy returns Go-owned storage;
+  OpenProcessToken/GetTokenInformation use advapi32 via NewLazySystemDLL; the
+  token helpers' unbounded retry loops are not used by this candidate.
+- [SDK WinBase.h](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/WinBase.h)
+  and [winnt.h](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/winnt.h):
+  attribute indices 9/15, opt-out DWORD=1, SECURITY_CAPABILITIES layout,
+  TOKEN_APPCONTAINER_INFORMATION and TOKEN_INFORMATION_CLASS numeric ordering.
+- [Launch an AppContainer](https://learn.microsoft.com/windows/win32/secauthz/implementing-an-appcontainer):
+  explicit LPAC opt-out attribute and additional intrinsic resource restrictions.
+- [GetTokenInformation](https://learn.microsoft.com/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation)
+  and [TOKEN_INFORMATION_CLASS](https://learn.microsoft.com/windows/win32/api/winnt/ne-winnt-token_information_class):
+  query-only access, buffer contracts, token classes and LPAC definition.
+- [CreateAppContainerProfile](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-createappcontainerprofile):
+  HRESULT, existing-profile refusal and FreeSid ownership (future test-only
+  fixture work; this API is not bound or called by this slice).
+
 ## Sources inspected
 
 - Go 1.26.7 `src/syscall/exec_windows.go`: SysProcAttr has no job-list attribute;
