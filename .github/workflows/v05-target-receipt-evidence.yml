@@ -75,6 +75,29 @@ jobs:
           sha256sum --check .cache/phase1-first.sha256
           test ! -e .cache/licenses/runtime-build.json
           test ! -e .cache/licenses/frontend-build.json
+      - name: Bounded installation diagnostics on failure (no raw errors or paths)
+        if: failure()
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { installedPackageIdentity } from './packaging/licenses/npm-inventory.mjs';
+          const reasons = ['Missing frozen pnpm installation:', 'Stale pnpm installation/lockfile:', 'Unlabelled package:', 'Conflicting peer-variant notices:', 'Empty npm inventory:', 'Uninstalled declared dependency:'];
+          for (const area of ['runtime', 'frontend']) {
+            const result = { area };
+            try {
+              const source = fs.readFileSync(`${area}/pnpm-lock.yaml`);
+              const installed = fs.readFileSync(`${area}/node_modules/.pnpm/lock.yaml`);
+              result.lockBytesEqual = source.equals(installed);
+              result.sourceCRLF = source.includes(Buffer.from('\r\n'));
+              result.installedCRLF = installed.includes(Buffer.from('\r\n'));
+              installedPackageIdentity(process.cwd(), area);
+              result.identity = 'ok';
+            } catch (error) {
+              result.identity = reasons.findIndex(prefix => typeof error?.message === 'string' && error.message.startsWith(prefix));
+            }
+            console.log(JSON.stringify(result));
+          }
+          NODE
       - name: Root modules, manifests and locks unchanged even on failure
         if: always()
         run: |
