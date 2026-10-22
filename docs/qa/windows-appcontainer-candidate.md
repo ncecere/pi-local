@@ -227,11 +227,13 @@ application/cwd, four attributes, suspension, real child checks, both independen
 hard stops, witness requirement and S_OK-only deletion authority are unchanged.
 Production/runtime APIs, windowsDescriptor and the normal app are untouched.
 
-Local Go 1.26.10 macOS process/supervisor/MCP normal, race and vet plus Windows
-amd64 test compilation and vet are required before committing this correction.
-They do not execute the Windows-only fake or native cases. Parent full-source
-review, bounded independent review and a deliberate push/native normal/race/vet
-run are still pending. Only a new complete nine-case native pass could support
+Local Go 1.26.10 macOS process/supervisor/MCP normal/race tests and vet plus
+Windows amd64 compilation/vet passed. The parent repeated those gates and
+clean-source/whitespace checks at `b745649`
+(`v05-asuser-filtered-environment-parent-gate`, exit 0). They do not execute the
+Windows-only fake or native cases. Parent full-source and bounded independent
+security reviews approved this correction only; native cause and the full
+nine-case normal/race gate still require deliberate push and actual results. Only a new complete nine-case native pass could support
 this **minimal counterfactual**; it would not establish universal Windows
 environment requirements or erase the historical 203 result.
 
