@@ -2,7 +2,8 @@
 
 This isolated diagnostic starts from `2a2e19b`. It does not change production
 code, the DWORD verification contract, execution authorization or cleanup.
-The parent environment reserved-component correction remains pending review.
+The parent environment reserved-component correction has passed bounded review
+and local parent gates; its Windows-only cases still need native execution.
 
 ## Prior native evidence, not acceptance
 
@@ -73,6 +74,9 @@ Local validation used Go **1.26.10**, darwin/arm64, for
 
 Source-only cross-compilation is **not execution of Windows fakes or native
 fixtures**. The existing Windows jobs workflow adds only this isolated branch to
-its push allowlist; no results are waived. A parent full validation and bounded
-independent review are required before any push; neither is claimed here. No
-native Windows acceptance is claimed by this change.
+its push allowlist; no results are waived. Parent full-source review and bounded
+independent security review approved this diagnostic only. The parent repeated
+macOS process/supervisor/MCP normal/race/vet and Windows amd64 compilation/vet,
+plus workflow YAML/actionlint (`v05-lpac-query-probe-parent-gate`, exit 0).
+Actual Windows execution and the full native gate remain pending; no native
+Windows acceptance is claimed by this change.
