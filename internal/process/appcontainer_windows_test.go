@@ -40,7 +40,7 @@ func TestWindowsAppContainerSDKLayouts(t *testing.T) {
 }
 
 func TestWindowsAppContainerPrivatePolicy(t *testing.T) {
-	for _, raw := range []string{"", "S-1-15-2-1", "S-1-15-2-1-2-3-4-5-6", "S-1-15-3-1-2-3-4-5-6-7", "S-1-5-2-1-2-3-4-5-6-7"} {
+	for _, raw := range []string{"", "S-1-15-2", "S-1-15-2-1", "S-1-15-2-1-2-3-4-5-6", "S-1-15-2-1-2-3-4-5-6-7-8", "S-1-15-3-1-2-3-4-5-6-7", "S-1-5-2-1-2-3-4-5-6-7"} {
 		t.Run(raw, func(t *testing.T) {
 			p := &windowsAppContainerPolicy{}
 			if raw != "" {
@@ -86,6 +86,92 @@ func TestWindowsAppContainerPrivatePolicy(t *testing.T) {
 		if err != nil || len(seen) != want {
 			t.Fatalf("attributes=%v err=%v", seen, err)
 		}
+	}
+}
+
+// Construct canonical bytes directly, never via native interior-pointer helpers.
+func candidateSIDBytes(authority byte, count byte, first uint32) []byte {
+	data := make([]byte, 8+4*int(count))
+	data[0], data[1], data[7] = 1, count, authority
+	if count > 0 {
+		binary.LittleEndian.PutUint32(data[8:12], first)
+	}
+	return data
+}
+
+func TestWindowsAppContainerSIDMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		authority byte
+		count     byte
+		first     uint32
+	}{
+		{"profile", 15, 8, 2},
+		{"low-integrity", 16, 1, 4096},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := candidateSIDBytes(tc.authority, tc.count, tc.first)
+			authority := [6]byte{0, 0, 0, 0, 0, tc.authority}
+			matches := func(data []byte) bool { return candidateSIDMatches(data, authority, tc.count, tc.first) }
+			if !matches(data) {
+				t.Fatal("refused canonical metadata")
+			}
+			for n := 0; n < len(data); n++ {
+				if matches(data[:n]) {
+					t.Fatalf("accepted truncated span of %d bytes", n)
+				}
+			}
+			if matches(append(append([]byte(nil), data...), 0)) {
+				t.Fatal("accepted non-exact SID extent")
+			}
+			// All header bytes and all four RID bytes participate in the match.
+			for i := 0; i < 12; i++ {
+				changed := append([]byte(nil), data...)
+				changed[i] ^= 1
+				if matches(changed) {
+					t.Fatalf("ignored metadata byte %d", i)
+				}
+			}
+			for _, count := range []byte{0, 1, 7, 8, 9, 15, 16, 255} {
+				if count != tc.count && matches(candidateSIDBytes(tc.authority, count, tc.first)) {
+					t.Fatalf("accepted subauthority count %d", count)
+				}
+			}
+			wrongEndian := append([]byte(nil), data...)
+			binary.BigEndian.PutUint32(wrongEndian[8:12], tc.first)
+			if matches(wrongEndian) {
+				t.Fatal("accepted big-endian subauthority")
+			}
+		})
+	}
+	if candidateSIDMatches(candidateSIDBytes(15, 1, 2), [6]byte{0, 0, 0, 0, 0, 15}, 8, 2) ||
+		candidateSIDMatches(candidateSIDBytes(15, 8, 3), [6]byte{0, 0, 0, 0, 0, 15}, 8, 2) {
+		t.Fatal("accepted broad package or capability SID")
+	}
+}
+
+func TestWindowsAppContainerBoundedSIDSpan(t *testing.T) {
+	header := unsafe.Sizeof(windows.Tokenmandatorylabel{})
+	word := unsafe.Sizeof(uintptr(0))
+	// Spare token bytes must not become part of the bounded SID span.
+	size := header + 12 + 16
+	b := windowsTokenBuffer{words: make([]uintptr, (size+word-1)/word), size: uint32(size)}
+	data := b.bytes()
+	copy(data[header:], candidateSIDBytes(16, 1, 4096))
+	sid := (*windows.SID)(unsafe.Pointer(&data[header]))
+	span, err := b.boundedSID(sid, header)
+	if err != nil || len(span) != 12 || cap(span) != 12 || !candidateSIDMatches(span, [6]byte{0, 0, 0, 0, 0, 16}, 1, 4096) {
+		t.Fatalf("lost exact SID extent: len=%d cap=%d err=%v", len(span), cap(span), err)
+	}
+	for n := uintptr(0); n < 12; n++ {
+		b.size = uint32(header + n)
+		if _, err := b.boundedSID(sid, header); err == nil {
+			t.Fatalf("accepted SID extent of %d bytes", n)
+		}
+	}
+	b.size = uint32(header + 12)
+	if _, err := b.boundedSID(sid, header); err != nil {
+		t.Fatalf("refused exact buffer boundary: %v", err)
 	}
 }
 
@@ -174,6 +260,8 @@ func TestWindowsAppContainerTokenGate(t *testing.T) {
 		{"missing-integrity", func(f *candidateTokenFixture) { f.integrity = nil }, "SID outside"},
 		{"medium-integrity", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-16-8192") }, "not Low"},
 		{"untrusted-integrity", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-16-0") }, "not Low"},
+		{"wrong-integrity-authority", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-5-4096") }, "not Low"},
+		{"extra-integrity-subauthority", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-16-4096-0") }, "not Low"},
 		{"not-integrity-label", func(f *candidateTokenFixture) { f.integrityAttributes = 0 }, "not Low"},
 		{"not-lpac", func(f *candidateTokenFixture) { f.lpac = 0 }, "not LPAC"},
 	} {
