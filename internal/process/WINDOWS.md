@@ -284,6 +284,13 @@ Corrected-primitive native CI **39702054324** is separate and does not count as
 native evidence for this fixture or its cleanup guard. An elevated GHA Windows
 Server pass would still not establish standard-user Windows 11 behavior.
 
+Independent review found an early-failure cleanup flaw: the first fixture version
+assumed reap until a duplicate was obtained. Correction `1f1dd0f` requires the
+explicit postlaunch witnesses described above; bounded re-review closed that
+finding. The parent repeated Mac normal/race/vet and Windows compilation/vet
+checks after the correction (`v05-owned-profile-cleanup-parent-gate`, exit 0).
+None of those checks executed Windows-only fixture cases; native CI is next.
+
 ### Blockers before any restricted target may resume
 
 All of the following remain unimplemented/unproven, not silently weakened:
