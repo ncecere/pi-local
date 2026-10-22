@@ -43,7 +43,7 @@ test-frontend: ## UI typecheck, lint and tests
 	cd frontend && pnpm typecheck && pnpm lint && pnpm test
 
 test-licenses: ## Offline packaging notice tests (NOTICE_TEST_NODE_LICENSE enables installed-tree integration)
-	node --test packaging/licenses/generate.test.mjs
+	node --test packaging/licenses/build-receipt.test.mjs packaging/licenses/generate.test.mjs
 	node --check packaging/licenses/generate.mjs
 	bash -n packaging/macos/package.sh
 
