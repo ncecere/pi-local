@@ -200,4 +200,7 @@ IPC enforcement, or standard-user Windows11/product readiness. Independent
 first-observation review `019d1cf5` independently recounted all 22 reports/66
 roles, verified the exact-HEAD lanes/case passes and accepted only diagnostic
 observations with no actionable findings. Merged-tree verification remains
-separate; no future shape policy or activation was approved.
+separate; no future shape policy or activation was approved. The subsequent
+merged-tree gate `proc_52ba` at merge `1a57d16` passed process/supervisor/MCP
+normal/race/vet, Windows source/vet checks and production/module byte-immutability
+(exit 0). These local checks do not replace merged native CI.
