@@ -15,7 +15,7 @@ import (
 // Keep source constant: bundle paths are data, never shell syntax. This retains
 // the legacy PID-existence wait, not proof of process identity: PID reuse can
 // delay it indefinitely, and an early parent death can bypass graceful shutdown.
-const macRelaunchScript = `while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; /usr/bin/open -n "$2"`
+const macRelaunchScript = `while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; /usr/bin/open -n -- "$2"`
 
 type relaunchProcess interface {
 	Start() error

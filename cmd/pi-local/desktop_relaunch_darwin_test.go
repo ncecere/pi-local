@@ -44,6 +44,7 @@ func awaitRelaunchWait(t *testing.T, p *fakeRelaunchProcess) {
 func TestMacRelaunchArguments(t *testing.T) {
 	bundles := []string{
 		"/Applications/Pi Local.app",
+		"-not-an-open-option.app",
 		"/Applications/音楽 café.app",
 		"/Applications/single' double\" slash\\.app",
 		"/Applications/$(not-executed).app",
@@ -181,7 +182,7 @@ func TestMacRelaunchDetachedConstruction(t *testing.T) {
 	if cmd.Env != nil || cmd.Dir != "" || cmd.Stdin != nil || cmd.Stdout != nil || cmd.Stderr != nil || len(cmd.ExtraFiles) != 0 || cmd.Process != nil {
 		t.Fatal("must not add environment/data/diagnostic handles or start during construction")
 	}
-	const want = `while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; /usr/bin/open -n "$2"`
+	const want = `while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; /usr/bin/open -n -- "$2"`
 	if macRelaunchScript != want {
 		t.Fatal("shell source must remain constant with quoted positional arguments, no eval")
 	}
