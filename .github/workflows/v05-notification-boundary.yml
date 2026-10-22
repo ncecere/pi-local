@@ -1,7 +1,7 @@
 name: v0.5 notification compatibility contracts
 on:
   push:
-    branches: [v0.5, v05/notification-boundary, v05/desktop-startup-capabilities]
+    branches: [v0.5, v05/notification-boundary, v05/desktop-startup-capabilities, v05/desktop-relaunch-boundary]
     paths:
       - '.github/workflows/v05-notification-boundary.yml'
       - 'cmd/pi-local/**'
@@ -11,6 +11,8 @@ on:
       - 'frontend/src/routes/settings/account.tsx'
       - 'frontend/src/components/ui/switch.tsx'
       - 'frontend/tests/unit/desktop-settings.test.tsx'
+      - 'frontend/tests/unit/shell-init.test.ts'
+      - 'frontend/public/shell-init.js'
       - 'frontend/embed.go'
       - 'runtime/embed.go'
       - 'frontend/package.json'
@@ -53,10 +55,31 @@ jobs:
           go test -race -count=1 ./cmd/pi-local ./internal/host ./internal/api
           go vet ./cmd/pi-local ./internal/host ./internal/api
           go test -race -count=1 ./cmd/pi-local/desktop_settings.go ./cmd/pi-local/desktop_startup_other.go ./cmd/pi-local/desktop_startup_other_test.go
+          go test -race -count=1 ./cmd/pi-local/desktop_relaunch_darwin.go ./cmd/pi-local/desktop_relaunch_darwin_test.go ./cmd/pi-local/desktop_shell.go ./cmd/pi-local/desktop_shell_test.go
           for tags in server mcp 'server,mcp'; do
             go test -race -count=1 -tags "$tags" ./internal/host
             go test -count=1 -tags "$tags" ./cmd/pi-local -run 'Test(Notification|Notifier|AppleStrings|Plural)'
             go vet -tags "$tags" ./internal/host
           done
+  relaunch-portability:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Native unsupported relaunch and shell-marker contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(cmd/pi-local/desktop_relaunch_other.go cmd/pi-local/desktop_relaunch_other_test.go cmd/pi-local/desktop_shell.go cmd/pi-local/desktop_shell_test.go)
+          go test -count=1 "${files[@]}"
+          go test -race -count=1 "${files[@]}"
+          go vet "${files[@]}"
 # Fake native services and test-binary children only. No desktop main, notification,
 # AppleScript, real vault or human activation is exercised by these contracts.

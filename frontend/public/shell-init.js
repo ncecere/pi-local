@@ -1,5 +1,5 @@
-// The desktop app opens /?shell=desktop-mac (cmd/pi-local). Remember it for the session (client-side navigation drops
-// the query) and mark <html>, so styles can leave room for the macOS window controls and let the top edge drag the window.
+// The desktop app sends an explicit shell marker (desktop-mac on macOS, desktop elsewhere). Remember it for the
+// session (client-side navigation drops the query); a generic marker replaces stale macOS window-control styling.
 (() => {
   try {
     const key = 'pi-local:shell';
