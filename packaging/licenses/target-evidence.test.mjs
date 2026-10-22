@@ -215,6 +215,30 @@ if (nativeTarget) {
       assert.throws(() => validateBuildEvidence(root, nativeTarget, 'frontend'), /validation failed/);
     });
   });
+
+  test('native reader and writer refuse a redirected evidence directory without changing outside bytes', (t) => {
+    const root = fixture(t);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'target-evidence-outside-'));
+    t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+    env({ NOTICE_TARGET: nativeTarget }, () => {
+      writeBuildReceipt(root, 'frontend', ['src/main.ts']);
+      const targetDir = path.join(root, '.cache/licenses/inventory', nativeTarget);
+      const file = path.join(root, relativeReceipt(nativeTarget));
+      const before = fs.readFileSync(file);
+      // A valid portable receipt makes this a guard test, not a missing-file test.
+      const redirected = write(outside, 'receipts/frontend-build.json', before);
+      const sentinel = write(outside, 'sentinel.txt', 'outside sentinel');
+      fs.rmSync(targetDir, { recursive: true });
+      fs.symlinkSync(outside, targetDir, process.platform === 'win32' ? 'junction' : 'dir');
+      assert.equal(fs.lstatSync(targetDir).isSymbolicLink(), true);
+      assert.throws(() => validateBuildEvidence(root, nativeTarget, 'frontend'), /^Error: Phase 1 build-evidence validation failed$/);
+      assert.throws(() => writeBuildReceipt(root, 'frontend', ['src/changed.ts']), /^Error: Phase 1 build-evidence write failed$/);
+      assert.deepEqual(fs.readFileSync(redirected), before);
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), 'outside sentinel');
+      assert.deepEqual(fs.readdirSync(outside).sort(), ['receipts', 'sentinel.txt']);
+      assert.deepEqual(fs.readdirSync(path.join(outside, 'receipts')), ['frontend-build.json']);
+    });
+  });
 }
 
 test('assertion CLI rejects missing/unknown/ambiguous selectors with summary-safe output only', () => {
