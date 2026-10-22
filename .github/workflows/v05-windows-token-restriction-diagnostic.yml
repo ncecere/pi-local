@@ -1,0 +1,55 @@
+name: v0.5 Windows restricted-token-only diagnostic
+on:
+  push:
+    branches: [v05/appcontainer-restricted-token-diagnostics]
+    paths:
+      - 'internal/process/token_restriction_diagnostic*_windows_test.go'
+      - '.github/workflows/v05-windows-token-restriction-diagnostic.yml'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+jobs:
+  restricted-token-only:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      PI_LOCAL_CI_TOKEN_DIAGNOSTIC: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Strict ephemeral runner preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or
+              $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows' -or
+              $env:PI_LOCAL_CI_TOKEN_DIAGNOSTIC -cne '1') {
+            throw 'Token diagnostic requires explicit opt-in on GitHub-hosted Windows'
+          }
+      - name: Only third candidate and fake cases, normal AND race even when red
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Native nonzero exit codes are evidence, not PowerShell exceptions.
+          $PSNativeCommandUseErrorActionPreference = $false
+          go version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Never run the package or older Native/Profile/process tests.
+          go test -count=1 -timeout=3m -v -run '^TestWindowsTokenRestrictionDiagnostic(Native|Fake.*)$' ./internal/process
+          $normalExit = $LASTEXITCODE
+          go test -race -count=1 -timeout=3m -v -run '^TestWindowsTokenRestrictionDiagnostic(Native|Fake.*)$' ./internal/process
+          $raceExit = $LASTEXITCODE
+          go vet ./internal/process
+          $vetExit = $LASTEXITCODE
+          Write-Host "Token-only exit codes: normal=$normalExit race=$raceExit vet=$vetExit"
+          if ($normalExit -ne 0 -or $raceExit -ne 0 -or $vetExit -ne 0) { exit 1 }
+          exit 0
+# Push only on this branch; no dispatch. Existing owned-jobs and first token-only
+# workflow branch allowlists exclude this branch and are left byte-for-byte intact.
+# No child/profile creation, internet probe, provider key or deployment change.
