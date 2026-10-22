@@ -5,8 +5,13 @@
 This increment starts at `4585a86` on `v05/token-shape-inventory`. It adds only
 test helpers/fakes, diagnostic fixture wiring, this report and that branch's
 owned-child workflow allowlist entry. Production Go files remain byte-identical.
-Parent full-source review, independent review and native CI are **pending**.
-The author has neither pushed nor dispatched native CI.
+Parent read all six changed files. Independent security review `9ff99795`
+approved **diagnostic-only** source inclusion with no actionable findings, not
+native or activation acceptance. Parent gate `proc_f3c1` passed Mac process/
+supervisor/MCP normal/race/vet, Windows source checks/vet, actionlint and
+production/module byte-immutability checks (exit 0). Native CI and explicit
+first-observation review remain **pending**. The original author did not push or
+dispatch native CI.
 
 Baseline native runs **39727836384** and merged **39729478459** passed required
 normal/race/vet on all three OS lanes, including all nine suspended Windows LPAC
