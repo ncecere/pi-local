@@ -31,10 +31,13 @@ test('Git autocrlf checkout preserves both frozen LF locks under repository attr
   // An empty local repository/index only: no commits, identities, hooks or remotes.
   // Do not read personal/global/system Git configuration or inherited Git overrides.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
-  Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull });
+  // Use a real owned file: another executable need not accept Node's null-device spelling.
+  const globalConfig = path.join(root, 'empty-global.gitconfig');
+  fs.writeFileSync(globalConfig, '');
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig });
   function git(...args) {
     const result = spawnSync('git', ['-c', 'core.autocrlf=true', '-c', 'core.safecrlf=false', ...args], { cwd: root, env, encoding: 'utf8' });
-    assert.equal(result.status, 0, 'isolated Git fixture command must succeed');
+    assert.equal(result.status, 0, `isolated Git fixture ${args[0]} command must succeed`);
   }
   git('init', '--quiet', '--template=');
   git('add', '--', '.gitattributes', 'runtime/pnpm-lock.yaml', 'frontend/pnpm-lock.yaml');
