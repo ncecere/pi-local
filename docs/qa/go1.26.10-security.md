@@ -1,4 +1,4 @@
-# Go 1.26.10 security toolchain patch (unreleased)
+# Go 1.26.10 security toolchain patch (v0.4.2)
 
 Base: `main` at `4ecb7d42deccd4e719d0f8503d69a5a2bd8d4a3e` (v0.4.1 plus QA docs).
 This patch raises the build minimum from Go **1.26.7 to 1.26.10**, not 1.27. It changes no production application
@@ -98,4 +98,5 @@ and were left alone. The README minimum now matches `go.mod`.
 
 No normal-profile app was launched, restarted or overwritten; no user data, Keychain, Application Support,
 provider settings or real credentials were inspected. Tests use isolated fixtures. Native packaging, independent
-review, browser gates and any v0.4.2 release/tag/publication remain separate follow-up gates; none is claimed here.
+review, browser gates and release publication are recorded separately in [v0.4.2 verification](v0.4.2.md).
+This note records the implementation/toolchain gates, not native installation or permission evidence.

@@ -12,8 +12,11 @@ A proposal to review, not a commitment. Each item is described in
   smoke are verified. Optional embeddings and a dedicated Concierge judgment recommendation are deferred. See
   [v0.4 verification](docs/qa/v0.4.md) for scope and limits. The [v0.4.1 settings/chrome UX patch](docs/qa/v0.4.1.md)
   is published with verified assets and immutable-tag layout smoke.
-- [v0.5 foundations](docs/plans/v0.5.md) are in isolated implementation: portable locking, runtime environment and
-  process ownership first. Windows/Linux product support is not yet claimed.
+- [v0.4.2](docs/qa/v0.4.2.md), a Go 1.26.10 security rebuild, is published with verified public assets and
+  fresh immutable-tag post-release E2E.
+- [v0.5 foundations](docs/plans/v0.5.md) remain isolated: portable locks/environment, owned Windows Jobs and initial
+  host/direct-secret contracts are reviewed and native-contract-tested. Linux confinement remains disabled and
+  real vault, desktop, update and packaging gates remain open. Windows/Linux product support is not yet claimed.
 - Only the user decides when to launch v1.0.
 
 The tables below retain proposal scope; release notes and verification records identify what actually ships.
