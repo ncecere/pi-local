@@ -89,7 +89,14 @@ func TestCheckDownloadVerifyAndInstall(t *testing.T) {
 	u := New("0.1.0", bundle)
 	u.Key, u.APIBase = pub, gh.URL
 	relaunched := make(chan string, 1)
-	u.Relaunch = func(b string) { relaunched <- b }
+	releaseRelaunch := make(chan struct{})
+	defer close(releaseRelaunch)
+	u.Relaunch = func(b string) {
+		relaunched <- b
+		// An actual relaunch can terminate the process without returning. Hold
+		// this callback so a deferred cleanup cannot mask incorrect ordering.
+		<-releaseRelaunch
+	}
 	st := u.Check(context.Background())
 	if !st.Available || st.Latest.Version != "0.2.0" || st.Latest.Notes != "Notes for 0.2.0" || !st.CanInstall {
 		t.Fatalf("check: %+v", st)
