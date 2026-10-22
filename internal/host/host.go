@@ -32,8 +32,8 @@ const (
 // Availability describes an implemented contract, not a runtime desktop probe.
 // An available operation can still fail (for example, xdg-open is not installed).
 type Availability struct {
-	Available bool
-	Reason    string
+	Available bool   `json:"available"`
+	Reason    string `json:"reason"`
 }
 
 var ErrUnsupported = errors.New("host operation unsupported")

@@ -13,6 +13,8 @@ export function Switch({
   'aria-labelledby'?: string;
   'aria-describedby'?: string;
   'aria-label'?: string;
+  'aria-disabled'?: boolean;
+  'aria-busy'?: boolean;
   disabled?: boolean;
 }) {
   return (
@@ -20,11 +22,13 @@ export function Switch({
       type="button"
       role="switch"
       aria-checked={checked}
-      onClick={() => onCheckedChange(!checked)}
+      onClick={() => {
+        if (!props.disabled && !props['aria-disabled']) onCheckedChange(!checked);
+      }}
       className={cn(
         'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
         'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-bright)]',
-        'disabled:cursor-not-allowed disabled:opacity-50',
+        'disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
         checked
           ? 'bg-[var(--accent)]'
           : // Off: in light the control grey nearly vanished on white, so a darker grey there.

@@ -1,11 +1,16 @@
 name: v0.5 notification compatibility contracts
 on:
   push:
-    branches: [v0.5, v05/notification-boundary]
+    branches: [v0.5, v05/notification-boundary, v05/desktop-startup-capabilities]
     paths:
       - '.github/workflows/v05-notification-boundary.yml'
       - 'cmd/pi-local/**'
       - 'internal/host/**'
+      - 'internal/api/always.go'
+      - 'internal/api/desktop_test.go'
+      - 'frontend/src/routes/settings/account.tsx'
+      - 'frontend/src/components/ui/switch.tsx'
+      - 'frontend/tests/unit/desktop-settings.test.tsx'
       - 'frontend/embed.go'
       - 'runtime/embed.go'
       - 'frontend/package.json'
@@ -38,12 +43,16 @@ jobs:
           (cd frontend && pnpm install --frozen-lockfile)
       - name: Build actual embedded assets
         run: make runtime frontend
-      - name: Fake notification and owned-helper contracts
+      - name: Frontend capability contracts
+        working-directory: frontend
+        run: pnpm typecheck && pnpm lint && pnpm test
+      - name: Fake notification, startup and owned-helper contracts
         run: |
           set -euo pipefail
-          go test -count=1 ./cmd/pi-local ./internal/host
-          go test -race -count=1 ./cmd/pi-local ./internal/host
-          go vet ./cmd/pi-local ./internal/host
+          go test -count=1 ./cmd/pi-local ./internal/host ./internal/api
+          go test -race -count=1 ./cmd/pi-local ./internal/host ./internal/api
+          go vet ./cmd/pi-local ./internal/host ./internal/api
+          go test -race -count=1 ./cmd/pi-local/desktop_settings.go ./cmd/pi-local/desktop_startup_other.go ./cmd/pi-local/desktop_startup_other_test.go
           for tags in server mcp 'server,mcp'; do
             go test -race -count=1 -tags "$tags" ./internal/host
             go test -count=1 -tags "$tags" ./cmd/pi-local -run 'Test(Notification|Notifier|AppleStrings|Plural)'

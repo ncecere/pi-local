@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/ncecere/pi-local/internal/agents"
+	"github.com/ncecere/pi-local/internal/host"
 	"github.com/ncecere/pi-local/internal/schedules"
 	"github.com/ncecere/pi-local/internal/search"
 )
@@ -167,28 +168,57 @@ func (a *API) getThreadIndexed(w http.ResponseWriter, r *http.Request, ag *agent
 	}
 }
 
-// Desktop is what the desktop app's settings say (launch at login), nil in the headless server.
+const DesktopLaunchAtLogin = "launchAtLogin"
+
+// DesktopCapabilities describes implemented operations, not runtime probes.
+// Missing and unknown keys grant no support.
+type DesktopCapabilities map[string]host.Availability
+
+// Desktop is nil in the headless server. Presence does not imply startup support.
 type Desktop interface {
+	// Capabilities must be side-effect free (no filesystem access or commands).
+	Capabilities() DesktopCapabilities
 	LaunchAtLogin() (bool, error)
 	SetLaunchAtLogin(on bool) error
 }
 
+type desktopSettings struct {
+	Available     bool                `json:"available"`
+	LaunchAtLogin bool                `json:"launchAtLogin"`
+	Capabilities  DesktopCapabilities `json:"capabilities"`
+}
+
+func (a *API) desktopSettings() desktopSettings {
+	availability := host.Availability{Reason: "Launching at login needs the desktop app."}
+	if a.Desktop != nil {
+		availability = a.Desktop.Capabilities()[DesktopLaunchAtLogin]
+		if availability.Reason == "" && !availability.Available {
+			availability.Reason = "Launching at login is not supported on this platform."
+		}
+	}
+	return desktopSettings{
+		Available:    a.Desktop != nil,
+		Capabilities: DesktopCapabilities{DesktopLaunchAtLogin: availability},
+	}
+}
+
 func (a *API) getDesktop(w http.ResponseWriter, r *http.Request) {
-	if a.Desktop == nil {
-		ok(w, map[string]any{"available": false, "launchAtLogin": false})
-		return
+	settings := a.desktopSettings()
+	if settings.Capabilities[DesktopLaunchAtLogin].Available {
+		on, err := a.Desktop.LaunchAtLogin()
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		settings.LaunchAtLogin = on
 	}
-	on, err := a.Desktop.LaunchAtLogin()
-	if err != nil {
-		fail(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	ok(w, map[string]any{"available": true, "launchAtLogin": on})
+	ok(w, settings)
 }
 
 func (a *API) putDesktop(w http.ResponseWriter, r *http.Request) {
-	if a.Desktop == nil {
-		fail(w, http.StatusNotImplemented, "not_supported", "Launching at login needs the desktop app.")
+	settings := a.desktopSettings()
+	if availability := settings.Capabilities[DesktopLaunchAtLogin]; !availability.Available {
+		fail(w, http.StatusNotImplemented, "not_supported", availability.Reason)
 		return
 	}
 	var in struct {
@@ -201,7 +231,8 @@ func (a *API) putDesktop(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "internal", "Could not change launching at login: "+err.Error())
 		return
 	}
-	ok(w, map[string]any{"available": true, "launchAtLogin": in.LaunchAtLogin})
+	settings.LaunchAtLogin = in.LaunchAtLogin
+	ok(w, settings)
 }
 
 // --- updates ------------------------------------------------------------------------------------------------------
