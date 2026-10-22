@@ -479,6 +479,10 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	accessAPI, err := candidateAccessNativeAPI()
+	if err != nil {
+		t.Fatal("semantic diagnostic API unavailable")
+	}
 	primary, err := candidateAcquirePrimary(primaryAPI)
 	if err != nil {
 		t.Fatal(err)
@@ -544,6 +548,8 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				checked, resumed := 0, 0
+				var accessReport candidateAccessReport
+				var diagnosticErr error
 				var attributes []uintptr
 				injected := errors.New("injected failure after REAL token/job verification")
 				forbiddenResume := errors.New("FATAL: candidate attempted ResumeThread")
@@ -556,8 +562,18 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				tr, startErr := startWindowsOwned(ctx, cmd, windowsLaunchHooks{
 					primaryToken:    primary.derived.token, // borrowed through synchronous cleanup
 					beforeAttribute: func(attribute uintptr) error { attributes = append(attributes, attribute); return nil },
-					// verify remains nil (REAL API). The test-only wrapper makes
-					// three observations, then forwards the original query unchanged.
+					// Preserve the REAL exact-job result. Acquire the cleanup witness
+					// BEFORE token validation can fail on 46; diagnostics have no authority.
+					verify: candidateAccessVerify(inExactJob, func(process windows.Handle) error {
+						return windows.DuplicateHandle(windows.CurrentProcess(), process, windows.CurrentProcess(), &cleanup.observed, windows.SYNCHRONIZE, false, 0)
+					}, func(process windows.Handle) error {
+						accessReport, diagnosticErr = candidateDiagnoseAccess(process, profile.sid, accessAPI)
+						if diagnosticErr == nil && !accessReport.matches(true) {
+							diagnosticErr = errors.New("semantic control mismatch")
+						}
+						return diagnosticErr
+					}, &cleanup.cleanupErr),
+					// Three observations, then the ORIGINAL strict query unchanged.
 					tokenInformation: candidateLPACQueryDiagnostic(windows.GetTokenInformation, func(observations [3]candidateLPACQueryObservation) {
 						for _, observation := range observations {
 							t.Logf("LPAC query diagnostic: requestedSize=%d success=%v numericCodePresent=%v code=%d returnedLength=%d (observation only; failed returned length not authoritative; no result bytes read)", observation.requestedSize, observation.success, observation.numericCodePresent, observation.code, observation.returnedLength)
@@ -571,10 +587,6 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 						}
 						if event, err := windows.WaitForSingleObject(pi.Process, 0); err != nil || event != uint32(windows.WAIT_TIMEOUT) {
 							return fmt.Errorf("suspended child not live: event=%d err=%v", event, err)
-						}
-						if err := windows.DuplicateHandle(windows.CurrentProcess(), pi.Process, windows.CurrentProcess(), &cleanup.observed, windows.SYNCHRONIZE, false, 0); err != nil {
-							cleanup.cleanupErr = errors.Join(cleanup.cleanupErr, err)
-							return err
 						}
 						switch mode {
 						case "cancel":
@@ -607,6 +619,10 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 					if err := cleanup.closeObserved(); err != nil {
 						t.Error(err)
 					}
+				}
+				candidateLogAccessReport(t, accessReport, diagnosticErr)
+				if cleanup.cleanupErr != nil || !accessReport.matches(true) {
+					t.Error("semantic diagnostic/witness failed (no verification authority)")
 				}
 				// The launcher must neither close nor replace this borrowed token,
 				// including failure, cancellation and unconditional refusal paths.
