@@ -44,6 +44,7 @@ func TestWindowsAppContainerAccessCheckPairedControl(t *testing.T) {
 	if err != nil {
 		t.Fatal("semantic diagnostic API unavailable")
 	}
+	shapeAPI := candidateShapeNativeAPI(t)
 	primary, err := candidateAcquirePrimary(primaryAPI)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +98,8 @@ func TestWindowsAppContainerAccessCheckPairedControl(t *testing.T) {
 			checked, resumed := 0, 0
 			var attributes []uintptr
 			var diagnosticErr error
+			var shapeReport candidateShapeReport
+			var shapeErr error
 			cmd := windowsHelperCommand(dir, "hold")
 			cmd.Path, cmd.Args[0], cmd.Env = probe, probe, env
 			cleanup.launchAttempted = true
@@ -110,7 +113,8 @@ func TestWindowsAppContainerAccessCheckPairedControl(t *testing.T) {
 					if diagnosticErr == nil && !reports[i].matches(lpac) {
 						diagnosticErr = errors.New("reference semantic control mismatch")
 					}
-					return diagnosticErr
+					shapeReport, shapeErr = candidateDiagnoseShape(primary.derived.token, process, shapeAPI)
+					return errors.Join(diagnosticErr, shapeErr)
 				}, &cleanup.cleanupErr),
 				verification: dependencies,
 				beforeResume: func(pi windows.ProcessInformation, job windows.Handle) error {
@@ -148,7 +152,8 @@ func TestWindowsAppContainerAccessCheckPairedControl(t *testing.T) {
 				}
 			}
 			candidateLogAccessReport(t, reports[i], diagnosticErr)
-			if cleanup.cleanupErr != nil || !cleanup.signaled || !cleanup.observedClosed || !reports[i].matches(lpac) {
+			candidateLogShapeReport(t, shapeReport, shapeErr)
+			if cleanup.cleanupErr != nil || !cleanup.signaled || !cleanup.observedClosed || !reports[i].matches(lpac) || !shapeReport.complete || shapeErr != nil {
 				t.Error("reference diagnostic/cleanup witness failed")
 			}
 			after, e := candidateInspectPrimary(primary.derived.token, primaryAPI.query)
