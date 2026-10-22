@@ -366,6 +366,11 @@ func (u *Updater) install(ctx context.Context, rel *Release) error {
 	if err := swap(u.Bundle, staged); err != nil {
 		return err
 	}
+	// Relaunch may terminate this process without returning. Complete staging
+	// cleanup before that handoff, not only in a defer that may never run.
+	if err := os.RemoveAll(dir); err != nil {
+		return errors.New("the update was installed, but temporary update files could not be removed; quit and reopen Pi Local")
+	}
 	u.setStage("restarting", "")
 	u.Relaunch(u.Bundle)
 	return nil

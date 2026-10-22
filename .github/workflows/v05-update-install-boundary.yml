@@ -1,7 +1,7 @@
 name: v0.5 update installation boundary
 on:
   push:
-    branches: [v0.5, v05/update-install-boundary]
+    branches: [v0.5, v05/update-install-boundary, v05/update-cleanup-order]
     paths:
       - '.github/workflows/v05-update-install-boundary.yml'
       - 'internal/update/**'
