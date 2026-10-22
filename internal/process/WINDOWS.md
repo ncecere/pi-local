@@ -189,8 +189,9 @@ ResumeThread**, with `errWindowsAppContainerExecutionDisabled`. There is no
 switch or environment variable that enables execution. This hard stop is needed
 because zero capabilities alone do not establish the required network/IPC and
 filesystem boundary. In particular loopback exemptions have not been queried.
-No candidate profile, ACL, named pipe or network mutation is implemented here.
-No user profile, installed executable or real credential store is a fixture.
+No production profile, ACL, named pipe or network mutation is implemented here.
+The test-only owned profile below is not a user profile; no installed executable
+or real credential store is a fixture.
 
 ### Prepared tests and missing evidence
 
@@ -204,8 +205,8 @@ AppContainer, and checks that ordinary launch still has exactly two attributes
 and no earliest child marker. The existing Job suite still supplies
 verify/membership/cancel/resume, strict handle inheritance, descendants, abrupt
 owner death, Unicode and cleanup regressions. Synthetic token buffers are **not**
-observations of a real AppContainer token. The candidate restricted-child token
-path and its resource lifetime still need native fixture coverage.
+observations of a real AppContainer token. The real restricted-child token path
+now has the suspended-only fixture below, still awaiting native execution.
 
 Run the existing native gate above, or focus on this first slice with:
 
@@ -220,16 +221,60 @@ as a full-repository pass. Independent security review approved only this
 disabled, private policy/token slice and repeated those local checks. The
 API/SDK sources below inform the boundary; they do not replace native evidence.
 
+### Owned-profile suspended-token fixture (test-only, native result pending)
+
+`appcontainer_fixture_windows_test.go` binds userenv through SystemDLL, interprets
+low-32-bit HRESULTs (not GetLastError), and passes NULL capabilities/count zero.
+Only ephemeral GitHub-hosted Windows CI may invoke these bindings. Each subtest
+uses a random UUID-v4 `pi-local-ci-v05-` name; only S_OK establishes ownership.
+Already-exists is a failure with no deletion authority. Other outcomes report
+partial-creation uncertainty and the exact name, never blindly delete or scan.
+The returned SID is copied into Go storage before FreeSid. Fake API cases check
+copy survival, collision/uncertain outcome refusal, nil SID, FreeSid/delete error
+propagation, exact-name deletion and idempotence; these Windows-only tests have
+also only been cross-compiled here.
+
+The native gate copies the current trusted Go test image into a fresh blank
+owned temp directory, checks NTFS/no-reparse and single-link regular-file status,
+and changes no ACLs (especially not on the original image or its parents).
+Three bounded repetitions each exercise zero-capability LPAC hard-stop,
+post-verification cancellation and injected failure. Job/token hooks are nil:
+`beforeResume` must be reached **exactly once after real job/token validation**,
+with real exact-job recheck and a still-live suspended process. The hard-stop
+case requires the exact `errWindowsAppContainerExecutionDisabled`, never an
+access-denied, unsupported or generic startup error. The resume witness must
+remain zero and itself cannot execute the target. Only one non-inheritable
+SYNCHRONIZE duplicate is retained; after Start returns it must be signaled and
+explicitly closed before exact-owned-profile deletion. Cleanup errors fail the
+test; uncertain reap/duplicate closure blocks deletion and reports the name.
+The earliest-marker absence is supplemental, not proof of denied/allowed writes.
+No target instruction is intentionally executed. These repetitions are not a
+restricted-child handle-growth proof or a profile crash-recovery implementation.
+
+No image-read grants have been added: whether initial suspended image mapping
+works without them is **unproven**. ACCESS_DENIED must fail this candidate gate;
+if encountered, the next reviewed step is minimum profile-SID RX/Low-label ACLs
+on only a new fixture, not broad grants or waiving the positive token gate.
+This proves neither filesystem/network isolation nor shell compatibility; there
+is no System32/runtime fallback. Profile-intrinsic folders and registry access
+also preclude claiming that only fixture files exist.
+
+Mac Go 1.26.10 process/supervisor/MCP normal/race/vet and Windows amd64
+compilation/vet passed; these are local checks only. Baseline native CI **39701058074** ran older commit `10eff97`,
+not these tests: its Windows normal suite passed but Windows race hit checkptr
+in SID.IdentifierAuthority via policy.snapshot. The separate fix from
+`appcontainer-candidate` must be reviewed/merged before native race CI; this
+fixture does not duplicate that production fix. An elevated GHA Windows Server pass would
+still not establish standard-user Windows 11 behavior.
+
 ### Blockers before any restricted target may resume
 
 All of the following remain unimplemented/unproven, not silently weakened:
 
-- Disposable Windows-only fixture provisioning in `*_windows_test.go`: fresh
-  GUID profile names, zero capabilities, HRESULT handling (not GetLastError),
-  refuse existing profiles, copy the returned SID before FreeSid, delete only
-  the exact owned profile after job termination/reap, and report cleanup errors.
-  A trusted parent must retain the exact generated name for explicit crash
-  cleanup; no profile reuse, foreign deletion, scanning or orphan recovery.
+- Native evidence for the prepared owned-profile suspended-token fixture above,
+  including creation/image-read feasibility and successful exact-name cleanup.
+  Crash cleanup still needs a trusted parent's retained exact generated name;
+  no profile reuse, foreign deletion, scanning or orphan recovery is implemented.
 - Fresh private single-link/no-reparse NTFS fixtures only: a copied static Go
   helper exe (RX), blank workspace/temp (RW), and minimum SID ACLs plus Low
   integrity labels before target access. Never rewrite the existing test exe,
@@ -271,8 +316,10 @@ Additional sources inspected for this slice:
   and [TOKEN_INFORMATION_CLASS](https://learn.microsoft.com/windows/win32/api/winnt/ne-winnt-token_information_class):
   query-only access, buffer contracts, token classes and LPAC definition.
 - [CreateAppContainerProfile](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-createappcontainerprofile):
-  HRESULT, existing-profile refusal and FreeSid ownership (future test-only
-  fixture work; this API is not bound or called by this slice).
+  HRESULT, existing-profile refusal and FreeSid ownership (now bound only by the
+  CI-only test fixture; not a production facility or a native pass).
+- [DeleteAppContainerProfile](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-deleteappcontainerprofile):
+  exact-name profile deletion and HRESULT failure reporting.
 
 ## Sources inspected
 
