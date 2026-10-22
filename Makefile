@@ -44,6 +44,8 @@ test-frontend: ## UI typecheck, lint and tests
 
 test-licenses: ## Offline packaging notice tests (NOTICE_TEST_NODE_LICENSE enables installed-tree integration)
 	node --test packaging/licenses/build-receipt.test.mjs packaging/licenses/generate.test.mjs packaging/licenses/npm-inventory.test.mjs packaging/licenses/target-evidence.test.mjs
+	node --test packaging/licenses/go-graph-evidence.test.mjs
+	node --check packaging/licenses/go-graph-evidence.mjs
 	node --check packaging/licenses/generate.mjs
 	bash -n packaging/macos/package.sh
 

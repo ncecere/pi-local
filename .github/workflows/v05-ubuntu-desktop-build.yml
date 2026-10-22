@@ -1,7 +1,7 @@
 name: v0.5 Ubuntu desktop compile
 on:
   push:
-    branches: [v0.5, v05/ubuntu-desktop-build]
+    branches: [v0.5, v05/ubuntu-desktop-build, v05/native-go-graph-evidence]
     paths:
       - '.github/workflows/v05-ubuntu-desktop-build.yml'
       - 'cmd/pi-local/**'
@@ -10,6 +10,10 @@ on:
       - 'frontend/**'
       - 'packaging/licenses/build-receipt.mjs'
       - 'packaging/licenses/build-receipt.test.mjs'
+      - 'packaging/licenses/go-graph-evidence.mjs'
+      - 'packaging/licenses/go-graph-evidence.test.mjs'
+      - 'packaging/licenses/target-policy.mjs'
+      - 'packaging/licenses/targets.json'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:
@@ -19,7 +23,7 @@ permissions:
 
 jobs:
   compile:
-    if: github.ref == 'refs/heads/v0.5' || github.ref == 'refs/heads/v05/ubuntu-desktop-build'
+    if: github.ref == 'refs/heads/v0.5' || github.ref == 'refs/heads/v05/ubuntu-desktop-build' || github.ref == 'refs/heads/v05/native-go-graph-evidence'
     name: Ubuntu 24.04 amd64 GTK4 build and test compile only
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -69,11 +73,28 @@ jobs:
           (cd runtime && test "$(pnpm --version)" = 11.18.0)
           (cd frontend && test "$(pnpm --version)" = 11.18.0)
           node --test packaging/licenses/build-receipt.test.mjs
+          node --test packaging/licenses/go-graph-evidence.test.mjs
+      - name: Explicit module cache hydration; never repair module files
+        run: |
+          set -euo pipefail
+          before=$(sha256sum go.mod go.sum)
+          trap 'status=$?; test "$(sha256sum go.mod go.sum)" = "$before" || exit 1; exit "$status"' EXIT
+          GOENV=off GOWORK=off go mod download
+          test "$(sha256sum go.mod go.sum)" = "$before"
       - name: Frozen package-cwd assets before Go embed
         run: |
           set -euo pipefail
           (cd runtime && pnpm install --frozen-lockfile && pnpm bundle)
           (cd frontend && pnpm install --frozen-lockfile && pnpm build)
+      - name: Offline native production Go graph; assert and repeat bytes
+        run: |
+          set -euo pipefail
+          node packaging/licenses/go-graph-evidence.mjs write --target linux-amd64
+          node packaging/licenses/go-graph-evidence.mjs assert --target linux-amd64
+          before=$(sha256sum .cache/licenses/go-graph/linux-amd64/production.json)
+          node packaging/licenses/go-graph-evidence.mjs write --target linux-amd64
+          node packaging/licenses/go-graph-evidence.mjs assert --target linux-amd64
+          test "$(sha256sum .cache/licenses/go-graph/linux-amd64/production.json)" = "$before"
       - name: Compile and inspect ELF only; never run the desktop or test binary
         run: |
           set -euo pipefail

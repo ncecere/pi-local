@@ -154,8 +154,13 @@ servers or test binaries, access vaults, install apt dependencies, download Node
 packaging, package, upload or release. Existing desktop compile workflows keep their legacy receipts.
 See [QA and reviewed native evidence](../../docs/qa/v0.5-target-receipt-evidence.md).
 
-Deferred Phase 2: target-specific Go graphs and legal catalogs, Node archive provenance/downloads,
-Windows/Linux full notice assembly, distribution/installer work and native-library boundary review.
+The separate [native Go source graph increment](GO-GRAPH-EVIDENCE.md) adds explicit native-only
+`go-graph-evidence.mjs write|assert --target windows-amd64|linux-amd64` commands and new unit tests.
+It does not feed notice generation or change either existing receipt schema. Its new native runs and
+independent review are pending; Mac fixtures do not establish native target execution.
+
+Still deferred: target-specific legal catalogs, Node archive provenance/downloads, Windows/Linux full
+notice assembly, distribution/installer work and native-library boundary review.
 Both non-Darwin sandbox capabilities remain off and their runtimes unavailable; no app support is enabled.
 
 For dependency upgrades, inspect exact installed package terms and upstream notices. Resolve the release commit

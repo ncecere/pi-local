@@ -1,7 +1,7 @@
 name: v0.5 Windows desktop compile
 on:
   push:
-    branches: [v0.5, v05/windows-sdk-dependency]
+    branches: [v0.5, v05/windows-sdk-dependency, v05/native-go-graph-evidence]
     paths:
       - '.github/workflows/v05-windows-sdk-dependency.yml'
       - 'cmd/pi-local/**'
@@ -10,6 +10,10 @@ on:
       - 'frontend/**'
       - 'packaging/licenses/build-receipt.mjs'
       - 'packaging/licenses/build-receipt.test.mjs'
+      - 'packaging/licenses/go-graph-evidence.mjs'
+      - 'packaging/licenses/go-graph-evidence.test.mjs'
+      - 'packaging/licenses/target-policy.mjs'
+      - 'packaging/licenses/targets.json'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch:
@@ -19,7 +23,7 @@ permissions:
 
 jobs:
   compile:
-    if: github.ref == 'refs/heads/v0.5' || github.ref == 'refs/heads/v05/windows-sdk-dependency'
+    if: github.ref == 'refs/heads/v0.5' || github.ref == 'refs/heads/v05/windows-sdk-dependency' || github.ref == 'refs/heads/v05/native-go-graph-evidence'
     name: Windows amd64 build and test compile only
     runs-on: windows-2025
     timeout-minutes: 25
@@ -52,11 +56,28 @@ jobs:
         run: |
           set -euo pipefail
           node --test packaging/licenses/build-receipt.test.mjs
+          node --test packaging/licenses/go-graph-evidence.test.mjs
+      - name: Explicit module cache hydration; never repair module files
+        run: |
+          set -euo pipefail
+          before=$(sha256sum go.mod go.sum)
+          trap 'status=$?; test "$(sha256sum go.mod go.sum)" = "$before" || exit 1; exit "$status"' EXIT
+          GOENV=off GOWORK=off go mod download
+          test "$(sha256sum go.mod go.sum)" = "$before"
       - name: Frozen package-cwd assets before Go embed
         run: |
           set -euo pipefail
           (cd runtime && pnpm install --frozen-lockfile && pnpm bundle)
           (cd frontend && pnpm install --frozen-lockfile && pnpm build)
+      - name: Offline native production Go graph; assert and repeat bytes
+        run: |
+          set -euo pipefail
+          node packaging/licenses/go-graph-evidence.mjs write --target windows-amd64
+          node packaging/licenses/go-graph-evidence.mjs assert --target windows-amd64
+          before=$(sha256sum .cache/licenses/go-graph/windows-amd64/production.json)
+          node packaging/licenses/go-graph-evidence.mjs write --target windows-amd64
+          node packaging/licenses/go-graph-evidence.mjs assert --target windows-amd64
+          test "$(sha256sum .cache/licenses/go-graph/windows-amd64/production.json)" = "$before"
       - name: Compile only; never launch the desktop or its test binary
         run: |
           set -euo pipefail
