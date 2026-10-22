@@ -216,9 +216,9 @@ go test -count=1 -timeout=3m -run 'TestWindowsAppContainer|TestWindowsAtomicSusp
 On the development Mac, targeted process/supervisor/MCP normal tests, race tests
 and vet passed. Windows amd64 `go test -exec=true` cross-compilation and vet
 passed; **no Windows tests executed**. This does not count as a native pass, nor
-as a full-repository pass. The referenced parent plan object `8103696` was not
-available in this worktree's object database; the first-slice boundary here is
-based on the task's explicit constraints and the API/SDK sources below.
+as a full-repository pass. Independent security review approved only this
+disabled, private policy/token slice and repeated those local checks. The
+API/SDK sources below inform the boundary; they do not replace native evidence.
 
 ### Blockers before any restricted target may resume
 
