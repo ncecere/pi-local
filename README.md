@@ -177,7 +177,7 @@ The Go tests run the real runtime against fake model providers (OpenAI and Anthr
 
 Explicit native Windows/Linux target receipts are build evidence only, not legal inventories or distribution
 readiness. The default Darwin notices and packaging remain unchanged. See [receipt scope and commands](packaging/licenses/README.md#phase-1-target-build-evidence-only)
-and [verification and pending native gates](docs/qa/v0.5-target-receipt-evidence.md). Windows/Linux runtime and
+and [verification and evidence limits](docs/qa/v0.5-target-receipt-evidence.md). Windows/Linux runtime and
 sandbox support remain unavailable; this work changes neither boundary.
 
 ## License

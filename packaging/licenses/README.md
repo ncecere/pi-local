@@ -152,7 +152,7 @@ Windows 2025/Ubuntu 24.04, Node 22.23.0 and actual package-cwd pnpm 11.18.0 chec
 unit tests, both receipt assertions and repeated receipt hash checks. It does not execute Go, launch apps,
 servers or test binaries, access vaults, install apt dependencies, download Node distribution archives for
 packaging, package, upload or release. Existing desktop compile workflows keep their legacy receipts.
-See [QA and pending review/native evidence](../../docs/qa/v0.5-target-receipt-evidence.md).
+See [QA and reviewed native evidence](../../docs/qa/v0.5-target-receipt-evidence.md).
 
 Deferred Phase 2: target-specific Go graphs and legal catalogs, Node archive provenance/downloads,
 Windows/Linux full notice assembly, distribution/installer work and native-library boundary review.
