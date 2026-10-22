@@ -171,10 +171,15 @@ Parent normal/race secret/consumer tests, vet and Windows compilation/vet passed
 before and after the correction (`v05-windows-private-fs-parent-gate` and
 `v05-private-fs-distinct-owner-correction-gate`, exits 0). The parent deliberately
 added this isolated branch to native secrets CI, with normal/race/vet aggregate
-exit handling. YAML/actionlint v1.7.7 validation passed. Native NTFS/Authz results
-are still pending; elevated CI would not prove a standard-user privacy boundary.
-The unchanged Windows pre-I/O ErrUnsupported regression was compiled, not
-executed on this host.
+exit handling. YAML/actionlint v1.7.7 validation passed. Native CI
+[39712753093](https://github.com/ncecere/pi-local/actions/runs/39712753093) at
+`c0c15e8` then passed normal/race/vet on macos-15, ubuntu-24.04 and windows-2025.
+Windows exercised NTFS creation/inheritance, descriptor/refusal/Authz/hostile
+objects, SYSTEM-owner regressions, delete sharing and SQLite DB/WAL/SHM opening.
+File-reparse and SQLite cases passed in both Windows builds; no private-FS skip
+or SQLite owner-mismatch log occurred in this runner context. The Windows
+pre-I/O unsupported-factory regression also ran. Elevated CI still does not
+prove a genuine standard-user boundary or general SQLite ownership policy.
 
 ## Explicit remaining gates
 
@@ -186,9 +191,10 @@ metadata behavior do not establish the Unix identity-file + rename + parent-sync
 bootstrap ordering. No vault may be activated on that assumption.
 
 Windows publication durability and identity binding, actual standard-user and
-hostile-object native acceptance, SQLite owner/default-policy acceptance,
-sharing/error/fault coverage beyond the bounded fixtures, and independent review
-remain future gates. Existing LockFileEx locking is not duplicated or wired.
+hostile-object behavior outside the native fixtures, general SQLite owner/default-policy
+acceptance and sharing/error/fault coverage beyond the bounded fixtures remain
+future gates. The completed native tests and independent reviews approve only
+these unwired primitives. Existing LockFileEx locking is not duplicated or wired.
 Persistent-store activation, actual CredMan/Keychain/SecretService, migration,
 backup/recovery, profiles and app integration remain entirely out of scope.
 
