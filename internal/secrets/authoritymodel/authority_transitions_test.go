@@ -54,10 +54,17 @@ func modelSameMaterial(t *testing.T, a, b modelWorld) {
 	}
 }
 
-// Independent trace oracle: every operation has both leases, initialization is
-// after PENDING acknowledgement, and a grant requires this open's ACTIVE ack.
+// Trace oracle: completion alone is not successful flush, validated readback,
+// or authenticated schema/binding/row verification. These remain model events,
+// not an independent cryptographic or native-storage proof.
 func modelCheckTrace(t *testing.T, w modelWorld) {
 	t.Helper()
+	if err := modelTraceError(w); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func modelTraceError(w modelWorld) error {
 	type held struct {
 		ref, dir, pending, active, verified bool
 		flush, read                         string
@@ -68,57 +75,90 @@ func modelCheckTrace(t *testing.T, w modelWorld) {
 		switch e.Name {
 		case "acquire:reference":
 			if h.ref || h.dir {
-				t.Fatal("reference acquired out of order")
+				return errors.New("reference acquired out of order")
 			}
 			h.ref = true
 		case "acquire:directory":
 			if !h.ref || h.dir {
-				t.Fatal("directory acquired before reference")
+				return errors.New("directory acquired before reference")
 			}
 			h.dir = true
 		case "release:directory":
 			if !h.dir || !h.ref {
-				t.Fatal("invalid directory release")
+				return errors.New("invalid directory release")
 			}
 			h.dir = false
 		case "release:reference":
 			if !h.ref || h.dir {
-				t.Fatal("reference released before directory")
+				return errors.New("reference released before directory")
 			}
 			h.ref = false
-		case "done:pending.flush", "done:active.flush":
-			h.flush = strings.TrimSuffix(strings.TrimPrefix(e.Name, "done:"), ".flush")
-		case "done:pending.readback", "done:active.readback":
-			h.read = strings.TrimSuffix(strings.TrimPrefix(e.Name, "done:"), ".readback")
+		case "ok:pending.flush", "ok:active.flush":
+			h.flush = strings.TrimSuffix(strings.TrimPrefix(e.Name, "ok:"), ".flush")
+		case "validated:pending.readback", "validated:active.readback":
+			h.read = strings.TrimSuffix(strings.TrimPrefix(e.Name, "validated:"), ".readback")
 		case "ack:pending", "ack:active":
 			phase := strings.TrimPrefix(e.Name, "ack:")
 			if !h.ref || !h.dir || h.flush != phase || h.read != phase {
-				t.Fatal("ack without leased flush/readback")
+				return errors.New("ack without successful leased flush/validated readback")
 			}
 			if phase == "pending" {
 				h.pending = true
 			} else {
 				h.active = true
 			}
-		case "done:db.reconcile":
+		case "verified:db":
+			if !h.ref || !h.dir {
+				return errors.New("DB verification without leases")
+			}
 			h.verified = true
 		case "grant":
 			if !h.ref || !h.dir || !h.active || !h.verified {
-				t.Fatal("pre-ack grant")
+				return errors.New("pre-ack grant")
 			}
 		}
 		if strings.HasPrefix(e.Name, "start:") {
 			if !h.ref || !h.dir {
-				t.Fatalf("unleased %s", e.Name)
+				return fmt.Errorf("unleased %s", e.Name)
 			}
 			if e.Name == "start:db.create" && !h.pending {
-				t.Fatal("DB before acknowledged PENDING")
+				return errors.New("DB before acknowledged PENDING")
 			}
 			if e.Name == "start:active.write" && !h.verified {
-				t.Fatal("ACTIVE before DB verification")
+				return errors.New("ACTIVE before DB verification")
 			}
 		}
 		owners[e.Owner] = h
+	}
+	return nil
+}
+
+func TestAuthorityModelOracleRejectsCompletionWithoutSuccessfulValidation(t *testing.T) {
+	m := newAuthorityModel(t, modelFreshWorld())
+	g := modelOpen(t, m)
+	g.close()
+	good := m.snapshot()
+	if err := modelTraceError(good); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"ok:pending.flush", "validated:pending.readback", "verified:db", "ok:active.flush", "validated:active.readback"} {
+		t.Run(marker, func(t *testing.T) {
+			bad := good.clone()
+			found := false
+			for i := range bad.Events {
+				if bad.Events[i].Name == marker {
+					completion := strings.TrimPrefix(strings.TrimPrefix(marker, "ok:"), "validated:")
+					if marker == "verified:db" {
+						completion = "db.reconcile"
+					}
+					bad.Events[i].Name = "done:" + completion
+					found = true
+				}
+			}
+			if !found || modelTraceError(bad) == nil {
+				t.Fatal("completion-only mutation escaped the validation oracle")
+			}
+		})
 	}
 }
 

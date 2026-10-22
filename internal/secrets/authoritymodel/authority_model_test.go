@@ -214,6 +214,7 @@ func (r modelRun) step(name string, action func(*modelWorld)) error {
 	if err := r.ctx.Err(); err != nil {
 		return errors.Join(modelUnknown, err)
 	}
+	r.m.do(func(w *modelWorld) { r.event(w, "ok:"+name) })
 	return nil
 }
 func (r modelRun) release() {
@@ -249,7 +250,10 @@ func (r modelRun) acknowledge(a modelRecord) error {
 	if read != a || !modelValidRecord(read, r.ref, r.dir) {
 		return modelUnknown
 	}
-	r.m.do(func(w *modelWorld) { r.event(w, "ack:"+phase) })
+	r.m.do(func(w *modelWorld) {
+		r.event(w, "validated:"+phase+".readback")
+		r.event(w, "ack:"+phase)
+	})
 	return nil
 }
 func (r modelRun) publish(a modelRecord) error {
@@ -367,10 +371,11 @@ func (m *authorityModel) open(ctx context.Context, ref, alias string, fault mode
 	if reconcileErr != nil || !image.Schema || !image.Auth || image.Binding != a.Binding || image.Rows < 0 {
 		return nil, modelRefused
 	}
+	if a.Phase == "PENDING" && image.Rows != 0 {
+		return nil, modelRefused
+	}
+	m.do(func(w *modelWorld) { r.event(w, "verified:db") })
 	if a.Phase == "PENDING" {
-		if image.Rows != 0 {
-			return nil, modelRefused
-		}
 		a.Phase = "ACTIVE"
 		if err := r.publish(a); err != nil {
 			return nil, err
