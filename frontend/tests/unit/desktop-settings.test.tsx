@@ -112,8 +112,17 @@ it('disables during a supported mutation and keeps failure feedback/rollback', a
   expect(toast.error).toHaveBeenCalledWith('Synthetic startup failure.');
 });
 
-it.each([
+const unavailableCases: [string, unknown, string | undefined][] = [
   ['unsupported', UNSUPPORTED, UNSUPPORTED.capabilities.launchAtLogin.reason],
+  ...[null, 42, {}, '   '].map<[string, unknown, undefined]>((reason) => [
+    `malformed reason ${JSON.stringify(reason)}`,
+    {
+      available: true,
+      launchAtLogin: true,
+      capabilities: { launchAtLogin: { available: false, reason } },
+    },
+    undefined,
+  ]),
   ['missing capabilities', { available: true, launchAtLogin: true }, undefined],
   ['missing operation', { available: true, launchAtLogin: true, capabilities: {} }, undefined],
   [
@@ -126,19 +135,24 @@ it.each([
     { available: true, launchAtLogin: true, capabilities: { launchAtLogin: { available: 'yes' } } },
     undefined,
   ],
-])('fails closed for %s without mutating', async (_name, payload, reason) => {
-  const backend = await show(payload, () => {
-    throw new Error('disabled mutation touched');
-  });
-  const before = view?.queryClient.getQueryData(DESKTOP_KEY);
-  expect(toggle()?.disabled).toBe(true);
-  expect(toggle()?.getAttribute('aria-checked')).toBe('false');
-  expect(text()).toContain(reason ?? 'Launching at login is not supported on this platform.');
-  expect(text()).not.toContain('menu bar');
-  await click(toggle());
-  expect(backend.calls.filter((call) => call.method === 'PUT')).toEqual([]);
-  expect(view?.queryClient.getQueryData(DESKTOP_KEY)).toEqual(before);
-});
+];
+
+it.each(unavailableCases)(
+  'fails closed for %s without mutating',
+  async (_name, payload, reason) => {
+    const backend = await show(payload, () => {
+      throw new Error('disabled mutation touched');
+    });
+    const before = view?.queryClient.getQueryData(DESKTOP_KEY);
+    expect(toggle()?.disabled).toBe(true);
+    expect(toggle()?.getAttribute('aria-checked')).toBe('false');
+    expect(text()).toContain(reason ?? 'Launching at login is not supported on this platform.');
+    expect(text()).not.toContain('menu bar');
+    await click(toggle());
+    expect(backend.calls.filter((call) => call.method === 'PUT')).toEqual([]);
+    expect(view?.queryClient.getQueryData(DESKTOP_KEY)).toEqual(before);
+  },
+);
 
 it('hides desktop settings when no desktop is present', async () => {
   const backend = await show(ABSENT);

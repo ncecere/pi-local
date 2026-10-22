@@ -38,6 +38,36 @@ func readDesktop(t *testing.T, w *httptest.ResponseRecorder) desktopSettings {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
+	// Go struct decoding is case-insensitive; assert the actual wire contract
+	// first so uppercase field/tag regressions cannot pass silently.
+	var wire map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &wire); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := wire["data"].(map[string]any)
+	if !ok || len(data) != 3 {
+		t.Fatal("desktop data must expose exactly the known lower-case keys")
+	}
+	if _, ok := data["available"].(bool); !ok {
+		t.Fatal("available must be a lower-case boolean field")
+	}
+	if _, ok := data["launchAtLogin"].(bool); !ok {
+		t.Fatal("launchAtLogin must be a boolean field")
+	}
+	capabilities, ok := data["capabilities"].(map[string]any)
+	if !ok || len(capabilities) != 1 {
+		t.Fatal("capabilities must contain only the known operation")
+	}
+	startup, ok := capabilities["launchAtLogin"].(map[string]any)
+	if !ok || len(startup) != 2 {
+		t.Fatal("startup availability must expose exactly available/reason")
+	}
+	if _, ok := startup["available"].(bool); !ok {
+		t.Fatal("startup available must be a lower-case boolean field")
+	}
+	if _, ok := startup["reason"].(string); !ok {
+		t.Fatal("startup reason must be a lower-case string field")
+	}
 	var envelope struct {
 		Data desktopSettings `json:"data"`
 	}

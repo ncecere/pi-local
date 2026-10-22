@@ -23,6 +23,10 @@ function DesktopSection() {
   if (!desktop.data?.available) return null;
   const capability = desktop.data.capabilities?.launchAtLogin;
   const supported = capability?.available === true;
+  const unsupportedReason =
+    typeof capability?.reason === 'string' && capability.reason.trim()
+      ? capability.reason
+      : 'Launching at login is not supported on this platform.';
   return (
     <SettingsSection title="Desktop">
       <SettingsRow
@@ -31,7 +35,7 @@ function DesktopSection() {
         description={
           supported
             ? 'It starts in the menu bar with its window closed, so your schedules run and agents can reach you without you opening it. Click its menu bar icon to open the window.'
-            : capability?.reason || 'Launching at login is not supported on this platform.'
+            : unsupportedReason
         }
       >
         <Switch
