@@ -11,8 +11,10 @@ run**. Parent read the complete change. Independent security review `3f80c529`
 approved source inclusion **OFF-only**, with no actionable findings, not native
 acceptance or activation. Parent gate `proc_e6ad` passed process/supervisor/MCP
 normal/race/vet, Windows source checks/vet, actionlint and whitespace checks
-(exit 0). Actual native execution remains pending; local cross-builds are not
-acceptance. The original author did not push or dispatch native CI.
+(exit 0). Native CI **39727836384** at `4311092` subsequently passed all
+normal/race/vet lanes on Windows Server, macOS and Ubuntu. This accepts only the
+suspended owned-child contract below, not execution or product readiness. The
+original author did not push or dispatch native CI.
 
 Historical diagnostic commit `17fdb6b`, native run **39721890954**, reported LPAC
 A/B/C **DENY / DENY / ALLOW** versus ordinary AppContainer
@@ -175,5 +177,31 @@ Go **1.26.10**, macOS arm64, process/supervisor/MCP packages only:
 
 The owned-child workflow allowlist adds this isolated branch; every native
 normal/race/vet lane is still required and every nonzero exit keeps the gate red.
-There is no expected-red waiver. Native Windows execution remains **pending**;
-this work must not be accepted or enabled based only on local checks.
+There is no expected-red waiver. Native results are recorded below; they are not
+permission to enable execution.
+
+## First complete native suspended-contract result
+
+CI **39727836384**, commit `4311092f5cbe78e12a60d398ab76165f3ed7a85c`,
+reported `normal=0 race=0 vet=0` on all three OS lanes. Parent downloaded and
+inspected the complete log at `.cache/lpac-fixed-first-native-success.log`.
+On Windows **both normal and race/checkptr** runs passed:
+
+- All nine `OwnedLPACSuspended` cases: repetitions 0/1/2, each hard-stop,
+  cancellation and injected failure. Each assertion requires verified callback
+  exactly once, resume count zero, exact expected error and owned-profile cleanup
+  gated by independent signaled-and-closed custody. No case was skipped.
+- Both paired references, including mandatory fixed checking for LPAC and the
+  disposable three-attribute ordinary AC comparator. The observed A/B/C controls
+  matched their required patterns; historical87 was not an accepted result.
+- New complete-dependency, mandatory-checker, source/duplicate custody and
+  close-uncertainty fakes, inherited metadata/parser/diagnostic tests, ordinary
+  two-attribute lifecycle, process/supervisor/MCP normal/race and vet.
+
+No candidate target was resumed. This is real suspended-child metadata and
+behavioral verification, **not** positive restricted execution, filesystem,
+network/IPC confinement, standard-user Windows11 or desktop acceptance. Source
+review remains OFF-only. Independent aggregate premerge review `1998d6a1` read
+all 24 changed files against integration `458c3a8`, inspected the exact-HEAD native
+log and found no required cross-stage changes. Merged-tree regression gates remain
+separate. Historical red203/elevation/selector46 evidence is retained.

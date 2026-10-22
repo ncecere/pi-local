@@ -229,8 +229,10 @@ or real credential store is a fixture.
 
 The following preparation/native-attempt notes preserve their historical evidence.
 They do not describe current selector46 authority or count as a pass for the new
-fixed verification contract above; its normal/race/checkptr/vet native gate is
-separate and still pending.
+fixed verification contract above. Its separate native gate 39727836384 at
+`4311092` passed normal/race/checkptr/vet, including all nine suspended cases and
+both paired controls. Both execution stops remain unconditional; details and
+remaining confinement/activation gates are in the fixed-verification QA above.
 
 `appcontainer_windows_test.go` has synthetic SID/layout/ownership checks; exact
 zero-capability/LPAC attribute checks; malformed, oversized, truncated and failed
