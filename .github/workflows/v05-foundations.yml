@@ -43,5 +43,9 @@ jobs:
           go version
           go test -count=1 -race -v ./internal/datalock ./internal/process ./internal/runtimeenv ./internal/host ./internal/secrets
           go vet ./internal/datalock ./internal/process ./internal/runtimeenv ./internal/host ./internal/secrets
+          # These tags must never turn a network/SDK-control mode into native human trust.
+          go test -race -count=1 -tags server ./internal/host
+          go test -race -count=1 -tags mcp ./internal/host
+          go test -race -count=1 -tags 'server,mcp' ./internal/host
 # These are isolated contract tests using synthetic temporary directories and helper processes.
 # Windows Server CI is not Windows 11 UI evidence; no WebView, sandbox, keyring or installer parity is claimed.
