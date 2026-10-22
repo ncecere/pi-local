@@ -53,7 +53,7 @@ preserved/reported because no reap witness was retained. Remaining SID,
 capability, integrity and LPAC checks were not reached; race execution of the
 new fixture was not established.
 
-## Restricted-primary / CreateProcessAsUser candidate (native gate pending)
+## Restricted-primary / CreateProcessAsUser candidate (native gate red)
 
 The separate token-only diagnostic at `1fbc6bf` (CI 39707791990) observed
 CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN) produce elevation=0,
@@ -138,14 +138,102 @@ Windows compilation/vet, whitespace and clean-source checks at `37cea8b`
 (`v05-asuser-suspended-fixture-parent-gate`, exit 0). These do not execute the
 new Windows native or fake cases. Independent security review approved only
 the OFF suspended slice and repeated local normal/race/vet and Windows
-compilation/vet successfully. Native token/profile/attribute evidence still
-requires a deliberate push and successful native run.
+compilation/vet successfully. That review approved the OFF suspended slice,
+not execution or a passing native launch.
 
 The workflow now explicitly selects this isolated branch and runs the full
 process/supervisor/MCP normal, race and vet suites on macOS, Linux and Windows.
 All three commands are attempted even after a failure; saved exit codes are
-aggregated, and any nonzero result fails the gate. No native Windows execution
-has yet been performed for this slice.
+aggregated, and any nonzero result fails the gate. This environment correction
+does not change that workflow.
+
+### First AsUser native failure: historical evidence, not a passing gate
+
+Native CI **39711691511** at `09f96dc` passed macOS/Linux. Windows completed
+all required commands: **normal=1, race=1, vet=0**. Both Windows test builds
+passed the strict derived-primary **presence** predicate, S_OK profile creation,
+owned NTFS/reparse/DACL/mandatory-label observations and installation of all four
+startup attributes. CreateProcessAsUserW then failed with
+**ERROR_ENVVAR_NOT_FOUND (203)**, verified callbacks=0 and resumes=0. Each build
+stopped after its first failed case and preserved/reported the owned profile
+without a retained reap witness. The local historical log is
+`.cache/asuser-first-native-failure.log`; it is not new acceptance evidence.
+
+**203 does not identify which variable or attribute caused the failure.** The
+older administrator/CreateProcessW fixture reached the elevation=1 refusal with
+an inherited environment. The AsUser fixture simultaneously changed the token/
+creation API and reduced the environment to SystemRoot (from the parent) plus
+three synthetic helper keys. Those changes were confounded; neither the old
+result nor this error proves an attribute incompatibility or a universal Windows
+environment requirement.
+
+### Narrow selected-environment counterfactual (native execution pending)
+
+Primary sources support a bounded hypothesis, not a proven diagnosis:
+
+- Chromium's [broker source](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/sandbox/win/src/broker_services.cc)
+  uses CreateProcessAsUserW with extended suspended/Unicode startup information
+  and explicitly retains LOCALAPPDATA: **"Needed for App Container processes."**
+  Its [startup helper](https://chromium.googlesource.com/chromium/src/+/refs/tags/135.0.7049.99/sandbox/win/src/startup_information_helper.cc)
+  composes SECURITY_CAPABILITIES, LPAC opt-out, JOB_LIST and HANDLE_LIST.
+  Chromium's broader environment and other sandbox mechanisms are **not** copied
+  here. These sources do not establish compatibility with our exact predicate.
+- [GetSystemWindowsDirectoryW](https://learn.microsoft.com/windows/win32/api/sysinfoapi/nf-sysinfoapi-getsystemwindowsdirectoryw)
+  supplies the authoritative OS directory; it need not be on a particular drive
+  or have a particular directory name. Pinned x/sys v0.49.0 already wraps it.
+- [CreateEnvironmentBlock](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-createenvironmentblock)
+  returns a double-NUL Unicode block for the given token; FALSE means do not
+  inherit the current process environment. It supplies no allocation length and
+  returns BOOL, not HRESULT. [DestroyEnvironmentBlock](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-destroyenvironmentblock)
+  frees that allocation and also returns BOOL. User-profile-dependent variables
+  are not guaranteed when a profile is not loaded; this fixture does **not** load
+  one and treats missing selected metadata as a red prerequisite.
+
+The test-only helper calls CreateEnvironmentBlock with the existing **derived**
+token and **FALSE**, checks its selected SystemRoot against the authoritative OS
+root, and retains only LOCALAPPDATA and that authoritative root. Both paths must
+be nonempty, fully qualified, valid local DOS metadata paths; there is no assumed
+OS location or empty explicit SystemRoot. The only parent-environment observation
+is a single SystemRoot lookup, reported as four booleans (present/nonempty/
+absolute/case-normalized equal). No value, user identity, profile SID, actual path
+or provider credential is printed or written to artifacts.
+
+The target receives exactly **five** keys: **SystemRoot**, **LOCALAPPDATA**,
+**PL_WINDOWS_JOB_HELPER**, **PL_WINDOWS_JOB_MODE**, **PL_WINDOWS_JOB_DIR**. The
+last three retain their existing synthetic values. PATH, COMSPEC, TEMP/TMP,
+USERNAME, USERPROFILE, APPDATA, provider and loader environment are not restored.
+LOCALAPPDATA is only current ephemeral CI user metadata; no personal filesystem
+contents are opened. No registry read, GetAll process-environment read,
+GetUserProfileDirectory, LoadUserProfile, fallback/retry, attribute removal,
+security repair, account/UAC/ACL change or USERPROFILE expansion is added.
+
+The native reader trusts the documented API allocation and termination, with a
+64-KiB (32,768 UTF-16 code-unit) scan cap, 8,192-unit entry cap and 1,024-entry
+cap; the cap is **not** a claimed allocation length. It advances from a live raw
+pointer without fabricating an oversized slice. It scans unknown entries without
+copying their values; only the two case-insensitive selections become strings.
+Duplicate selections, malformed/oversized/truncated data, missing metadata and
+invalid/mismatched paths fail closed. Synthetic parser tests instead use an
+explicitly bounded slice, never native-pointer reads.
+
+Every nonnil returned block, including partial output on API failure, receives
+one destruction attempt. A destruction failure is sticky/redacted and clears
+the selected result. Preparation, validation and destruction finish **before any
+profile provisioning**. Fake dependency injection has no native fallback and
+checks token/FALSE arguments, selection/casing/duplicates/bounds, five-key Unicode
+payload/double NUL, synthetic FakeSecret exclusion, malformed paths, ownership,
+close failure and data-free errors. The creation API, derived token helper,
+application/cwd, four attributes, suspension, real child checks, both independent
+hard stops, witness requirement and S_OK-only deletion authority are unchanged.
+Production/runtime APIs, windowsDescriptor and the normal app are untouched.
+
+Local Go 1.26.10 macOS process/supervisor/MCP normal, race and vet plus Windows
+amd64 test compilation and vet are required before committing this correction.
+They do not execute the Windows-only fake or native cases. Parent full-source
+review, bounded independent review and a deliberate push/native normal/race/vet
+run are still pending. Only a new complete nine-case native pass could support
+this **minimal counterfactual**; it would not establish universal Windows
+environment requirements or erase the historical 203 result.
 
 Actual restricted execution, filesystem grants/Low labels, network/loopback and
 broker/control IPC denial, restricted descendant teardown/resource growth,

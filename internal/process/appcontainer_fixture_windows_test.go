@@ -489,12 +489,27 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 		}
 	})
 	t.Log("strict restricted-primary metadata predicate passed; NOT general standard-user or execution authorization")
+	environmentAPI, err := candidateEnvironmentNativeAPI(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Select and destroy the derived-token OS block before ANY profile exists.
+	// No whole-environment restore, root-only retry or USERPROFILE expansion.
+	environment, legacy, err := candidatePrepareEnvironment(primary.derived.token, environmentAPI)
+	t.Logf("legacy SystemRoot: present=%v nonempty=%v absolute=%v caseNormalizedEqual=%v (values withheld)", legacy.present, legacy.nonempty, legacy.absolute, legacy.equal)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Bounded repeated profile/create/refuse/reap/delete lifetime, not a full
 	// restricted-launch handle-growth measurement (that remains a future gate).
 	for iteration := 0; iteration < 3; iteration++ {
 		for _, mode := range []string{"hard-stop", "cancel", "injected-failure"} {
 			if !t.Run(fmt.Sprintf("%d/%s", iteration, mode), func(t *testing.T) {
 				dir := t.TempDir() // blank, owned, no existing trees or user files
+				targetEnvironment, err := environment.target(dir)
+				if err != nil {
+					t.Fatal(err) // invalid metadata must never provision a profile
+				}
 				probe := candidateCopyProbe(t, dir)
 				name, err := candidateNewProfileName()
 				if err != nil {
@@ -534,8 +549,9 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				forbiddenResume := errors.New("FATAL: candidate attempted ResumeThread")
 				cmd := windowsHelperCommand(dir, "hold")
 				cmd.Path, cmd.Args[0] = probe, probe
-				// No inherited provider/vault/CLI environment in this fixture.
-				cmd.Env = []string{"SystemRoot=" + os.Getenv("SystemRoot"), "PL_WINDOWS_JOB_HELPER=1", "PL_WINDOWS_JOB_MODE=hold", "PL_WINDOWS_JOB_DIR=" + dir}
+				// Exactly two selected OS metadata values plus three synthetic keys;
+				// no inherited provider/vault/CLI, loader, shell or user environment.
+				cmd.Env = targetEnvironment
 				cleanup.launchAttempted = true
 				tr, startErr := startWindowsOwned(ctx, cmd, windowsLaunchHooks{
 					primaryToken:    primary.derived.token, // borrowed through synchronous cleanup
