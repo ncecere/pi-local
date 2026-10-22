@@ -9,9 +9,9 @@ Parent read all six changed files. Independent security review `9ff99795`
 approved **diagnostic-only** source inclusion with no actionable findings, not
 native or activation acceptance. Parent gate `proc_f3c1` passed Mac process/
 supervisor/MCP normal/race/vet, Windows source checks/vet, actionlint and
-production/module byte-immutability checks (exit 0). Native CI and explicit
-first-observation review remain **pending**. The original author did not push or
-dispatch native CI.
+production/module byte-immutability checks (exit 0). Native CI and the separate
+first-observation review later passed as recorded below; merged-tree verification
+is still separate. The original author did not push or dispatch native CI.
 
 Baseline native runs **39727836384** and merged **39729478459** passed required
 normal/race/vet on all three OS lanes, including all nine suspended Windows LPAC
@@ -101,8 +101,8 @@ observations remain unchanged and nonauthoritative.
 
 ## Native review gate — no invented expected counts
 
-No new native counts have been observed or approved. After parent source review
-and independent review, a separately authorized push/native run must require:
+The initial native gate was defined before observing counts. Every native run
+must retain these requirements; first observations below do not weaken them:
 
 1. All normal/race/vet lanes on macOS, Ubuntu and Windows, with no allow-failure,
    new skips or narrowed test selection. New Windows fakes must execute under
@@ -136,8 +136,10 @@ earliest marker/resume ordering; descendants, abrupt-parent-death and handle
 lifetime/crash recovery; quoting/environment compatibility; and a managed
 Go-helper-only network-off prototype before shell/runtime integration.
 
-Loopback configuration querying is **not implemented**: its exact allocator and
-deallocator contract remains separate research. No NetworkIsolationSet calls,
+Loopback configuration querying is **not implemented**. Separate research
+establishes successful-result process-heap cleanup, not caller capacity or an
+exhaustive partial-error ownership contract; native allocation bounds remain
+unresolved. No NetworkIsolationSet calls,
 ACL/MIC changes, actual process resumes, TEMP/TMP environment broadening,
 credentials, proxies, shells or providers are added. No actual application,
 vault or user data is accessed. Existing profile ownership uncertainty and
@@ -157,6 +159,45 @@ Actual Go **1.26.10 darwin/arm64**, toolchain bin first on PATH,
 - gofmt, whitespace, production-byte and module-immutability checks: each exit
   **0**. No dependency or SDK/cache files were changed.
 
-Windows execution/native expectations remain pending; local compilation is not a
-native pass. The workflow adds only this branch, retaining every required native
-lane. Local macOS tests do not execute the new Windows-only fake matrix.
+Those local checks were not a native pass. The workflow adds only this branch,
+retaining every required lane; the later first native result follows.
+
+## First native observations — not a shape policy
+
+CI **39734610806** at `e9ab1f1ea017ac6e724cdc1307f9587c3a598f3e`
+passed normal/race/vet on all three OS lanes. Parent retained the complete log
+`.cache/token-shape-first-native.log`, filtered fixture/control summary and
+machine-readable `.cache/token-shape-first-native-observations.json`.
+
+Windows normal and race/checkptr passed all new fakes, all nine suspended cases
+per build (18 case passes), and both paired references per build (four passes).
+The 22 native inventory reports were complete, error-free and source/duplicate
+set-equal, with 66 role rows:
+
+| Role | Kind | Impersonation level | Groups | Restricted SIDs | Privileges |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Borrowed creation primary | 1 | Not queried; logged storage zero | 14 | 0 | 1 |
+| Retained child source | 1 | Not queried; logged storage zero | 14 | 0 | 1 |
+| Owned duplicate | 2 | 2 (SecurityImpersonation) | 14 | 0 | 1 |
+
+All 22 observations per role reported group attribute OR `0xc0000077`,
+restricted attribute OR `0x0` and privilege attribute OR `0x3`. These are
+**observations of this hosted Windows Server configuration**, not approved
+identities or masks for every Windows11/token configuration. The same count/OR
+summaries appeared for ordinary AC and LPAC: they are not a classifier.
+
+Identical counts/OR masks do not establish primary/child identity-set equality.
+Only the source/duplicate collections were fully compared internally, including
+all captured attributes. Restricted SID count zero does not mean absence of
+LowBox/AppContainer restrictions, and privilege count one does not identify its
+LUID. No raw identity was promoted into an allowlist or logged.
+
+The fixed metadata/AccessCheck gate, exact expected stop/cancel/injection errors,
+zero resumes and independent signaled-and-closed profile cleanup still passed.
+This accepts only bounded diagnostic observations for the controlled fixture,
+not hostile-mutation resistance, actual restricted execution, filesystem/network/
+IPC enforcement, or standard-user Windows11/product readiness. Independent
+first-observation review `019d1cf5` independently recounted all 22 reports/66
+roles, verified the exact-HEAD lanes/case passes and accepted only diagnostic
+observations with no actionable findings. Merged-tree verification remains
+separate; no future shape policy or activation was approved.
