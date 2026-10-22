@@ -237,6 +237,35 @@ nine-case normal/race gate still require deliberate push and actual results. Onl
 this **minimal counterfactual**; it would not establish universal Windows
 environment requirements or erase the historical 203 result.
 
+### Reserved-component fixture correction (new native gate pending)
+
+Native CI **39713897288** remained red in both Windows normal and race runs:
+`TestWindowsAppContainerEnvironmentPathsAndLegacy` reported an accepted invalid
+path without a case label. Separately, the five-key environment reached successful
+CreateProcessAsUserW and child elevation=0/SID/capability/Low-integrity checks,
+but class 46 returned ERROR_INVALID_PARAMETER (87). That distinct LPAC query
+failure is not addressed here; no full native acceptance is claimed. The earlier
+203 failure and its historical log remain unchanged.
+
+Go 1.26.10 `src/internal/filepathlite/path_windows.go:isReservedName` delegates
+reserved names with extensions to `RtlIsDosDeviceName_U`, explicitly allowing
+Windows-version-dependent answers. This establishes a policy gap; the original
+zero-based case 17 is the source-backed suspect, not a newly observed native
+case result. The test-only validator now explicitly rejects component basenames
+CON/PRN/AUX/NUL/CONIN$/CONOUT$ and COM/LPT plus 1–9 or superscript ¹/²/³,
+case-insensitively before extensions (including spaces before the extension).
+Existing validation remains in place; no accepted input class is broadened.
+
+Original bad cases retain their order with index-only subtest labels. Additional
+synthetic cases cover reserved suffixes/ancestor components, dot traversal,
+ordinary non-device counterexamples, and ASCII/BMP/supplementary UTF-16 entry
+boundaries. The conservative path byte cap and parser code-unit cap are unchanged.
+The exact five-key environment, authoritative-root/legacy behavior, launcher,
+primary-token helper, flags, native queries and lifetimes are untouched. macOS
+tests and Windows compilation/vet cannot execute these Windows-only cases;
+parent review, bounded independent review and new native normal/race/vet evidence
+remain required before calling the correction accepted.
+
 Actual restricted execution, filesystem grants/Low labels, network/loopback and
 broker/control IPC denial, restricted descendant teardown/resource growth,
 standard-user Windows 11 behavior and product packaging remain unverified.

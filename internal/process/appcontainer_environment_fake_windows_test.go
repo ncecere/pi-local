@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -186,6 +187,27 @@ func TestWindowsAppContainerEnvironmentBoundedParser(t *testing.T) {
 			}
 		})
 	}
+	// Entry limits count UTF-16 units, not UTF-8 bytes or Unicode runes.
+	// The terminating NUL must fit within the unchanged entry cap as well.
+	for i, char := range []string{"x", "é", "\U00020000"} {
+		units := len(utf16.Encode([]rune(char)))
+		remaining := candidateEnvironmentEntryUnits - 1 - len(`LOCALAPPDATA=Z:\`)
+		value := `Z:\` + strings.Repeat(char, remaining/units) + strings.Repeat("x", remaining%units)
+		t.Run("unicode-entry-limit-"+strconv.Itoa(i), func(t *testing.T) {
+			entry := "LOCALAPPDATA=" + value
+			if len(utf16.Encode([]rune(entry))) != candidateEnvironmentEntryUnits-1 {
+				t.Fatal("invalid synthetic UTF-16 boundary setup")
+			}
+			selected, err := candidateSelectEnvironmentSlice(candidateFakeEnvironment("SystemRoot="+candidateFakeRoot, entry))
+			if err != nil || selected.root != candidateFakeRoot || selected.local != value {
+				t.Fatal("UTF-16 entry at limit refused or changed")
+			}
+			selected, err = candidateSelectEnvironmentSlice(candidateFakeEnvironment("SystemRoot="+candidateFakeRoot, entry+"x"))
+			if err == nil || selected != (candidateEnvironmentSelection{}) {
+				t.Fatal("UTF-16 entry beyond limit accepted or leaked partial metadata")
+			}
+		})
+	}
 	// Every proper prefix must fail, including prefixes after both selected
 	// entries but before the unknown entry or final extra NUL.
 	complete := valid("FakeSecret=" + candidateFakeSecret)
@@ -327,7 +349,8 @@ func TestWindowsAppContainerEnvironmentOwnerAndBOOL(t *testing.T) {
 }
 
 func TestWindowsAppContainerEnvironmentPathsAndLegacy(t *testing.T) {
-	for _, value := range []string{"", "relative", `Z:relative`, `\rooted`, `\\server\share`, `\\?\Z:\Fixture`, `Z:\`, `Z:\Fixture\..`, `Z:\Fixture\.`, `Z:\Fixture\`, `Z:\Fixture\file.`, `Z:\Fixture\file `, `Z:\Fixture\file:stream`, `Z:\%UNEXPANDED%`, "Z:\\Fixture\x00secret", `Z:\Fixture\*`, `Z:\NUL`, `Z:\Fixture\CON.txt`, "Z:\\bad\xff", "Z:\\" + strings.Repeat("x", candidateEnvironmentEntryUnits)} {
+	refuse := func(t *testing.T, value string) {
+		t.Helper()
 		if _, ok := candidateEnvironmentPath(value); ok {
 			t.Fatal("invalid selected metadata path accepted")
 		}
@@ -336,8 +359,63 @@ func TestWindowsAppContainerEnvironmentPathsAndLegacy(t *testing.T) {
 				t.Fatal("invalid metadata reached target")
 			}
 		}
+		if _, err := (candidateEnvironmentSelection{candidateFakeRoot, candidateFakeLocal}).target(value); err == nil {
+			t.Fatal("invalid job directory reached target")
+		}
 	}
-	for _, tc := range []struct {
+	// Retain the original order: historical native failures had no case label.
+	// Index-only labels disclose neither metadata values nor path spellings.
+	for i, value := range []string{"", "relative", `Z:relative`, `\rooted`, `\\server\share`, `\\?\Z:\Fixture`, `Z:\`, `Z:\Fixture\..`, `Z:\Fixture\.`, `Z:\Fixture\`, `Z:\Fixture\file.`, `Z:\Fixture\file `, `Z:\Fixture\file:stream`, `Z:\%UNEXPANDED%`, "Z:\\Fixture\x00secret", `Z:\Fixture\*`, `Z:\NUL`, `Z:\Fixture\CON.txt`, "Z:\\bad\xff", "Z:\\" + strings.Repeat("x", candidateEnvironmentEntryUnits)} {
+		t.Run("invalid-"+strconv.Itoa(i), func(t *testing.T) { refuse(t, value) })
+	}
+	for i, value := range []string{`Z:\Fixture\..\Child`, `Z:\Fixture\.\Child`, `Z:\..\Child`, `Z:\.\Child`, `Z:\Fixture\\Child`, `Z:/Fixture/../Child`, `Z:\Fixture\file.\Child`, `Z:\Fixture\file \Child`, `\\.\Z:\Fixture`, `1:\Fixture`, `Z:\Fixture\?`, `Z:\Fixture\<`, `Z:\Fixture\>`, `Z:\Fixture\"`, `Z:\Fixture\|`, "Z:\\Fixture\tChild", "Z:\\Fixture\nChild", "Z:\\Fixture\rChild", "Z:\\Fixture\x1fChild", "Z:\\bad\xc0\xaf", "Z:\\bad\xed\xa0\x80", "Z:\\" + strings.Repeat("é", 4095)} {
+		t.Run("additional-invalid-"+strconv.Itoa(i), func(t *testing.T) { refuse(t, value) })
+	}
+	reserved := []string{"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+	for _, prefix := range []string{"COM", "LPT"} {
+		for _, digit := range "123456789¹²³" {
+			reserved = append(reserved, prefix+string(digit))
+		}
+	}
+	for i, base := range reserved {
+		for j, suffix := range []string{"", ".txt", ".more.txt", " .txt"} {
+			part := strings.ToLower(base) + suffix
+			for k, value := range []string{`Z:\` + part, `Z:\Fixture\` + part, `Z:\Fixture\` + part + `\Child`} {
+				t.Run("reserved-"+strconv.Itoa(i)+"/suffix-"+strconv.Itoa(j)+"/position-"+strconv.Itoa(k), func(t *testing.T) { refuse(t, value) })
+			}
+		}
+	}
+	for i, part := range []string{"CONSOLE", "CONIN", "CONOUT", "NULx.txt", "xCON.txt", "COM0", "COM10.txt", "COM1x.txt", "LPT0.txt", "LPT10", "LPT9x", "COM¹0.txt", "LPT²x", "COM⁴.txt", ".hidden", "..hidden", ".NUL", "file..txt", "内部", "Fixture\U00020000"} {
+		value := `Z:\Fixture\` + part
+		t.Run("ordinary-"+strconv.Itoa(i), func(t *testing.T) {
+			if got, ok := candidateEnvironmentPath(value); !ok || got != value {
+				t.Fatal("ordinary non-device metadata refused or changed")
+			}
+			if _, err := (candidateEnvironmentSelection{candidateFakeRoot, value}).target(candidateFakeJob); err != nil {
+				t.Fatal("ordinary metadata refused by target")
+			}
+		})
+	}
+	t.Run("slash-normalization", func(t *testing.T) {
+		if got, ok := candidateEnvironmentPath(`z:/Fixture/Child`); !ok || got != `z:\Fixture\Child` {
+			t.Fatal("ordinary slash normalization changed")
+		}
+	})
+	// Preserve the existing conservative byte bound, independently of the
+	// parser's UTF-16 entry bound; non-ASCII metadata must not broaden it.
+	for i, tail := range []string{strings.Repeat("x", candidateEnvironmentEntryUnits-3), strings.Repeat("é", 4094) + "x", strings.Repeat("\U00020000", 2047) + "x"} {
+		value := `Z:\` + tail
+		t.Run("path-byte-limit-"+strconv.Itoa(i), func(t *testing.T) {
+			if len(value) != candidateEnvironmentEntryUnits {
+				t.Fatal("invalid synthetic boundary setup")
+			}
+			if _, ok := candidateEnvironmentPath(value); !ok {
+				t.Fatal("metadata at existing byte limit refused")
+			}
+			refuse(t, value+"x")
+		})
+	}
+	for i, tc := range []struct {
 		value   string
 		present bool
 		want    candidateEnvironmentLegacy
@@ -349,16 +427,18 @@ func TestWindowsAppContainerEnvironmentPathsAndLegacy(t *testing.T) {
 		{`Z:\SyntheticOS\`, true, candidateEnvironmentLegacy{true, true, true, true}},
 		{`Z:\OtherOS`, true, candidateEnvironmentLegacy{true, true, true, false}},
 	} {
-		api, deletes := candidateFakeEnvironmentAPI(t, candidateFakeEnvironment("SystemRoot="+candidateFakeRoot, "LOCALAPPDATA="+candidateFakeLocal))
-		api.lookup = func(key string) (string, bool) {
-			if key != "SystemRoot" {
-				t.Fatal("unexpected legacy key")
+		t.Run("legacy-"+strconv.Itoa(i), func(t *testing.T) {
+			api, deletes := candidateFakeEnvironmentAPI(t, candidateFakeEnvironment("SystemRoot="+candidateFakeRoot, "LOCALAPPDATA="+candidateFakeLocal))
+			api.lookup = func(key string) (string, bool) {
+				if key != "SystemRoot" {
+					t.Fatal("unexpected legacy key")
+				}
+				return tc.value, tc.present
 			}
-			return tc.value, tc.present
-		}
-		selected, legacy, err := candidatePrepareEnvironment(123, api)
-		if err != nil || legacy != tc.want || selected.root != candidateFakeRoot || *deletes != 1 {
-			t.Fatal("legacy observation affected authoritative environment")
-		}
+			selected, legacy, err := candidatePrepareEnvironment(123, api)
+			if err != nil || legacy != tc.want || selected.root != candidateFakeRoot || *deletes != 1 {
+				t.Fatal("legacy observation affected authoritative environment")
+			}
+		})
 	}
 }

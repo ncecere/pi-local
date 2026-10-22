@@ -220,6 +220,19 @@ func candidateEnvironmentPath(value string) (string, bool) {
 		if part == "" || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") {
 			return "", false
 		}
+		// IsLocal delegates device names with extensions to a native query
+		// whose answer varies by Windows version. Keep this conservative
+		// metadata policy independent of that answer, including spaced bases.
+		base, _, _ := strings.Cut(strings.ToUpper(part), ".")
+		base = strings.TrimRight(base, " ")
+		switch base {
+		case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
+			return "", false
+		}
+		letters := []rune(base)
+		if len(letters) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && strings.ContainsRune("123456789¹²³", letters[3]) {
+			return "", false
+		}
 	}
 	return filepath.Clean(value), true
 }
