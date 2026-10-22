@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,32 @@ function fixture(t) {
   write(root, `${dir}/LICENSE`, 'notice bytes');
   return { root, dir };
 }
+
+test('Git autocrlf checkout preserves both frozen LF locks under repository attributes', (t) => {
+  const { root } = fixture(t);
+  fs.cpSync(path.join(root, 'runtime'), path.join(root, 'frontend'), { recursive: true });
+  const attributes = fs.readFileSync(new URL('../../.gitattributes', import.meta.url));
+  write(root, '.gitattributes', attributes);
+  // An empty local repository/index only: no commits, identities, hooks or remotes.
+  // Do not read personal/global/system Git configuration or inherited Git overrides.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull });
+  function git(...args) {
+    const result = spawnSync('git', ['-c', 'core.autocrlf=true', '-c', 'core.safecrlf=false', ...args], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(result.status, 0, 'isolated Git fixture command must succeed');
+  }
+  git('init', '--quiet', '--template=');
+  git('add', '--', '.gitattributes', 'runtime/pnpm-lock.yaml', 'frontend/pnpm-lock.yaml');
+  for (const area of ['runtime', 'frontend']) fs.unlinkSync(path.join(root, area, 'pnpm-lock.yaml'));
+  git('checkout-index', '--force', '--', 'runtime/pnpm-lock.yaml', 'frontend/pnpm-lock.yaml');
+  for (const area of ['runtime', 'frontend']) {
+    assert.deepEqual(fs.readFileSync(path.join(root, area, 'pnpm-lock.yaml')), Buffer.from('frozen\n'));
+    assert.equal(shared.installedPackages(root, area).size, 1);
+    // Byte-equality refusal remains strict; no CRLF normalization in the scanner.
+    write(root, `${area}/pnpm-lock.yaml`, 'frozen\r\n');
+    assert.throws(() => shared.installedPackages(root, area), /Stale pnpm installation/);
+  }
+});
 
 test('generator re-exports the identical shared scanner functions and Map API', (t) => {
   assert.equal(legacy.noticeFiles, shared.noticeFiles);

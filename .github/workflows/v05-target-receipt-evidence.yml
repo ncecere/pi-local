@@ -3,6 +3,7 @@ on:
   push:
     branches: [v0.5, v05/target-receipt-evidence]
     paths:
+      - '.gitattributes'
       - '.github/workflows/v05-target-receipt-evidence.yml'
       - 'packaging/licenses/**'
       - 'runtime/**'
