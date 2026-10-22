@@ -556,7 +556,13 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				tr, startErr := startWindowsOwned(ctx, cmd, windowsLaunchHooks{
 					primaryToken:    primary.derived.token, // borrowed through synchronous cleanup
 					beforeAttribute: func(attribute uintptr) error { attributes = append(attributes, attribute); return nil },
-					// verify and tokenInformation deliberately nil: REAL APIs.
+					// verify remains nil (REAL API). The test-only wrapper makes
+					// three observations, then forwards the original query unchanged.
+					tokenInformation: candidateLPACQueryDiagnostic(windows.GetTokenInformation, func(observations [3]candidateLPACQueryObservation) {
+						for _, observation := range observations {
+							t.Logf("LPAC query diagnostic: requestedSize=%d success=%v numericCodePresent=%v code=%d returnedLength=%d (observation only; failed returned length not authoritative; no result bytes read)", observation.requestedSize, observation.success, observation.numericCodePresent, observation.code, observation.returnedLength)
+						}
+					}),
 					beforeResume: func(pi windows.ProcessInformation, job windows.Handle) error {
 						checked++ // reached ONLY after real exact-job + token gates
 						member, err := inExactJob(pi.Process, job)
