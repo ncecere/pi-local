@@ -1,0 +1,344 @@
+//go:build windows
+
+package process
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+// No profiles, ACL edits, foreign processes, network, or credential APIs in this
+// first slice. All native children below remain suspended until refusal/reap.
+const candidateSyntheticSID = "S-1-15-2-100-200-300-400-500-600-700"
+
+func candidatePolicy(t *testing.T, lpac bool) *windowsAppContainerPolicy {
+	t.Helper()
+	sid, err := windows.StringToSid(candidateSyntheticSID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &windowsAppContainerPolicy{profileSID: sid, lpac: lpac}
+}
+
+func TestWindowsAppContainerSDKLayouts(t *testing.T) {
+	word := unsafe.Sizeof(uintptr(0))
+	caps := windowsSecurityCapabilities{}
+	if unsafe.Offsetof(caps.capabilities) != word || unsafe.Offsetof(caps.capabilityCount) != 2*word || unsafe.Offsetof(caps.reserved) != 2*word+4 || unsafe.Sizeof(caps) != 2*word+8 {
+		t.Fatal("SECURITY_CAPABILITIES does not match SDK pointer/pointer/DWORD/DWORD")
+	}
+	if unsafe.Sizeof(windowsTokenAppContainerInformation{}) != word {
+		t.Fatal("TOKEN_APPCONTAINER_INFORMATION does not match SDK PSID")
+	}
+}
+
+func TestWindowsAppContainerPrivatePolicy(t *testing.T) {
+	for _, raw := range []string{"", "S-1-15-2-1", "S-1-15-2-1-2-3-4-5-6", "S-1-15-3-1-2-3-4-5-6-7", "S-1-5-2-1-2-3-4-5-6-7"} {
+		t.Run(raw, func(t *testing.T) {
+			p := &windowsAppContainerPolicy{}
+			if raw != "" {
+				var err error
+				p.profileSID, err = windows.StringToSid(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := p.snapshot(); err == nil {
+				t.Fatal("accepted missing/broad/capability/non-profile SID")
+			}
+		})
+	}
+	for _, lpac := range []bool{false, true} {
+		p := candidatePolicy(t, lpac)
+		owned, err := p.snapshot()
+		if err != nil || owned.profileSID == p.profileSID || !owned.profileSID.Equals(p.profileSID) {
+			t.Fatalf("profile SID not independently owned: %v", err)
+		}
+		var seen []uintptr
+		err = owned.install(func(attr uintptr, ptr unsafe.Pointer, size uintptr) error {
+			seen = append(seen, attr)
+			switch attr {
+			case procThreadAttributeSecurityCapabilities:
+				caps := (*windowsSecurityCapabilities)(ptr)
+				if size != unsafe.Sizeof(*caps) || !caps.appContainerSID.Equals(owned.profileSID) || caps.capabilities != nil || caps.capabilityCount != 0 || caps.reserved != 0 {
+					t.Fatal("security attribute was not exact SID/zero capabilities")
+				}
+			case procThreadAttributeAllPackagesPolicy:
+				if !lpac || size != 4 || *(*uint32)(ptr) != 1 {
+					t.Fatal("invalid LPAC opt-out layout")
+				}
+			default:
+				t.Fatal("unexpected attribute")
+			}
+			return nil
+		})
+		want := 1
+		if lpac {
+			want++
+		}
+		if err != nil || len(seen) != want {
+			t.Fatalf("attributes=%v err=%v", seen, err)
+		}
+	}
+}
+
+type candidateTokenFixture struct {
+	appContainer, elevated, capabilities, lpac uint32
+	profile, integrity                         *windows.SID
+	integrityAttributes                        uint32
+}
+
+func goodCandidateToken(t *testing.T) *candidateTokenFixture {
+	t.Helper()
+	low, err := windows.StringToSid("S-1-16-4096")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &candidateTokenFixture{appContainer: 1, lpac: 1, profile: candidatePolicy(t, true).profileSID, integrity: low, integrityAttributes: windows.SE_GROUP_INTEGRITY}
+}
+
+// Models GetTokenInformation's native buffer-relative PSIDs, not dangling
+// pointers into separate Go/LocalAlloc storage. Used only for parser tests.
+func (f *candidateTokenFixture) query(_ windows.Token, class uint32, out *byte, size uint32, returned *uint32) error {
+	var sid *windows.SID
+	var header uintptr
+	var value uint32
+	switch class {
+	case tokenIsAppContainer:
+		value = f.appContainer
+	case windows.TokenElevation:
+		value = f.elevated
+	case tokenIsLessPrivilegedAppContainer:
+		value = f.lpac
+	case tokenCapabilities:
+		value = f.capabilities
+	case tokenAppContainerSID:
+		sid, header = f.profile, unsafe.Sizeof(windowsTokenAppContainerInformation{})
+	case windows.TokenIntegrityLevel:
+		sid, header = f.integrity, unsafe.Sizeof(windows.Tokenmandatorylabel{})
+	default:
+		return windows.ERROR_INVALID_PARAMETER
+	}
+	needed := uint32(4)
+	if header != 0 {
+		needed = uint32(header)
+		if sid != nil {
+			needed += uint32(sid.Len())
+		}
+	}
+	*returned = needed
+	if out == nil || size < needed {
+		return windows.ERROR_INSUFFICIENT_BUFFER
+	}
+	data := unsafe.Slice(out, int(size))
+	clear(data)
+	if header == 0 {
+		binary.LittleEndian.PutUint32(data, value)
+		return nil
+	}
+	var embedded *windows.SID
+	if sid != nil {
+		embedded = (*windows.SID)(unsafe.Pointer(&data[header]))
+		if err := windows.CopySid(uint32(sid.Len()), embedded, sid); err != nil {
+			return err
+		}
+	}
+	if class == tokenAppContainerSID {
+		(*windowsTokenAppContainerInformation)(unsafe.Pointer(out)).sid = embedded
+	} else {
+		label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(out))
+		label.Label.Sid, label.Label.Attributes = embedded, f.integrityAttributes
+	}
+	return nil
+}
+
+func TestWindowsAppContainerTokenGate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*candidateTokenFixture)
+		want string
+	}{
+		{"valid-synthetic-layout", func(*candidateTokenFixture) {}, ""},
+		{"not-appcontainer", func(f *candidateTokenFixture) { f.appContainer = 0 }, "token class 29"},
+		{"elevated", func(f *candidateTokenFixture) { f.elevated = 1 }, "token class 20"},
+		{"missing-profile", func(f *candidateTokenFixture) { f.profile = nil }, "SID outside"},
+		{"wrong-profile", func(f *candidateTokenFixture) { f.profile, _ = windows.StringToSid("S-1-15-2-9-8-7-6-5-4-3") }, "SID mismatch"},
+		{"one-capability", func(f *candidateTokenFixture) { f.capabilities = 1 }, "capabilities must be empty"},
+		{"missing-integrity", func(f *candidateTokenFixture) { f.integrity = nil }, "SID outside"},
+		{"medium-integrity", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-16-8192") }, "not Low"},
+		{"untrusted-integrity", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-16-0") }, "not Low"},
+		{"not-integrity-label", func(f *candidateTokenFixture) { f.integrityAttributes = 0 }, "not Low"},
+		{"not-lpac", func(f *candidateTokenFixture) { f.lpac = 0 }, "not LPAC"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := goodCandidateToken(t)
+			tc.edit(f)
+			err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), f.query)
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("want %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestWindowsAppContainerTokenQueriesFailClosed(t *testing.T) {
+	classes := []uint32{tokenIsAppContainer, windows.TokenElevation, tokenAppContainerSID, tokenCapabilities, windows.TokenIntegrityLevel, tokenIsLessPrivilegedAppContainer}
+	for _, class := range classes {
+		for _, mode := range []string{"unsupported", "denied", "oversize", "zero", "truncated", "overreported", "changed-size"} {
+			t.Run(strings.Join([]string{windowsClassName(class), mode}, "/"), func(t *testing.T) {
+				f := goodCandidateToken(t)
+				query := func(token windows.Token, c uint32, out *byte, n uint32, used *uint32) error {
+					if c != class {
+						return f.query(token, c, out, n, used)
+					}
+					switch mode {
+					case "unsupported":
+						return windows.ERROR_INVALID_PARAMETER
+					case "denied":
+						return windows.ERROR_ACCESS_DENIED
+					case "oversize":
+						*used = maxCandidateTokenBytes + 1
+						return windows.ERROR_INSUFFICIENT_BUFFER
+					case "zero":
+						*used = 0
+						return windows.ERROR_INSUFFICIENT_BUFFER
+					}
+					if out != nil {
+						if mode == "changed-size" {
+							return windows.ERROR_INSUFFICIENT_BUFFER
+						}
+						if mode == "overreported" {
+							*used = n + 1
+						} else {
+							*used = 1
+						}
+						return nil
+					}
+					return f.query(token, c, out, n, used)
+				}
+				if err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), query); err == nil {
+					t.Fatal("accepted failed/malformed token query")
+				}
+			})
+		}
+	}
+}
+
+func windowsClassName(class uint32) string {
+	return map[uint32]string{29: "is-appcontainer", 20: "elevation", 31: "profile", 30: "capabilities", 25: "integrity", 46: "lpac"}[class]
+}
+
+func TestWindowsAppContainerSIDBufferBounds(t *testing.T) {
+	for _, class := range []uint32{tokenAppContainerSID, windows.TokenIntegrityLevel} {
+		for _, mode := range []string{"external", "header", "unaligned", "truncated", "count", "revision"} {
+			t.Run(windowsClassName(class)+"/"+mode, func(t *testing.T) {
+				f := goodCandidateToken(t)
+				query := func(token windows.Token, c uint32, out *byte, n uint32, used *uint32) error {
+					err := f.query(token, c, out, n, used)
+					if err != nil || out == nil || c != class {
+						return err
+					}
+					// Both SDK layouts begin with PSID.
+					ptr := (**windows.SID)(unsafe.Pointer(out))
+					sid := *ptr
+					switch mode {
+					case "external":
+						*ptr = f.profile
+					case "header":
+						*ptr = (*windows.SID)(unsafe.Pointer(out))
+					case "unaligned":
+						*ptr = (*windows.SID)(unsafe.Add(unsafe.Pointer(sid), 1))
+					case "truncated":
+						*used -= 1
+					case "count":
+						unsafe.Slice((*byte)(unsafe.Pointer(sid)), 8)[1] = 255
+					case "revision":
+						*(*byte)(unsafe.Pointer(sid)) = 2
+					}
+					return nil
+				}
+				if err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), query); err == nil {
+					t.Fatal("accepted invalid embedded SID")
+				}
+			})
+		}
+	}
+}
+
+func TestWindowsAppContainerAttributeFailureNeverCreatesTarget(t *testing.T) {
+	for _, refused := range []uintptr{procThreadAttributeSecurityCapabilities, procThreadAttributeAllPackagesPolicy} {
+		dir := t.TempDir()
+		sentinel := errors.New("synthetic required attribute unavailable")
+		reached, duplicated := false, false
+		tr, err := startWindowsOwned(context.Background(), windowsHelperCommand(dir, "hold"), windowsLaunchHooks{
+			beforeAttribute: func(attr uintptr) error {
+				if attr == refused {
+					reached = true
+					return sentinel
+				}
+				// The prerequisite security attribute must still install. An
+				// unsupported OS is a failure, not a generic accepted error.
+				return nil
+			},
+			duplicateStdio: func(h windows.Handle) (windows.Handle, error) {
+				duplicated = true
+				return duplicateWindowsStdio(h)
+			},
+		}, candidatePolicy(t, true))
+		if tr != nil {
+			_ = tr.Close()
+		}
+		if tr != nil || !reached || duplicated || !errors.Is(err, sentinel) {
+			t.Fatalf("attribute refusal failed closed: tree=%v reached=%v duplicates=%v err=%v", tr, reached, duplicated, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "hold.started")); !os.IsNotExist(err) {
+			t.Fatalf("marker before attribute acceptance: %v", err)
+		}
+	}
+}
+
+func TestWindowsAppContainerOrdinaryStartStillTwoAttributes(t *testing.T) {
+	dir := t.TempDir()
+	var seen []uintptr
+	var observed windows.Handle
+	stop := errors.New("synthetic stop while suspended")
+	tr, err := startWindows(context.Background(), windowsHelperCommand(dir, "hold"), windowsLaunchHooks{
+		beforeAttribute: func(attr uintptr) error { seen = append(seen, attr); return nil },
+		beforeResume: func(pi windows.ProcessInformation, job windows.Handle) error {
+			if err := windows.DuplicateHandle(windows.CurrentProcess(), pi.Process, windows.CurrentProcess(), &observed, windows.SYNCHRONIZE, false, 0); err != nil {
+				return err
+			}
+			t.Cleanup(func() { _ = windows.CloseHandle(observed) })
+			// Native negative control: this owned ordinary child must NOT pass
+			// the candidate token gate. Query through its retained handle only.
+			var token windows.Token
+			if err := windows.OpenProcessToken(pi.Process, windows.TOKEN_QUERY, &token); err != nil {
+				return err
+			}
+			defer token.Close()
+			if err := verifyWindowsAppContainerToken(token, candidatePolicy(t, true), nil); err == nil || !strings.Contains(err.Error(), "token class 29") {
+				t.Errorf("ordinary child passed or failed unrelated token check: %v", err)
+			}
+			return stop
+		},
+	})
+	if tr != nil {
+		_ = tr.Close()
+	}
+	if tr != nil || !errors.Is(err, stop) || len(seen) != 2 || seen[0] != procThreadAttributeJobList || seen[1] != windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST {
+		t.Fatalf("ordinary Start changed: attrs=%v tree=%v err=%v", seen, tr, err)
+	}
+	if event, err := windows.WaitForSingleObject(observed, 0); err != nil || event != windows.WAIT_OBJECT_0 {
+		t.Fatalf("refused owned child was not reaped: event=%d err=%v", event, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hold.started")); !os.IsNotExist(err) {
+		t.Fatalf("ordinary child executed before negative token gate: %v", err)
+	}
+}
