@@ -1,7 +1,8 @@
 # Windows secret authority: candidate protocols, not activation
 
-Status: conditionally reviewed design proposal; native activation is unapproved.
-No v2 format, adapter or migration is implemented. Windows `OpenPersistent` must still return `ErrUnsupported`
+Status: conditionally reviewed research proposal; native activation is unapproved.
+A later executable model exposed the unresolved sequential-reference ownership
+case below. No v2 format, adapter or migration is implemented. Windows `OpenPersistent` must still return `ErrUnsupported`
 before filesystem or vault access. Existing format 1 and its tests are unchanged.
 
 ## Why private NTFS ACLs are insufficient
@@ -52,6 +53,15 @@ ownership. A named-mutex design needs creation-time User/SYSTEM ACLs, existing-o
 validation and a pinned owning OS thread through release; a Go goroutine cannot
 silently migrate mutex ownership. Alias/recreation exclusion and native lease
 implementation remain unproved; no lease is implemented by this proposal.
+
+**Unresolved modeled counterexample:** directory exclusion covers concurrent
+owners, not persistent ownership after leases are released. If A retains PENDING
+without a database, a later B can see an empty directory and establish another
+authority for that location in the current model. Grammar-valid custom references
+are not proof of an authorized unique profile issuance. A durable location/owner
+claim or an explicitly reviewed default-only scope is required before a native
+protocol can be approved; no catalog or fix is implemented here. The test-model
+witness is research evidence, not acceptance of multi-reference operation.
 
 ### Conditional transition rules
 
