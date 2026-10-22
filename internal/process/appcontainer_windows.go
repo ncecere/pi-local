@@ -111,6 +111,28 @@ func (b windowsTokenBuffer) bytes() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&b.words[0])), int(b.size))
 }
 
+// These SDK fields are DWORDs (TOKEN_ELEVATION contains one DWORD). A null,
+// zero-length probe is not portable across classes: TokenElevation can return
+// ERROR_BAD_LENGTH. Query once into aligned storage with an exact four-byte
+// extent; no probe, retry, or error-based fallback may turn failure into success.
+func queryCandidateDWORD(token windows.Token, class uint32, query windowsTokenInformation) (windowsTokenBuffer, error) {
+	switch class {
+	case tokenIsAppContainer, windows.TokenElevation, tokenIsLessPrivilegedAppContainer:
+	default:
+		return windowsTokenBuffer{}, fmt.Errorf("process: token class %d is not a candidate DWORD", class)
+	}
+	b := windowsTokenBuffer{words: make([]uintptr, 1), size: 4}
+	var returned uint32
+	if err := query(token, class, &b.bytes()[0], b.size, &returned); err != nil {
+		return windowsTokenBuffer{}, fmt.Errorf("process: token class %d DWORD query: %w", class, err)
+	}
+	if returned != b.size {
+		return windowsTokenBuffer{}, fmt.Errorf("process: token class %d invalid DWORD returned size: %d", class, returned)
+	}
+	return b, nil
+}
+
+// Only variable-sized TOKEN_GROUPS and SID-bearing layouts use a sizing probe.
 func queryCandidateToken(token windows.Token, class uint32, query windowsTokenInformation) (windowsTokenBuffer, error) {
 	var needed uint32
 	if err := query(token, class, nil, 0, &needed); !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
@@ -179,7 +201,7 @@ func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppConta
 		{tokenIsAppContainer, 1},
 		{windows.TokenElevation, 0},
 	} {
-		b, err := queryCandidateToken(token, check.class, query)
+		b, err := queryCandidateDWORD(token, check.class, query)
 		if err != nil {
 			return err
 		}
@@ -232,7 +254,7 @@ func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppConta
 	}
 	runtime.KeepAlive(integrity)
 	if policy.lpac {
-		b, err := queryCandidateToken(token, tokenIsLessPrivilegedAppContainer, query)
+		b, err := queryCandidateDWORD(token, tokenIsLessPrivilegedAppContainer, query)
 		if err != nil {
 			return err // unsupported query is refusal, never an AC fallback
 		}

@@ -414,7 +414,7 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 	// restricted-launch handle-growth measurement (that remains a future gate).
 	for iteration := 0; iteration < 3; iteration++ {
 		for _, mode := range []string{"hard-stop", "cancel", "injected-failure"} {
-			t.Run(fmt.Sprintf("%d/%s", iteration, mode), func(t *testing.T) {
+			if !t.Run(fmt.Sprintf("%d/%s", iteration, mode), func(t *testing.T) {
 				dir := t.TempDir() // blank, owned, no existing trees or user files
 				probe := candidateCopyProbe(t, dir)
 				name, err := candidateNewProfileName()
@@ -510,7 +510,11 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(dir, "hold.started")); !os.IsNotExist(err) {
 					t.Fatalf("unexpected helper marker: %v", err)
 				}
-			})
+			}) {
+				// The parent is already failed. Do not provision more profiles
+				// after any unexpected gate or cleanup failure; never skip/pass it.
+				return
+			}
 		}
 	}
 }

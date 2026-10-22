@@ -220,6 +220,12 @@ func (f *candidateTokenFixture) query(_ windows.Token, class uint32, out *byte, 
 		}
 	}
 	*returned = needed
+	if out == nil || size == 0 {
+		switch class {
+		case tokenIsAppContainer, windows.TokenElevation, tokenIsLessPrivilegedAppContainer:
+			return windows.ERROR_BAD_LENGTH // fixed fields must never use a sizing probe
+		}
+	}
 	if out == nil || size < needed {
 		return windows.ERROR_INSUFFICIENT_BUFFER
 	}
@@ -245,6 +251,53 @@ func (f *candidateTokenFixture) query(_ windows.Token, class uint32, out *byte, 
 	return nil
 }
 
+func TestWindowsAppContainerDWORDQueryContract(t *testing.T) {
+	for _, class := range []uint32{tokenIsAppContainer, windows.TokenElevation, tokenIsLessPrivilegedAppContainer} {
+		t.Run(windowsClassName(class), func(t *testing.T) {
+			f := goodCandidateToken(t)
+			var needed uint32
+			if err := f.query(0, class, nil, 0, &needed); err != windows.ERROR_BAD_LENGTH {
+				t.Fatalf("model zero-sized probe: %v", err)
+			}
+			for _, used := range []uint32{0, 1, 2, 3, 4, 5, 8, maxCandidateTokenBytes + 1, ^uint32(0)} {
+				calls := 0
+				b, err := queryCandidateDWORD(123, class, func(token windows.Token, c uint32, out *byte, n uint32, returned *uint32) error {
+					calls++
+					if token != 123 || c != class || out == nil || n != 4 || uintptr(unsafe.Pointer(out))%unsafe.Alignof(uint32(0)) != 0 {
+						t.Fatalf("not one exact aligned DWORD query: token=%d class=%d nonnil=%v size=%d", token, c, out != nil, n)
+					}
+					if err := f.query(token, c, out, n, returned); err != nil {
+						return err
+					}
+					*returned = used
+					return nil
+				})
+				if calls != 1 || (err == nil) != (used == 4) {
+					t.Fatalf("returned=%d calls=%d err=%v", used, calls, err)
+				}
+				if used == 4 {
+					got, err := b.dword()
+					want := uint32(1)
+					if class == windows.TokenElevation {
+						want = 0
+					}
+					if err != nil || got != want {
+						t.Fatalf("DWORD=%d want=%d err=%v", got, want, err)
+					}
+				}
+			}
+		})
+	}
+	for _, class := range []uint32{0, tokenCapabilities, tokenAppContainerSID, windows.TokenIntegrityLevel, ^uint32(0)} {
+		if _, err := queryCandidateDWORD(0, class, func(windows.Token, uint32, *byte, uint32, *uint32) error {
+			t.Fatal("unknown/non-DWORD class reached query")
+			return nil
+		}); err == nil {
+			t.Fatalf("accepted non-DWORD class %d", class)
+		}
+	}
+}
+
 func TestWindowsAppContainerTokenGate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -253,7 +306,9 @@ func TestWindowsAppContainerTokenGate(t *testing.T) {
 	}{
 		{"valid-synthetic-layout", func(*candidateTokenFixture) {}, ""},
 		{"not-appcontainer", func(f *candidateTokenFixture) { f.appContainer = 0 }, "token class 29"},
+		{"unknown-appcontainer-value", func(f *candidateTokenFixture) { f.appContainer = 2 }, "token class 29"},
 		{"elevated", func(f *candidateTokenFixture) { f.elevated = 1 }, "token class 20"},
+		{"elevated-noncanonical", func(f *candidateTokenFixture) { f.elevated = ^uint32(0) }, "token class 20"},
 		{"missing-profile", func(f *candidateTokenFixture) { f.profile = nil }, "SID outside"},
 		{"wrong-profile", func(f *candidateTokenFixture) { f.profile, _ = windows.StringToSid("S-1-15-2-9-8-7-6-5-4-3") }, "SID mismatch"},
 		{"one-capability", func(f *candidateTokenFixture) { f.capabilities = 1 }, "capabilities must be empty"},
@@ -264,6 +319,7 @@ func TestWindowsAppContainerTokenGate(t *testing.T) {
 		{"extra-integrity-subauthority", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-16-4096-0") }, "not Low"},
 		{"not-integrity-label", func(f *candidateTokenFixture) { f.integrityAttributes = 0 }, "not Low"},
 		{"not-lpac", func(f *candidateTokenFixture) { f.lpac = 0 }, "not LPAC"},
+		{"unknown-lpac-value", func(f *candidateTokenFixture) { f.lpac = 2 }, "not LPAC"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := goodCandidateToken(t)
@@ -279,18 +335,22 @@ func TestWindowsAppContainerTokenGate(t *testing.T) {
 func TestWindowsAppContainerTokenQueriesFailClosed(t *testing.T) {
 	classes := []uint32{tokenIsAppContainer, windows.TokenElevation, tokenAppContainerSID, tokenCapabilities, windows.TokenIntegrityLevel, tokenIsLessPrivilegedAppContainer}
 	for _, class := range classes {
-		for _, mode := range []string{"unsupported", "denied", "oversize", "zero", "truncated", "overreported", "changed-size"} {
+		for _, mode := range []string{"unsupported", "denied", "bad-length", "oversize", "zero", "zero-success", "truncated", "overreported", "changed-size", "error-after-write"} {
 			t.Run(strings.Join([]string{windowsClassName(class), mode}, "/"), func(t *testing.T) {
 				f := goodCandidateToken(t)
+				calls := 0
 				query := func(token windows.Token, c uint32, out *byte, n uint32, used *uint32) error {
 					if c != class {
 						return f.query(token, c, out, n, used)
 					}
+					calls++
 					switch mode {
 					case "unsupported":
 						return windows.ERROR_INVALID_PARAMETER
 					case "denied":
 						return windows.ERROR_ACCESS_DENIED
+					case "bad-length":
+						return windows.ERROR_BAD_LENGTH
 					case "oversize":
 						*used = maxCandidateTokenBytes + 1
 						return windows.ERROR_INSUFFICIENT_BUFFER
@@ -299,6 +359,16 @@ func TestWindowsAppContainerTokenQueriesFailClosed(t *testing.T) {
 						return windows.ERROR_INSUFFICIENT_BUFFER
 					}
 					if out != nil {
+						if mode == "error-after-write" {
+							if err := f.query(token, c, out, n, used); err != nil {
+								return err
+							}
+							return windows.ERROR_BAD_LENGTH // even correct bytes/size with an error deny
+						}
+						if mode == "zero-success" {
+							*used = 0
+							return nil
+						}
 						if mode == "changed-size" {
 							return windows.ERROR_INSUFFICIENT_BUFFER
 						}
@@ -313,6 +383,12 @@ func TestWindowsAppContainerTokenQueriesFailClosed(t *testing.T) {
 				}
 				if err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), query); err == nil {
 					t.Fatal("accepted failed/malformed token query")
+				}
+				switch class {
+				case tokenIsAppContainer, windows.TokenElevation, tokenIsLessPrivilegedAppContainer:
+					if calls != 1 {
+						t.Fatalf("fixed-field failure retried/probed: calls=%d", calls)
+					}
 				}
 			})
 		}
@@ -411,6 +487,18 @@ func TestWindowsAppContainerOrdinaryStartStillTwoAttributes(t *testing.T) {
 				return err
 			}
 			defer token.Close()
+			// Exercise the real fixed-size elevation query independently: the
+			// ordinary negative gate stops at class 29. CI may be elevated, so
+			// require only exact DWORD layout, not the candidate's zero value.
+			elevation, err := queryCandidateDWORD(token, windows.TokenElevation, windows.GetTokenInformation)
+			if err != nil {
+				return err
+			}
+			elevated, err := elevation.dword()
+			if err != nil {
+				return err
+			}
+			t.Logf("ordinary suspended TokenElevation DWORD: elevated=%v", elevated != 0)
 			if err := verifyWindowsAppContainerToken(token, candidatePolicy(t, true), nil); err == nil || !strings.Contains(err.Error(), "token class 29") {
 				t.Errorf("ordinary child passed or failed unrelated token check: %v", err)
 			}
