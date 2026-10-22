@@ -1,4 +1,4 @@
-# Third bounded Windows token-only diagnostic — native pending
+# Third bounded Windows token-only diagnostic — metadata predicate passed
 
 Base `7a9fe47`; branch `v05/appcontainer-restricted-token-diagnostics`.
 This is the LAST bounded owned-token experiment before requiring a standard
@@ -87,9 +87,30 @@ may skip; explicit CI missing prerequisites/qualification/API/cleanup fails.
 
 Parent full-source and independent security reviews approved DIAGNOSTIC ONLY,
 including the explicit initial rights and known-RID corrections. No findings
-blocked this measurement. Pending: deliberate push and Windows native/fake/race/checkptr CI. No local Windows API execution was possible.
-All APIs/flags used are documented; behavior/elevation normalization and label
-access success remain unmeasured, not assurances. No push was performed here.
+blocked this measurement. Native Windows results are recorded below. No local Windows API execution was possible.
+All APIs/flags used are documented. Local compilation did not measure their
+behavior; only the scoped native observations below establish the tested result,
+not portability or launch/confinement guarantees.
+
+## Native result — not launch authorization
+
+Windows CI [39707791990](https://github.com/ncecere/pi-local/actions/runs/39707791990)
+at `1fbc6bf` passed normal/native/fake tests, race/checkptr and vet; aggregate
+exit codes were `normal=0 race=0 vet=0`. Both native builds observed:
+
+- A distinct restricted primary token with elevation **0**, Default type (1),
+  initially High integrity (0x3000), same user/session, Administrators deny-only,
+  no reported known administrative privileges and no unknown enabled privilege.
+- After lowering only that derived token's label: elevation **0**, Medium
+  integrity **0x2000**, and the same restricted group/privilege observations.
+- The input process token's captured fields unchanged before/after.
+
+No child/profile/account, ACL or global policy was created or changed by this
+measurement. Native handle-growth and whole-token equivalence were not proved.
+Metadata eligibility must not authorize launch: disabled/unclassified privilege
+presence, process-creation rights, actual child token, atomic ownership and
+confinement require separate stricter review and native verification. Earlier
+red linked/SAFER and administrator-parent profile gates remain red evidence.
 
 ## Official references checked
 
