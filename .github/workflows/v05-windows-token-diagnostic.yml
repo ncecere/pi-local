@@ -1,0 +1,49 @@
+name: v0.5 Windows token-only diagnostic
+on:
+  push:
+    branches: [v05/appcontainer-token-diagnostics]
+    paths:
+      - 'internal/process/token_diagnostic*_windows_test.go'
+      - '.github/workflows/v05-windows-token-diagnostic.yml'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+jobs:
+  token-only:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      PI_LOCAL_CI_TOKEN_DIAGNOSTIC: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Strict ephemeral runner preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or
+              $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:RUNNER_OS -cne 'Windows' -or
+              $env:PI_LOCAL_CI_TOKEN_DIAGNOSTIC -cne '1') {
+            throw 'Token diagnostic requires explicit opt-in on GitHub-hosted Windows'
+          }
+      - name: Token inspection and bounded fake cases only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Never run the whole package: existing tests include real profiles/children.
+          go test -count=1 -timeout=3m -v -run '^TestWindowsTokenDiagnostic(Native|Fake.*)$' ./internal/process
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race -count=1 -timeout=3m -v -run '^TestWindowsTokenDiagnostic(Native|Fake.*)$' ./internal/process
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./internal/process
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# No workflow_dispatch or other branches. v05-windows-jobs.yml branch filters
+# deliberately exclude this branch, so its real-profile fixture does not rerun.
