@@ -220,6 +220,23 @@ as a full-repository pass. Independent security review approved only this
 disabled, private policy/token slice and repeated those local checks. The
 API/SDK sources below inform the boundary; they do not replace native evidence.
 
+### Later native parser/refusal evidence
+
+Initial native run 39701058074 at `10eff97` passed macOS/Linux normal/race and
+Windows normal tests, but Windows race/checkptr crashed in the generated x/sys
+`getSidIdentifierAuthority` helper called by candidate SID metadata validation.
+Corrective `d1ecfb0` removed the interior-pointer-return metadata helpers from
+the candidate: profile and integrity checks now parse exact bounded canonical
+SID bytes. It does not disable checkptr, alter dependencies, loosen validation
+or permit execution. Independent bounded re-review approved that correction.
+
+Native run 39702054324 at `d1ecfb0` passed normal/race process/supervisor/MCP
+tests and vet on macos-15, ubuntu-24.04 and windows-2025. Windows exercised
+synthetic token parsers/attribute refusal and the ordinary suspended-child
+negative control alongside existing owned-Job regressions. No real restricted
+profile/token or successful restricted-child execution was exercised. These
+results supersede the initial compile-only evidence, not the blockers below.
+
 ### Blockers before any restricted target may resume
 
 All of the following remain unimplemented/unproven, not silently weakened:
