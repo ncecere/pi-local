@@ -4,8 +4,8 @@ This is a **build-only source graph**, not a notice manifest, SBOM, installer,
 linked-library inventory or runtime acceptance. It does not change the Darwin
 notice generator, Schema 1 notice receipts, Phase 1 Schema 2 receipts, package
 hooks or target descriptors. `distributionComplete` is always `false`.
-Native Windows/Linux runs and independent source review of this increment are
-**pending**; Mac unit fixtures are not native target evidence.
+Independent source review and the offline-routing correction passed. Native
+Windows/Linux runs are **pending**; Mac unit fixtures are not native target evidence.
 
 ## Commands (matching native hosts only)
 
@@ -57,7 +57,11 @@ The actual Node version is observed, not inferred from a descriptor; CI separate
 requires the fixed Node/pnpm versions.
 
 Globals are unchanged. Go subprocesses alone use `GOTOOLCHAIN=local`,
-`GOENV=off`, `GOWORK=off`, `GOFLAGS=-mod=readonly`, `GOPROXY=off`, `GOSUMDB=off`.
+`GOENV=off`, `GOWORK=off`, `GOFLAGS=-mod=readonly`, `GOPROXY=off`, `GOSUMDB=off`,
+`GOPRIVATE=''` and `GONOPROXY=none`. Private-module routing is explicitly neutralized:
+otherwise inherited GOPRIVATE/GONOPROXY can take a direct route before GOPROXY=off.
+These are module-routing controls, not an OS-level egress sandbox; trusted toolchain,
+compiler and runner prerequisites still apply.
 Inherited non-default GOFLAGS (including tags, overlay, modfile, race, toolexec),
 selection conflicts, GOEXPERIMENT, non-v1 GOAMD64, alternate GOTOOLCHAIN,
 workspace/module-mode overrides and gccgo selection are refused, not silently
@@ -157,7 +161,13 @@ make test-licenses  # retains the existing test command; adds the new suite sepa
 NOTICE_TEST_NODE_LICENSE=/path/to/verified/Node-22.23.0/LICENSE make test-licenses
 ```
 
-Pure synthetic projection/relocation/staleness tests do not run native Go. Matching
+Pure synthetic projection/relocation/staleness tests do not run Go. A separate unit
+case uses the actual pinned Go tool in disposable module/cache/home directories to
+check missing-cache routing. Go1.26.10 explicitly rejects the reserved example.net
+fixture before dynamic lookup; GOVCS=*:off also forbids VCS execution. Old private
+routing reaches that static refusal, while the controlled child environment must
+stop at GOPROXY=off. This is not a production graph or OS network-isolation proof.
+The unit command therefore requires the pinned Go tool as well as Node. Matching
 native CLI refusal cases register only on Windows/Linux x64. Actual successful
 write/assert/repeat is a separate post-assets step in the **existing** Windows and
 Ubuntu compile workflows; both allow this feature branch for a future reviewed

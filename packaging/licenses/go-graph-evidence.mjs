@@ -15,7 +15,9 @@ export const limits = Object.freeze({ stdoutBytes: 64 * 1024 * 1024, receiptByte
   records: 4096, modules: 256, depth: 64, tokens: 2000000, files: 100000,
   fileBytes: 64 * 1024 * 1024, totalBytes: 512 * 1024 * 1024, commandMs: 120000, collectionMs: 300000 });
 export const fileTypes = Object.freeze(['GoFiles', 'CgoFiles', 'CFiles', 'CXXFiles', 'HFiles', 'MFiles', 'FFiles', 'SFiles', 'SwigFiles', 'SwigCXXFiles', 'SysoFiles', 'EmbedFiles']);
-const controlledEnvironment = Object.freeze({ GOTOOLCHAIN: 'local', GOENV: 'off', GOWORK: 'off', GOFLAGS: '-mod=readonly', GOPROXY: 'off', GOSUMDB: 'off' });
+const controlledEnvironment = Object.freeze({ GOTOOLCHAIN: 'local', GOENV: 'off', GOWORK: 'off', GOFLAGS: '-mod=readonly', GOPROXY: 'off', GOSUMDB: 'off', GOPRIVATE: '', GONOPROXY: 'none' });
+// Private-module routing precedes GOPROXY=off unless neutralized for every child.
+export function goEnvironment(inherited) { return { ...inherited, ...controlledEnvironment }; }
 const order = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function need(ok) { if (!ok) throw new Error('Invalid Go graph evidence'); }
@@ -333,7 +335,7 @@ function collectNative(command, target) {
   need(command === 'write' || command === 'assert');
   const root = fs.realpathSync(ROOT), budget = newBudget(), before = modSnapshot(root);
   return withModuleGuard(root, before, () => {
-    const env = { ...process.env, ...controlledEnvironment };
+    const env = goEnvironment(process.env);
     function go(args) {
       return withModuleGuard(root, before, () => {
         tick(budget);

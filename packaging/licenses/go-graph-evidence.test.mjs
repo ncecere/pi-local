@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { targetDescriptor } from './target-policy.mjs';
-import { artifactSnapshot, assertSnapshot, canonicalJSON, evidenceSnapshot, fileTypes, graphSelection,
+import { artifactSnapshot, assertSnapshot, canonicalJSON, evidenceSnapshot, fileTypes, goEnvironment, graphSelection,
   guardedPath, limits, nativeGraphEvidence, newBudget, observedGo, parseGoJSON, planGraph, publishEvidence,
   readOwnedFile, withModuleGuard } from './go-graph-evidence.mjs';
 
@@ -88,6 +88,60 @@ test('pure target policy rejects cross-host/tag/experiment/toolchain/selection o
     for (const wrongHost of [{ platform: 'darwin', arch: 'arm64' }, { platform, arch: 'arm64' }, { platform: 'foreign', arch: 'x64' }]) assert.throws(() => graphSelection(target, base, wrongHost));
   }
   for (const target of ['darwin-arm64', 'darwin-amd64', '', '../linux-amd64', 'server', 'constructor', null]) assert.throws(() => graphSelection(target, {}, { platform: 'linux', arch: 'x64' }));
+});
+
+test('child environment neutralizes inherited private-module routing without mutating globals', () => {
+  for (const inherited of [{ GOPRIVATE: '*' }, { GONOPROXY: '*' }, { GOPRIVATE: 'private.example/*', GONOPROXY: '*', GOPROXY: 'direct' }]) {
+    const before = structuredClone(inherited);
+    const child = goEnvironment(inherited);
+    assert.deepEqual(inherited, before);
+    assert.equal(child.GOPROXY, 'off');
+    assert.equal(child.GOSUMDB, 'off');
+    assert.equal(child.GOPRIVATE, '');
+    assert.equal(child.GONOPROXY, 'none');
+    assert.equal(child.GOENV, 'off');
+    assert.equal(child.GOWORK, 'off');
+    assert.equal(child.GOTOOLCHAIN, 'local');
+    assert.equal(child.GOFLAGS, '-mod=readonly');
+    const policy = receipt().invocationPolicy.environment;
+    assert.equal(policy.GOPRIVATE, child.GOPRIVATE);
+    assert.equal(policy.GONOPROXY, child.GONOPROXY);
+  }
+});
+
+test('isolated missing-cache Go routing refuses offline even with inherited private settings', (t) => {
+  const root = fixture(t);
+  write(root, 'go.mod', 'module example.test/app\n\ngo 1.26.10\n');
+  write(root, 'go.sum', '');
+  // Go 1.26.10 vcs.go explicitly rejects example.net before dynamic lookup;
+  // the old-route control cannot issue HTTP/DNS or invoke a VCS executable.
+  // GOVCS=*:off additionally forbids VCS execution. This is a routing probe,
+  // not a native production graph or an OS network-isolation test.
+  const isolated = { PATH: process.env.PATH, GOVCS: '*:off' };
+  if (process.platform === 'win32') isolated.SystemRoot = process.env.SystemRoot;
+  for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR', 'GOPATH', 'GOCACHE']) {
+    const dir = path.join(root, key.toLowerCase()); fs.mkdirSync(dir); isolated[key] = dir;
+  }
+  const base = goEnvironment(isolated);
+  const probe = spawnSync('go', ['env', 'GOVERSION'], { cwd: root, env: base, encoding: 'utf8', timeout: 10000 });
+  assert.equal(probe.status, 0); assert.equal(probe.stdout.trim(), 'go1.26.10');
+  const before = Object.fromEntries(['go.mod', 'go.sum'].map(f => [f, fs.readFileSync(path.join(root, f))]));
+  let index = 0;
+  for (const inherited of [{ GOPRIVATE: '*' }, { GONOPROXY: '*' }, { GOPRIVATE: '*', GONOPROXY: '*' }]) {
+    const old = { ...base, ...inherited };
+    if (!Object.hasOwn(inherited, 'GONOPROXY')) delete old.GONOPROXY;
+    for (const fixed of [false, true]) {
+      const cache = path.join(root, `empty-module-cache-${index++}`); fs.mkdirSync(cache);
+      const env = { ...(fixed ? goEnvironment(old) : old), GOMODCACHE: cache };
+      const result = spawnSync('go', ['mod', 'download', '-json', 'example.net/native-graph-offline-fixture@v1.0.0'],
+        { cwd: root, env, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024 });
+      assert.equal(result.status, 1, 'missing-cache routing probe must refuse');
+      const error = JSON.parse(result.stdout).Error;
+      assert.equal(typeof error, 'string');
+      assert.ok(error.includes(fixed ? 'module lookup disabled by GOPROXY=off' : 'no modules on example.net'));
+    }
+  }
+  for (const [file, bytes] of Object.entries(before)) assert.deepEqual(fs.readFileSync(path.join(root, file)), bytes);
 });
 
 test('pure Go identity projection rejects wrong host, effective selection and toolchain version without native execution', () => {

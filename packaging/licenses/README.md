@@ -156,8 +156,8 @@ See [QA and reviewed native evidence](../../docs/qa/v0.5-target-receipt-evidence
 
 The separate [native Go source graph increment](GO-GRAPH-EVIDENCE.md) adds explicit native-only
 `go-graph-evidence.mjs write|assert --target windows-amd64|linux-amd64` commands and new unit tests.
-It does not feed notice generation or change either existing receipt schema. Its new native runs and
-independent review are pending; Mac fixtures do not establish native target execution.
+It does not feed notice generation or change either existing receipt schema. Independent source review
+passed; new native runs remain pending. Mac fixtures do not establish native target execution.
 
 Still deferred: target-specific legal catalogs, Node archive provenance/downloads, Windows/Linux full
 notice assembly, distribution/installer work and native-library boundary review.
