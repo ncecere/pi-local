@@ -28,6 +28,11 @@ func candidatePolicy(t *testing.T, lpac bool) *windowsAppContainerPolicy {
 	return &windowsAppContainerPolicy{profileSID: sid, lpac: lpac}
 }
 
+// Explicit fake checker for metadata-only parser tests; never native token work.
+func candidateFakeVerification(query windowsTokenInformation) *windowsAppContainerVerification {
+	return &windowsAppContainerVerification{query: query, checkLPAC: func(windows.Token, []byte) error { return nil }}
+}
+
 func TestWindowsAppContainerSDKLayouts(t *testing.T) {
 	word := unsafe.Sizeof(uintptr(0))
 	caps := windowsSecurityCapabilities{}
@@ -318,13 +323,11 @@ func TestWindowsAppContainerTokenGate(t *testing.T) {
 		{"wrong-integrity-authority", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-5-4096") }, "not Low"},
 		{"extra-integrity-subauthority", func(f *candidateTokenFixture) { f.integrity, _ = windows.StringToSid("S-1-16-4096-0") }, "not Low"},
 		{"not-integrity-label", func(f *candidateTokenFixture) { f.integrityAttributes = 0 }, "not Low"},
-		{"not-lpac", func(f *candidateTokenFixture) { f.lpac = 0 }, "not LPAC"},
-		{"unknown-lpac-value", func(f *candidateTokenFixture) { f.lpac = 2 }, "not LPAC"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := goodCandidateToken(t)
 			tc.edit(f)
-			err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), f.query)
+			err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), candidateFakeVerification(f.query))
 			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
 				t.Fatalf("want %q, got %v", tc.want, err)
 			}
@@ -333,7 +336,7 @@ func TestWindowsAppContainerTokenGate(t *testing.T) {
 }
 
 func TestWindowsAppContainerTokenQueriesFailClosed(t *testing.T) {
-	classes := []uint32{tokenIsAppContainer, windows.TokenElevation, tokenAppContainerSID, tokenCapabilities, windows.TokenIntegrityLevel, tokenIsLessPrivilegedAppContainer}
+	classes := []uint32{tokenIsAppContainer, windows.TokenElevation, tokenAppContainerSID, tokenCapabilities, windows.TokenIntegrityLevel}
 	for _, class := range classes {
 		for _, mode := range []string{"unsupported", "denied", "bad-length", "oversize", "zero", "zero-success", "truncated", "overreported", "changed-size", "error-after-write"} {
 			t.Run(strings.Join([]string{windowsClassName(class), mode}, "/"), func(t *testing.T) {
@@ -381,7 +384,7 @@ func TestWindowsAppContainerTokenQueriesFailClosed(t *testing.T) {
 					}
 					return f.query(token, c, out, n, used)
 				}
-				if err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), query); err == nil {
+				if err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), candidateFakeVerification(query)); err == nil {
 					t.Fatal("accepted failed/malformed token query")
 				}
 				switch class {
@@ -428,7 +431,7 @@ func TestWindowsAppContainerSIDBufferBounds(t *testing.T) {
 					}
 					return nil
 				}
-				if err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), query); err == nil {
+				if err := verifyWindowsAppContainerToken(0, candidatePolicy(t, true), candidateFakeVerification(query)); err == nil {
 					t.Fatal("accepted invalid embedded SID")
 				}
 			})
@@ -499,7 +502,16 @@ func TestWindowsAppContainerOrdinaryStartStillTwoAttributes(t *testing.T) {
 				return err
 			}
 			t.Logf("ordinary suspended TokenElevation DWORD: elevated=%v", elevated != 0)
-			if err := verifyWindowsAppContainerToken(token, candidatePolicy(t, true), nil); err == nil || !strings.Contains(err.Error(), "token class 29") {
+			dependencies, err := newNativeAppContainerVerification()
+			if err != nil {
+				return err
+			}
+			checker := dependencies.checkLPAC
+			dependencies.checkLPAC = func(source windows.Token, profile []byte) error {
+				t.Error("non-AppContainer token reached semantic checker")
+				return checker(source, profile)
+			}
+			if err := verifyWindowsAppContainerToken(token, candidatePolicy(t, true), dependencies); err == nil || !strings.Contains(err.Error(), "token class 29") {
 				t.Errorf("ordinary child passed or failed unrelated token check: %v", err)
 			}
 			return stop

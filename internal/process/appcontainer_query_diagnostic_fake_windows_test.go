@@ -3,7 +3,6 @@
 package process
 
 import (
-	"errors"
 	"runtime"
 	"syscall"
 	"testing"
@@ -153,11 +152,11 @@ func TestWindowsLPACQueryDiagnosticDoesNotAuthorize(t *testing.T) {
 		diagnosticErr error
 		originalErr   error
 		originalValue uint32
-		wantSuccess   bool
+		checkerErr    error
 	}{
-		{"all-probes-succeed-original-87", nil, windows.ERROR_INVALID_PARAMETER, 1, false},
-		{"all-probes-succeed-original-zero", nil, nil, 0, false},
-		{"all-probes-fail-original-valid", windows.ERROR_INVALID_PARAMETER, nil, 1, true},
+		{"all-probes-succeed-original-87", nil, windows.ERROR_INVALID_PARAMETER, 1, nil},
+		{"all-probes-succeed-original-zero-checker-refuses", nil, nil, 0, windows.ERROR_ACCESS_DENIED},
+		{"all-probes-fail-original-valid-checker-refuses", windows.ERROR_INVALID_PARAMETER, nil, 1, windows.ERROR_INVALID_DATA},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := goodCandidateToken(t)
@@ -184,12 +183,23 @@ func TestWindowsLPACQueryDiagnosticDoesNotAuthorize(t *testing.T) {
 				}
 				return fixture.query(token, class, out, size, returned)
 			}, func([3]candidateLPACQueryObservation) { reports++ })
-			err := verifyWindowsAppContainerToken(123, candidatePolicy(t, true), wrapped)
-			if (err == nil) != tc.wantSuccess || calls != 4 || reports != 1 {
-				t.Fatal("diagnostics changed verification authority or final query reachability")
+			// The historical utility remains independently observable, not a
+			// mandatory/fallback predicate of the fixed verifier.
+			var value, used uint32
+			if err := wrapped(123, 46, (*byte)(unsafe.Pointer(&value)), 4, &used); err != tc.originalErr || calls != 4 || reports != 1 {
+				t.Fatal("standalone observation changed original result")
 			}
-			if tc.originalErr != nil && !errors.Is(err, tc.originalErr) {
-				t.Fatal("original refusal error lost")
+			checked := 0
+			dependencies := &windowsAppContainerVerification{query: wrapped, checkLPAC: func(token windows.Token, profile []byte) error {
+				checked++
+				if token != 123 || len(profile) != 40 {
+					t.Fatal("changed checker arguments")
+				}
+				return tc.checkerErr
+			}}
+			err := verifyWindowsAppContainerToken(123, candidatePolicy(t, true), dependencies)
+			if err != tc.checkerErr || checked != 1 || calls != 4 || reports != 1 {
+				t.Fatal("historical query affected fixed authority or fake token reached native checker")
 			}
 		})
 	}

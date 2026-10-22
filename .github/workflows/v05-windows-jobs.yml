@@ -1,7 +1,7 @@
 name: v0.5 owned child lifecycle
 on:
   push:
-    branches: [v0.5, v05/windows-jobs, v05/appcontainer-candidate, v05/appcontainer-fixtures, v05/appcontainer-asuser-fixture, v05/lpac-query-probe, v05/lpac-accesscheck-diagnostic]
+    branches: [v0.5, v05/windows-jobs, v05/appcontainer-candidate, v05/appcontainer-fixtures, v05/appcontainer-asuser-fixture, v05/lpac-query-probe, v05/lpac-accesscheck-diagnostic, v05/lpac-verification-contract]
     paths:
       - '.github/workflows/v05-windows-jobs.yml'
       - 'internal/process/**'

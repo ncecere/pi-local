@@ -619,7 +619,7 @@ func TestWindowsLPACSemanticVariableQueryAndCleanupCauses(t *testing.T) {
 	}
 }
 
-func TestWindowsLPACSemanticSanitizedErrorsAndOldAuthority(t *testing.T) {
+func TestWindowsLPACSemanticSanitizedErrorsAndFixedAuthority(t *testing.T) {
 	injected := errors.New("opaque-private-text")
 	if lpacAccessBOOL(1, injected) != nil || lpacAccessBOOL(0, injected) != injected || lpacAccessBOOL(0, nil) == nil || lpacAccessBOOL(0, windows.ERROR_SUCCESS) == nil || lpacBoundError(nil) != nil {
 		t.Fatal("BOOL/error protocol")
@@ -635,7 +635,8 @@ func TestWindowsLPACSemanticSanitizedErrorsAndOldAuthority(t *testing.T) {
 			}
 			metadata := goodCandidateToken(t)
 			seen46 := 0
-			err := verifyWindowsAppContainerToken(99, candidatePolicy(t, true), func(tok windows.Token, class uint32, out *byte, size uint32, used *uint32) error {
+			checked := 0
+			err := verifyWindowsAppContainerToken(99, candidatePolicy(t, true), &windowsAppContainerVerification{query: func(tok windows.Token, class uint32, out *byte, size uint32, used *uint32) error {
 				if class == 46 {
 					seen46++
 					if queryError != nil {
@@ -646,12 +647,15 @@ func TestWindowsLPACSemanticSanitizedErrorsAndOldAuthority(t *testing.T) {
 					return nil
 				}
 				return metadata.query(tok, class, out, size, used)
-			})
-			if seen46 != 1 || (err == nil) != (queryError == nil && result == 1) {
-				t.Fatal("semantic success changed original selector46 authority")
-			}
-			if queryError != nil && !errors.Is(err, queryError) {
-				t.Fatal("original selector46/87 error changed")
+			}, checkLPAC: func(token windows.Token, profile []byte) error {
+				checked++
+				if token != 99 || !bytes.Equal(profile, lpacTestProfile()) {
+					t.Fatal("checker arguments changed")
+				}
+				return nil // explicit fake; token99 never reaches native APIs
+			}})
+			if seen46 != 0 || checked != 1 || err != nil {
+				t.Fatal("historical selector46 influenced fixed authority")
 			}
 			lpacAssertBorrowed(t, f, 1)
 		}

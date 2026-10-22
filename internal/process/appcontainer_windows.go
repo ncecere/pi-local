@@ -100,6 +100,18 @@ func (p *windowsAppContainerPolicy) install(update func(uintptr, unsafe.Pointer,
 
 type windowsTokenInformation func(windows.Token, uint32, *byte, uint32, *uint32) error
 
+// Complete private verification contract. No field acquires a native default.
+// Only the owned-launch boundary may deliberately select native dependencies.
+// The checker borrows source; it owns/retire only its distinct duplicate.
+type windowsAppContainerVerification struct {
+	query     windowsTokenInformation
+	checkLPAC func(windows.Token, []byte) error
+}
+
+func (v *windowsAppContainerVerification) complete() bool {
+	return v != nil && v.query != nil && v.checkLPAC != nil
+}
+
 // Word backing provides native alignment, with a bounded exact byte extent.
 // Embedded PSIDs are validated inside this same buffer before any SID API call.
 type windowsTokenBuffer struct {
@@ -190,10 +202,14 @@ func (b windowsTokenBuffer) boundedSID(sid *windows.SID, header uintptr) ([]byte
 	return span, nil
 }
 
-func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppContainerPolicy, query windowsTokenInformation) error {
-	if query == nil {
-		query = windows.GetTokenInformation // advapi32 via x/sys SystemDLL, not PATH
+func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppContainerPolicy, dependencies *windowsAppContainerVerification) error {
+	if !dependencies.complete() {
+		return errors.New("process: incomplete AppContainer verification dependencies")
 	}
+	if policy == nil || policy.profileSID == nil {
+		return errors.New("process: AppContainer verification requires policy")
+	}
+	query := dependencies.query
 	for _, check := range []struct {
 		class uint32
 		want  uint32
@@ -254,14 +270,10 @@ func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppConta
 	}
 	runtime.KeepAlive(integrity)
 	if policy.lpac {
-		b, err := queryCandidateDWORD(token, tokenIsLessPrivilegedAppContainer, query)
-		if err != nil {
-			return err // unsupported query is refusal, never an AC fallback
-		}
-		got, err := b.dword()
-		if err != nil || got != 1 {
-			return fmt.Errorf("process: token is not LPAC: value=%d layout=%v", got, err)
-		}
+		// Fixed authority for controlled own-child creation, never selector46 or
+		// an error-based fallback. Metadata success cannot waive this call.
+		profile := unsafe.Slice((*byte)(unsafe.Pointer(policy.profileSID)), policy.profileSID.Len())
+		return dependencies.checkLPAC(token, profile)
 	}
 	return nil
 }

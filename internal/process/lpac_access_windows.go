@@ -14,12 +14,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Unwired behavioral check for controlled creation ONLY, through retained own
+// Fixed behavioral check for controlled creation ONLY, through retained own
 // child handles. Restricted-token lookalikes can mimic this matrix. This is not
-// a general token classifier, an error fallback, or proof of confinement. The
-// launcher's original mandatory selector46 gate remains authoritative.
+// a general token classifier, an error fallback, or proof of confinement.
+// Both independent execution-disabled launcher stops remain unconditional.
 //
-// source is BORROWED and must already have QUERY|DUPLICATE at a future deliberate
+// source is BORROWED and must already have QUERY|DUPLICATE at the deliberate
 // launcher boundary. This helper cannot open a process/token or widen rights.
 // profile is the exact, trusted creation profile, not inferred from the token.
 func verifyWindowsLPACSemantics(source windows.Token, profile []byte, api lpacAccessAPI) (err error) {
@@ -231,8 +231,8 @@ func lpacAccessIdentity(token windows.Token, class uint32, query windowsTokenInf
 	return span, err
 }
 
-// Metadata ONLY. No policy fabrication or selector46 query. The original
-// verifyWindowsAppContainerToken (including all its errors/checks) is unchanged.
+// Metadata ONLY, repeated on source and owned duplicate. No policy fabrication
+// or selector46 query; the launcher's outer metadata checks also remain required.
 func lpacAccessMetadata(token windows.Token, profile []byte, query windowsTokenInformation) error {
 	for _, check := range []struct{ class, want uint32 }{{tokenIsAppContainer, 1}, {windows.TokenElevation, 0}} {
 		if err := lpacAccessDWORD(token, check.class, check.want, query); err != nil {

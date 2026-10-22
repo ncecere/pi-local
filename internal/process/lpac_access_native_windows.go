@@ -10,6 +10,20 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// Bind query and semantic authority together, never mix fake/native fields.
+func newNativeAppContainerVerification() (*windowsAppContainerVerification, error) {
+	api, err := newNativeLPACAccessAPI()
+	if err != nil {
+		return nil, err
+	}
+	return &windowsAppContainerVerification{
+		query: api.query,
+		checkLPAC: func(source windows.Token, profile []byte) error {
+			return verifyWindowsLPACSemantics(source, profile, api)
+		},
+	}, nil
+}
+
 // Deliberate all-or-nothing native constructor. No lazy per-field defaults, no
 // OpenProcess/OpenProcessToken binding, and no source-rights escalation path.
 func newNativeLPACAccessAPI() (lpacAccessAPI, error) {

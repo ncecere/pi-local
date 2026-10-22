@@ -25,9 +25,13 @@ func candidateLogAccessReport(t *testing.T, r candidateAccessReport, err error) 
 
 // Independently selectable: -run '^TestWindowsAppContainerAccessCheckPairedControl$'.
 // Ordinary AC is ONLY this disposable suspended comparison, never a fallback.
-// The LPAC reference still runs the original 46 gate; observing its known 87
-// refusal here does not make the separate candidate gate green.
+// LPAC must complete the fixed metadata+semantic contract and reach the OFF
+// stop; no historical selector46/87 recognition is accepted by this contract.
 func TestWindowsAppContainerAccessCheckPairedControl(t *testing.T) {
+	dependencies, err := newNativeAppContainerVerification()
+	if err != nil {
+		t.Fatal(err)
+	}
 	profileAPI, err := candidateNativeProfileAPI(t)
 	if err != nil {
 		t.Fatal(err)
@@ -92,13 +96,7 @@ func TestWindowsAppContainerAccessCheckPairedControl(t *testing.T) {
 			}
 			checked, resumed := 0, 0
 			var attributes []uintptr
-			var diagnosticErr, original46Err error
-			original46Called := false
-			queryDiagnostic := candidateLPACQueryDiagnostic(windows.GetTokenInformation, func(obs [3]candidateLPACQueryObservation) {
-				for _, o := range obs {
-					t.Logf("reference query: requestedSize=%d success=%v numericCodePresent=%v code=%d returnedLength=%d (not authoritative)", o.requestedSize, o.success, o.numericCodePresent, o.code, o.returnedLength)
-				}
-			})
+			var diagnosticErr error
 			cmd := windowsHelperCommand(dir, "hold")
 			cmd.Path, cmd.Args[0], cmd.Env = probe, probe, env
 			cleanup.launchAttempted = true
@@ -114,13 +112,7 @@ func TestWindowsAppContainerAccessCheckPairedControl(t *testing.T) {
 					}
 					return diagnosticErr
 				}, &cleanup.cleanupErr),
-				tokenInformation: func(token windows.Token, class uint32, out *byte, n uint32, used *uint32) error {
-					e := queryDiagnostic(token, class, out, n, used)
-					if class == tokenIsLessPrivilegedAppContainer && n == 4 {
-						original46Called, original46Err = true, e
-					}
-					return e // exact original result, never a substitution
-				},
+				verification: dependencies,
 				beforeResume: func(pi windows.ProcessInformation, job windows.Handle) error {
 					checked++
 					member, e := inExactJob(pi.Process, job)
@@ -182,12 +174,8 @@ func TestWindowsAppContainerAccessCheckPairedControl(t *testing.T) {
 					t.Fatal("reference attribute composition refused")
 				}
 			}
-			// Explicitly recognize only the known public API 87 refusal in the LPAC
-			// reference. All other unexpected create/metadata errors fail this control.
-			known46Refusal := lpac && checked == 0 && original46Called && errors.Is(original46Err, windows.ERROR_INVALID_PARAMETER) && errors.Is(startErr, windows.ERROR_INVALID_PARAMETER)
-			off := startErr == errWindowsAppContainerExecutionDisabled && checked == 1
-			if tr != nil || resumed != 0 || (!off && !known46Refusal) {
-				t.Fatalf("reference off=%v original87Refusal=%v checked=%d resumed=%d unexpectedError=%v", off, known46Refusal, checked, resumed, startErr != nil)
+			if tr != nil || resumed != 0 || checked != 1 || startErr != errWindowsAppContainerExecutionDisabled {
+				t.Fatalf("reference incomplete OFF gate: checked=%d resumed=%d err=%v", checked, resumed, startErr)
 			}
 			if _, e := os.Stat(filepath.Join(dir, "hold.started")); !os.IsNotExist(e) {
 				t.Error("reference unexpectedly made a marker")

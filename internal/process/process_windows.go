@@ -38,14 +38,16 @@ func inExactJob(process, job windows.Handle) (bool, error) {
 type windowsLaunchHooks struct {
 	// Borrowed, never closed here. Test owner must keep it live until synchronous
 	// failure cleanup returns. Zero preserves the ordinary CreateProcessW path.
-	primaryToken     windows.Token
-	fileType         func(windows.Handle) (uint32, error)
-	duplicateStdio   func(windows.Handle) (windows.Handle, error)
-	verify           func(windows.Handle, windows.Handle) (bool, error)
-	beforeResume     func(windows.ProcessInformation, windows.Handle) error
-	resume           func(windows.Handle) (uint32, error)
-	beforeAttribute  func(uintptr) error
-	tokenInformation windowsTokenInformation
+	primaryToken    windows.Token
+	fileType        func(windows.Handle) (uint32, error)
+	duplicateStdio  func(windows.Handle) (windows.Handle, error)
+	verify          func(windows.Handle, windows.Handle) (bool, error)
+	beforeResume    func(windows.ProcessInformation, windows.Handle) error
+	resume          func(windows.Handle) (uint32, error)
+	beforeAttribute func(uintptr) error
+	// Nil selects the COMPLETE native bundle only at this owned-launch boundary.
+	verification *windowsAppContainerVerification
+	childToken   *windowsChildTokenAPI
 }
 
 func platformStart(ctx context.Context, cmd *exec.Cmd) (Tree, error) {
@@ -63,6 +65,28 @@ func startWindowsOwned(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHo
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Validate injected bundles BEFORE even the borrowed-primary token query.
+	// A partial fake is refusal, never permission to use any native field.
+	dependencies := hooks.verification
+	if dependencies != nil && !dependencies.complete() {
+		return nil, errors.New("process: incomplete AppContainer verification dependencies")
+	}
+	sourceAPI := hooks.childToken
+	if sourceAPI != nil && !sourceAPI.complete() {
+		return nil, errors.New("process: incomplete AppContainer source token dependencies")
+	}
+	if policy != nil {
+		if dependencies == nil {
+			var err error
+			dependencies, err = newNativeAppContainerVerification()
+			if err != nil {
+				return nil, err
+			}
+		}
+		if sourceAPI == nil {
+			sourceAPI = &windowsChildTokenAPI{open: windows.OpenProcessToken, close: windows.Token.Close}
+		}
+	}
 	if hooks.primaryToken != 0 {
 		if policy == nil {
 			return nil, errors.New("process: borrowed primary token requires AppContainer policy")
@@ -73,7 +97,7 @@ func startWindowsOwned(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHo
 			return nil, errors.New("process: borrowed primary token is reserved")
 		}
 		var kind, used uint32
-		if err := windows.GetTokenInformation(hooks.primaryToken, windows.TokenType, (*byte)(unsafe.Pointer(&kind)), 4, &used); err != nil {
+		if err := dependencies.query(hooks.primaryToken, windows.TokenType, (*byte)(unsafe.Pointer(&kind)), 4, &used); err != nil {
 			return nil, fmt.Errorf("process: borrowed primary token query: %w", err)
 		}
 		if used != 4 || kind != windows.TokenPrimary {
@@ -232,14 +256,9 @@ func startWindowsOwned(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHo
 		return nil, errors.New("process: suspended child not in owned job")
 	}
 	if policy != nil {
-		// Open only through the retained owned process HANDLE, never its PID.
-		// Keep the query-only token handle until this launch attempt has finished.
-		var token windows.Token
-		if err := windows.OpenProcessToken(pi.Process, windows.TOKEN_QUERY, &token); err != nil {
-			return nil, fmt.Errorf("process: AppContainer OpenProcessToken: %w", err)
-		}
-		defer token.Close()
-		if err := verifyWindowsAppContainerToken(token, policy, hooks.tokenInformation); err != nil {
+		// Borrow through the retained owned PROCESS handle, never PID. Retire
+		// the source exactly once BEFORE beforeResume; close uncertainty refuses.
+		if err := verifyWindowsOwnedChildToken(pi.Process, policy, dependencies, sourceAPI); err != nil {
 			return nil, err
 		}
 	}
@@ -282,6 +301,42 @@ func startWindowsOwned(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHo
 	streams.start()
 	go t.reap()
 	return t, nil
+}
+
+// Explicit source ownership seam: no per-field native defaults or rights retry.
+type windowsChildTokenAPI struct {
+	open  func(windows.Handle, uint32, *windows.Token) error
+	close func(windows.Token) error
+}
+
+func (a *windowsChildTokenAPI) complete() bool {
+	return a != nil && a.open != nil && a.close != nil
+}
+
+func verifyWindowsOwnedChildToken(process windows.Handle, policy *windowsAppContainerPolicy, dependencies *windowsAppContainerVerification, api *windowsChildTokenAPI) (err error) {
+	if !dependencies.complete() || !api.complete() || policy == nil {
+		return errors.New("process: incomplete AppContainer child verification dependencies")
+	}
+	rights := uint32(windows.TOKEN_QUERY)
+	if policy.lpac {
+		rights |= windows.TOKEN_DUPLICATE
+	}
+	var token windows.Token
+	// Even a distinct partial output on error must be retired, but never used.
+	defer func() {
+		if lpacRealToken(token) {
+			if closeErr := api.close(token); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("process: AppContainer source token close: %w", closeErr))
+			}
+		}
+	}()
+	if err := api.open(process, rights, &token); err != nil {
+		return fmt.Errorf("process: AppContainer OpenProcessToken: %w", err)
+	}
+	if !lpacRealToken(token) {
+		return errors.New("process: AppContainer source token refused")
+	}
+	return verifyWindowsAppContainerToken(token, policy, dependencies)
 }
 
 type windowsTree struct {

@@ -471,6 +471,10 @@ func candidateRecordProfileIntrinsics(t *testing.T, profile *candidateOwnedProfi
 }
 
 func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
+	dependencies, err := newNativeAppContainerVerification()
+	if err != nil {
+		t.Fatal(err)
+	}
 	api, err := candidateNativeProfileAPI(t)
 	if err != nil {
 		t.Fatal(err)
@@ -563,7 +567,7 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 					primaryToken:    primary.derived.token, // borrowed through synchronous cleanup
 					beforeAttribute: func(attribute uintptr) error { attributes = append(attributes, attribute); return nil },
 					// Preserve the REAL exact-job result. Acquire the cleanup witness
-					// BEFORE token validation can fail on 46; diagnostics have no authority.
+					// BEFORE metadata/semantic validation; diagnostics have no authority.
 					verify: candidateAccessVerify(inExactJob, func(process windows.Handle) error {
 						return windows.DuplicateHandle(windows.CurrentProcess(), process, windows.CurrentProcess(), &cleanup.observed, windows.SYNCHRONIZE, false, 0)
 					}, func(process windows.Handle) error {
@@ -573,12 +577,7 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 						}
 						return diagnosticErr
 					}, &cleanup.cleanupErr),
-					// Three observations, then the ORIGINAL strict query unchanged.
-					tokenInformation: candidateLPACQueryDiagnostic(windows.GetTokenInformation, func(observations [3]candidateLPACQueryObservation) {
-						for _, observation := range observations {
-							t.Logf("LPAC query diagnostic: requestedSize=%d success=%v numericCodePresent=%v code=%d returnedLength=%d (observation only; failed returned length not authoritative; no result bytes read)", observation.requestedSize, observation.success, observation.numericCodePresent, observation.code, observation.returnedLength)
-						}
-					}),
+					verification: dependencies, // explicit complete native FIXED contract
 					beforeResume: func(pi windows.ProcessInformation, job windows.Handle) error {
 						checked++ // reached ONLY after real exact-job + token gates
 						member, err := inExactJob(pi.Process, job)

@@ -580,20 +580,24 @@ func TestWindowsAccessCheckDiagnosticExactJobNonAuthority(t *testing.T) {
 	if !member || e != nil || called || !errors.Is(sticky, diagnostic) {
 		t.Fatal("witness failure changed authority or ran diagnostics")
 	}
-	// Successful semantic observations still cannot waive the ORIGINAL typed gate.
+	// Successful observations cannot waive the fixed checker's refusal.
 	f := newCandidateAccessFake(t, true)
 	r, e := candidateDiagnoseAccess(77, f.profile, f.api)
 	if e != nil || !r.matches(true) {
 		t.Fatal("semantic setup")
 	}
 	q := goodCandidateToken(t)
-	err := verifyWindowsAppContainerToken(99, candidatePolicy(t, true), candidateLPACQueryDiagnostic(func(token windows.Token, class uint32, out *byte, n uint32, used *uint32) error {
-		if class == 46 {
-			return windows.ERROR_INVALID_PARAMETER
-		}
-		return q.query(token, class, out, n, used)
-	}, nil))
-	if !errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
-		t.Fatal("semantic success waived original87")
+	checked := 0
+	err := verifyWindowsAppContainerToken(99, candidatePolicy(t, true), &windowsAppContainerVerification{
+		query: func(token windows.Token, class uint32, out *byte, n uint32, used *uint32) error {
+			if class == 46 {
+				t.Fatal("fixed verifier queried historical selector")
+			}
+			return q.query(token, class, out, n, used)
+		},
+		checkLPAC: func(windows.Token, []byte) error { checked++; return diagnostic },
+	})
+	if err != diagnostic || checked != 1 {
+		t.Fatal("diagnostic success waived fixed checker refusal")
 	}
 }
