@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -46,11 +47,13 @@ func main() {
 	}
 	var window *application.WebviewWindow
 	var services []application.Service
-	note := &notifier{}
+	note := newNotifier(runtime.GOOS, host.DesktopHumanConfirmationPolicy(os.Getenv("FRONTEND_DEVSERVER_URL")))
+	var native *notifications.NotificationService
 	if bundled() {
 		// Native notifications need an app bundle; without one (development) they go through osascript.
-		note.native = notifications.New()
-		services = append(services, application.NewService(note.native))
+		native = notifications.New()
+		note.native = native
+		services = append(services, application.NewService(native))
 	}
 	wails := application.New(application.Options{
 		Services:    services,
@@ -190,10 +193,10 @@ func main() {
 			needsItem.SetLabel(plural(needsYou, "request needs you", "requests need you", "Nothing needs you"))
 			menu.Update()
 		})
-		if note.native != nil {
+		if native != nil {
 			go func() {
-				if ok, _ := note.native.CheckNotificationAuthorization(); !ok {
-					note.native.RequestNotificationAuthorization()
+				if ok, _ := native.CheckNotificationAuthorization(); !ok {
+					native.RequestNotificationAuthorization()
 				}
 			}()
 		}

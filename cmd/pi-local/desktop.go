@@ -3,10 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,7 +11,6 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"github.com/ncecere/pi-local/internal/app"
 )
@@ -26,88 +22,19 @@ func bundled() bool {
 	return err == nil && strings.Contains(exe, ".app/Contents/MacOS/")
 }
 
-// notifier shows a notification: natively from a bundled app, through osascript otherwise (development).
-type notifier struct {
-	native *notifications.NotificationService
-}
-
-// Notification categories with buttons (macOS shows them on the notification).
-const (
-	approvalCategory = "pi-approval"
-	confirmCategory  = "pi-confirm"
-)
-
-// registerActions sets up the notification buttons, and what a click does: approve or deny a tool call, answer a
-// yes/no question, or open the app (a click on the notification itself).
+// registerActions adapts the stores to the independently testable dispatcher.
 func (n *notifier) registerActions(core *app.App, show func()) {
-	if n.native == nil {
-		return
-	}
-	n.native.RegisterNotificationCategory(notifications.NotificationCategory{ID: approvalCategory, Actions: []notifications.NotificationAction{
-		{ID: "approve", Title: "Approve"}, {ID: "deny", Title: "Deny", Destructive: true},
-	}})
-	n.native.RegisterNotificationCategory(notifications.NotificationCategory{ID: confirmCategory, Actions: []notifications.NotificationAction{
-		{ID: "yes", Title: "Yes, go ahead"}, {ID: "decline", Title: "Decline", Destructive: true},
-	}})
-	n.native.OnNotificationResponse(func(result notifications.NotificationResult) {
-		if result.Error != nil {
-			return
-		}
-		r := result.Response
-		data := r.UserInfo
-		str := func(k string) string { s, _ := data[k].(string); return s }
-		ctx := context.Background()
-		switch r.ActionIdentifier {
-		case "approve", "deny":
-			if _, err := core.Approvals.Decide(ctx, str("agentId"), str("id"), r.ActionIdentifier == "approve", ""); err != nil {
-				slog.Warn("answering an approval from a notification", "err", err)
-				show()
-			}
-		case "yes", "decline":
-			action, content := "decline", map[string]any(nil)
-			if r.ActionIdentifier == "yes" {
-				action, content = "accept", map[string]any{str("field"): true}
-			}
-			if _, err := core.Elicitations.Answer(str("id"), action, content); err != nil {
-				slog.Warn("answering a question from a notification", "err", err)
-				show()
-			}
-		default:
-			show()
-		}
+	n.registerCallbacks(notificationCallbacks{
+		decide: func(agentID, id string, approve bool) error {
+			_, err := core.Approvals.Decide(context.Background(), agentID, id, approve, "")
+			return err
+		},
+		answer: func(id, action string, content map[string]any) error {
+			_, err := core.Elicitations.Answer(id, action, content)
+			return err
+		},
+		show: show,
 	})
-}
-
-// sendWithButtons shows a notification with a category's buttons (natively; osascript has no buttons).
-func (n *notifier) sendWithButtons(id, title, body, category string, data map[string]any) {
-	if n.native != nil {
-		opts := notifications.NotificationOptions{ID: id, Title: title, Body: body, CategoryID: category, Data: data}
-		if err := n.native.SendNotificationWithActions(opts); err == nil {
-			return
-		}
-	}
-	n.send(id, title, body)
-}
-
-func (n *notifier) send(id, title, body string) {
-	slog.Info("notification", "id", id, "title", title)
-	if n.native != nil {
-		if err := n.native.SendNotification(notifications.NotificationOptions{ID: id, Title: title, Body: body}); err == nil {
-			return
-		}
-	}
-	script := fmt.Sprintf("display notification %s with title %s", appleString(body), appleString(title))
-	if err := exec.Command("osascript", "-e", script).Start(); err != nil {
-		slog.Debug("notification", "err", err)
-	}
-}
-
-// appleString quotes a string for AppleScript.
-func appleString(s string) string {
-	if len([]rune(s)) > 240 {
-		s = string([]rune(s)[:239]) + "…"
-	}
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", " ").Replace(s) + `"`
 }
 
 // watch turns the app's live events into notifications (while the window isn't in front) and keeps the tray's
