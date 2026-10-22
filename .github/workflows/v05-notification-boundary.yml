@@ -1,0 +1,53 @@
+name: v0.5 notification compatibility contracts
+on:
+  push:
+    branches: [v0.5, v05/notification-boundary]
+    paths:
+      - '.github/workflows/v05-notification-boundary.yml'
+      - 'cmd/pi-local/**'
+      - 'internal/host/**'
+      - 'frontend/embed.go'
+      - 'runtime/embed.go'
+      - 'frontend/package.json'
+      - 'frontend/pnpm-lock.yaml'
+      - 'runtime/package.json'
+      - 'runtime/pnpm-lock.yaml'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.0
+      - name: Install frozen build dependencies
+        run: |
+          corepack enable
+          (cd runtime && pnpm install --frozen-lockfile)
+          (cd frontend && pnpm install --frozen-lockfile)
+      - name: Build actual embedded assets
+        run: make runtime frontend
+      - name: Fake notification and owned-helper contracts
+        run: |
+          set -euo pipefail
+          go test -count=1 ./cmd/pi-local ./internal/host
+          go test -race -count=1 ./cmd/pi-local ./internal/host
+          go vet ./cmd/pi-local ./internal/host
+          for tags in server mcp 'server,mcp'; do
+            go test -race -count=1 -tags "$tags" ./internal/host
+            go test -count=1 -tags "$tags" ./cmd/pi-local -run 'Test(Notification|Notifier|AppleStrings|Plural)'
+            go vet -tags "$tags" ./internal/host
+          done
+# Fake native services and test-binary children only. No desktop main, notification,
+# AppleScript, real vault or human activation is exercised by these contracts.
