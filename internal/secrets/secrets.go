@@ -1,5 +1,6 @@
 // Package secrets stores sensitive values through an explicit Store boundary.
 // Keychain uses the OS vault; Memory is an explicitly selected in-memory store.
+// Persistent is an explicitly opened, unwired encrypted-profile store.
 package secrets
 
 import "sync"
@@ -35,6 +36,9 @@ func (s *Memory) Get(name string) (string, error) {
 
 func (s *Memory) Set(name, value string) error {
 	s.mu.Lock()
+	if s.m == nil {
+		s.m = make(map[string]string)
+	}
 	s.m[name] = value
 	s.mu.Unlock()
 	return nil
