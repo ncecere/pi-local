@@ -27,7 +27,10 @@ The process's actual TokenUser SID is obtained using a separately owned
 `OpenProcessToken(TOKEN_QUERY)` handle, copied before its information buffer is
 released, and the token is closed. This is not an impersonated-user, account,
 profile, or availability-metadata lookup. SYSTEM-as-process-user is not supported
-because the two approved trustees must be distinct.
+because the two approved trustees must be distinct. The shared process-owner
+query refuses this context for both creation and inspection; descriptor parsing
+also independently rejects SYSTEM as owner. Synthetic duplicate-SYSTEM root and
+file cases preserve this invariant.
 
 `CreateDirectoryW` receives `SECURITY_ATTRIBUTES` containing the owner and DACL
 at creation, equivalent to:
@@ -158,11 +161,20 @@ GOOS=windows GOARCH=amd64 go test -c -o /tmp/pai-windows-private-fs-secrets.test
 GOOS=windows GOARCH=amd64 go vet ./internal/secrets
 ```
 
-The Windows commands are **compile/vet only**, not native execution. No Windows
-CI/workflow change or push is included. Native NTFS/admin-CI and actual
-standard-user execution remain unproved here; elevated CI would not by itself
-prove a standard-user privacy boundary. The unchanged Windows pre-I/O
-ErrUnsupported regression is compiled, not executed on this host.
+The Windows commands are **compile/vet only**, not native execution. Independent
+security review approved only the unwired primitives and found one Low issue:
+SYSTEM-owner inspection could collapse the two approved trustees. The parent
+corrected the shared owner query and descriptor policy, added root/file
+regressions, and bounded re-review closed that issue.
+
+Parent normal/race secret/consumer tests, vet and Windows compilation/vet passed
+before and after the correction (`v05-windows-private-fs-parent-gate` and
+`v05-private-fs-distinct-owner-correction-gate`, exits 0). The parent deliberately
+added this isolated branch to native secrets CI, with normal/race/vet aggregate
+exit handling. YAML/actionlint v1.7.7 validation passed. Native NTFS/Authz results
+are still pending; elevated CI would not prove a standard-user privacy boundary.
+The unchanged Windows pre-I/O ErrUnsupported regression was compiled, not
+executed on this host.
 
 ## Explicit remaining gates
 

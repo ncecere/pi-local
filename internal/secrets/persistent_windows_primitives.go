@@ -118,6 +118,11 @@ func winPrivateProcessSID() (_ *windows.SID, result error) {
 	if err != nil {
 		return nil, winPrivateNativeError("private-owner", err)
 	}
+	// Shared by creation and existing-root inspection: approved trustees must
+	// remain distinct. SYSTEM cannot stand for both the user and SYSTEM ACE.
+	if sid.IsWellKnown(windows.WinLocalSystemSid) {
+		return nil, failure("private-owner", ErrUnsupported)
+	}
 	return sid, nil
 }
 
@@ -372,7 +377,7 @@ func winPrivateSIDBytes(b []byte) []byte {
 }
 
 func winPrivateDescriptor(b []byte, owner *windows.SID, directory bool) bool {
-	if owner == nil || !owner.IsValid() || owner.Len() < 8 || owner.Len() > 68 || len(b) < 20 || b[0] != 1 {
+	if owner == nil || !owner.IsValid() || owner.Len() < 8 || owner.Len() > 68 || owner.IsWellKnown(windows.WinLocalSystemSid) || len(b) < 20 || b[0] != 1 {
 		return false
 	}
 	want := unsafe.Slice((*byte)(unsafe.Pointer(owner)), owner.Len())

@@ -443,6 +443,28 @@ func TestWinPrivateDescriptorPolicy(t *testing.T) {
 	}
 }
 
+func TestWinPrivateSystemOwnerCannotCollapseTrustees(t *testing.T) {
+	owner, err := windows.StringToSid("S-1-5-18")
+	if err != nil {
+		t.Fatal("synthetic SYSTEM SID creation failed")
+	}
+	for _, tc := range []struct {
+		name, flags string
+		directory   bool
+	}{
+		{"root", "OICI", true},
+		{"explicit-file", "", false},
+		{"inherited-file", "ID", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sd := winTestSD(t, "O:SYD:P(A;"+tc.flags+";FA;;;SY)(A;"+tc.flags+";FA;;;SY)")
+			if winPrivateDescriptor(winTestSDBytes(sd), owner, tc.directory) {
+				t.Fatal("SYSTEM owner collapsed two distinct approved trustees")
+			}
+		})
+	}
+}
+
 func TestWinPrivatePathContractAndErrors(t *testing.T) {
 	for _, path := range []string{`C:\private`, `d:\fixture\normal name`, `C:\fixture\é`} {
 		if !winPrivatePath(path) {
