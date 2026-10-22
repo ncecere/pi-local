@@ -32,8 +32,10 @@ Unexpected restriction/group configurations and hostile broker-equivalent token
 mutation remain **activation gates**. This increment does not enumerate every
 restriction/group or establish an anti-mutation boundary. A future boundary must
 justify the controlled source of the child token, expected restrictions/groups,
-handle custody, and protection from hostile mutation before wiring can be
-approved. An AccessCheck observation is not a substitute for those prerequisites.
+handle custody and protection from hostile mutation before activation. OFF-only
+wiring still needs a separate review of controlled creation and retained-handle
+custody; it cannot claim resistance to broker-equivalent mutation. An AccessCheck
+observation is not a substitute for those prerequisites.
 
 ## Helper contract
 
@@ -58,8 +60,10 @@ aliases), pseudo/null outputs and failed partial outputs cannot be accepted.
 Distinct real partial output is retired even on failure. The duplicate must pass
 its own metadata, type/level and exact source-user/primary-group equality checks.
 Its one retirement attempt is sticky: an uncertain close refuses success and is
-never retried against a potentially recycled handle. The caller still owns and
-must independently retire the borrowed source.
+never retried against a potentially recycled handle. Trusted native DuplicateTokenEx
+and controlled creation/custody are explicit assumptions; metadata equality alone
+cannot establish full token equivalence. The caller still owns and must independently
+retire the borrowed source.
 
 Three independent in-memory self-relative descriptors have exact owner=user,
 group=primary group, no SACL, and only unflagged `ACCESS_ALLOWED_ACE` entries with
@@ -84,8 +88,12 @@ privilege storage. At most one insufficient-buffer retry is allowed, only for a
 strictly larger size no greater than 4 KiB. Other failure outputs are ignored;
 API failure is never DENY. Successful outputs require bounded privilege extent,
 zero participating privileges, canonical status and exact granted read rights.
-Opaque API/cleanup error text is not printed; numeric classification and
-`errors.Is`/`errors.As` causes are retained. No token identities are logged.
+Outward Error text excludes opaque API/cleanup messages; numeric classification
+and `errors.Is`/`errors.As` causes are retained. Shared query helpers can format
+causes internally, so this is an outward-reporting boundary, not a promise that
+no internal formatting occurs. Callers must not log unwrapped causes. Joined
+opaque variable-query/retirement errors are covered by a typed-cause/redaction
+regression. No token identities are logged.
 
 ## Tests and pending gates
 
@@ -106,8 +114,12 @@ Local validation uses **Go 1.26.10**:
 - formatting and whitespace checks. No workflow change or workflow lint needed.
 
 Compilation/vet do **not** execute the new Windows fake tests or native helper.
-Native Windows execution, a push, and launcher wiring are intentionally pending
-**parent plus independent review**. The next separately reviewed increment must
+Parent full-source and independent security reviews approved `9b190df` for
+unwired/OFF inclusion only; the parent repeated macOS normal/race/vet and Windows
+amd64 compilation/vet (`v05-unwired-lpac-checker-parent-gate`, exit 0). The small
+reporting-boundary follow-up passed the same local gates
+(`v05-lpac-checker-reporting-followup-gate`, exit 0). Native Windows
+execution, a push and launcher wiring remain pending. The next separately reviewed increment must
 establish its deliberate borrowed-token boundary and preservation of all launch
 stops, then obtain actual Windows normal/race/checkptr fake and native evidence
 (including paired controls and independent cleanup). Selector46 remains mandatory

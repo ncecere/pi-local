@@ -584,6 +584,41 @@ func TestWindowsLPACSemanticSDGrammarTruncationAndReordering(t *testing.T) {
 	}
 }
 
+type lpacOpaqueVariableError struct{ message string }
+
+func (e *lpacOpaqueVariableError) Error() string { return e.message }
+
+func TestWindowsLPACSemanticVariableQueryAndCleanupCauses(t *testing.T) {
+	for _, class := range []uint32{windows.TokenUser, windows.TokenPrimaryGroup} {
+		f := newCandidateAccessFake(t, true)
+		baseQuery, baseClose := f.api.query, f.api.close
+		queryError := &lpacOpaqueVariableError{message: "opaque-query-private-text"}
+		cleanupError := errors.New("opaque-cleanup-private-text")
+		f.api.query = func(token windows.Token, c uint32, out *byte, n uint32, used *uint32) error {
+			if token == 12 && c == class {
+				return queryError
+			}
+			return baseQuery(token, c, out, n, used)
+		}
+		f.api.close = func(token windows.Token) error {
+			_ = baseClose(token)
+			return cleanupError
+		}
+		err := verifyWindowsLPACSemantics(10, lpacTestProfile(), lpacTestAPI(f))
+		var typed *lpacOpaqueVariableError
+		if !errors.Is(err, queryError) || !errors.Is(err, cleanupError) || !errors.As(err, &typed) || typed != queryError {
+			t.Fatal("joined variable-query and retirement causes were not retained")
+		}
+		if strings.Contains(err.Error(), queryError.message) || strings.Contains(err.Error(), cleanupError.Error()) {
+			t.Fatal("outward reporting disclosed an opaque cause")
+		}
+		if f.checks != 0 {
+			t.Fatal("failed variable query reached controls")
+		}
+		lpacAssertBorrowed(t, f, 1)
+	}
+}
+
 func TestWindowsLPACSemanticSanitizedErrorsAndOldAuthority(t *testing.T) {
 	injected := errors.New("opaque-private-text")
 	if lpacAccessBOOL(1, injected) != nil || lpacAccessBOOL(0, injected) != injected || lpacAccessBOOL(0, nil) == nil || lpacAccessBOOL(0, windows.ERROR_SUCCESS) == nil || lpacBoundError(nil) != nil {

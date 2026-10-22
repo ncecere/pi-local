@@ -389,8 +389,9 @@ func lpacAccessCheck(sd lpacAccessSD, token windows.Token, api lpacAccessAPI) (b
 	return false, errors.New("process: LPAC semantic retry exhausted")
 }
 
-// Never stringify injected/native opaque errors (they can contain identities).
-// Retain numeric classification and errors.Is/As without exposing their text.
+// Outward Error text excludes opaque API/cleanup messages. Shared query helpers
+// can format causes internally; retained causes remain available to errors.Is/As.
+// Callers must not bypass this reporting boundary by logging an unwrapped cause.
 type lpacAccessError struct{ cause error }
 
 func (e lpacAccessError) Error() string {
