@@ -116,7 +116,21 @@ function strings(value = []) {
 }
 function escapeCache(value) { return value.replace(/[A-Z]/g, c => '!' + c.toLowerCase()); }
 function absolute(value) { need(typeof value === 'string' && path.isAbsolute(value) && path.normalize(value) === value); return value; }
-function sameDir(actual, expected) { need(absolute(actual) === expected); }
+class DirectoryMismatch extends Error {
+  constructor(actual, expected, scope) {
+    super('Invalid Go graph evidence');
+    this.scope = scope;
+    this.caseEquivalent = actual.toLowerCase() === expected.toLowerCase();
+  }
+}
+function sameDir(actual, expected, scope = 'metadata') {
+  actual = absolute(actual);
+  if (actual !== expected) throw new DirectoryMismatch(actual, expected, scope);
+}
+export function diagnosticDirectory(error) {
+  if (!(error instanceof DirectoryMismatch) || !['metadata', 'standard-package', 'module-package'].includes(error.scope) || typeof error.caseEquivalent !== 'boolean') return null;
+  return { scope: error.scope, caseEquivalent: error.caseEquivalent };
+}
 function healthy(record) {
   object(record);
   need(record.Error === undefined && record.Replace === undefined && (record.Incomplete === undefined || record.Incomplete === false));
@@ -194,7 +208,7 @@ export function planGraph(packages, modules, roots) {
     // unsafe is compiler-provided; Go's valid no-Dir/no-files representation
     // must not be "repaired" by guessing a source path.
     if (p.ImportPath === 'unsafe' && !p.Dir) need(standard && files.length === 0);
-    else { sameDir(p.Dir, dir); need(files.length > 0); }
+    else { sameDir(p.Dir, dir, standard ? 'standard-package' : 'module-package'); need(files.length > 0); }
     const imports = strings(p.Imports); for (const id of imports) importID(id);
     if (imports.includes('C')) need(strings(p.CgoFiles).length > 0);
     for (const id of strings(p.Deps)) importID(id);
@@ -388,7 +402,11 @@ export function nativeGraphEvidence(command, target) {
   try { return collectNative(command, target); }
   catch (error) {
     if (process.env.GO_GRAPH_DIAGNOSTICS === '1') {
-      try { console.error(`Native Go graph diagnostic lines: ${diagnosticLines(error).join(',')}`); }
+      try {
+        console.error(`Native Go graph diagnostic lines: ${diagnosticLines(error).join(',')}`);
+        const directory = diagnosticDirectory(error);
+        if (directory) console.error(`Native Go directory diagnostic: ${directory.scope}; case-equivalent=${directory.caseEquivalent}`);
+      }
       catch { /* A diagnostic must not replace the original refusal. */ }
     }
     throw new Error('Native Go graph evidence failed');

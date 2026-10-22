@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { targetDescriptor } from './target-policy.mjs';
-import { artifactSnapshot, assertSnapshot, canonicalJSON, diagnosticLines, evidenceSnapshot, fileTypes, goEnvironment, graphSelection,
+import { artifactSnapshot, assertSnapshot, canonicalJSON, diagnosticDirectory, diagnosticLines, evidenceSnapshot, fileTypes, goEnvironment, graphSelection,
   guardedPath, limits, nativeGraphEvidence, newBudget, observedGo, parseGoJSON, planGraph, publishEvidence,
   readOwnedFile, withModuleGuard } from './go-graph-evidence.mjs';
 
@@ -61,6 +61,23 @@ test('failure diagnostics disclose only bounded source line numbers, never raw e
   assert.equal(JSON.stringify(diagnosticLines(error)).includes('PRIVATE'), false);
   assert.equal(diagnosticLines({ stack: Array(20).fill('at /root/go-graph-evidence.mjs:22:1').join('\n') }).length, 8);
   assert.deepEqual(diagnosticLines({ stack: 'x'.repeat(65536) + '\n at /root/go-graph-evidence.mjs:22:1' }), []);
+});
+
+test('directory diagnostics classify refused metadata without accepting case aliases or exposing paths', () => {
+  assert.equal(diagnosticDirectory(new Error('/private/backend')), null);
+  assert.equal(diagnosticDirectory({ scope: 'metadata', caseEquivalent: true }), null);
+  for (const equivalent of [true, false]) {
+    const b = bundle(), p = b.packages[0];
+    p.GoFiles = ['unsafe.go'];
+    const expected = path.join(b.roots.goroot, 'src/unsafe');
+    p.Dir = equivalent ? expected.toUpperCase() : path.join(b.roots.goroot, 'src/other');
+    assert.throws(() => planGraph(b.packages, b.modules, b.roots), error => {
+      assert.deepEqual(diagnosticDirectory(error), { scope: 'standard-package', caseEquivalent: equivalent });
+      error.scope = '/private/must-not-print';
+      assert.equal(diagnosticDirectory(error), null);
+      return true;
+    });
+  }
 });
 
 test('pure parser consumes actual Go-style adjacent objects, nested braces, strings and escapes', () => {
