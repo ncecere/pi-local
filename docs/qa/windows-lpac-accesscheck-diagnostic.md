@@ -69,3 +69,24 @@ normal/race/vet, Windows amd64 compilation/vet and workflow YAML/actionlint pass
 diagnostic has executed at this stage. Native normal/race/vet remains mandatory
 before interpretation or integration; the original candidate failure is not waived.
 No native acceptance is claimed; this isolated branch is not merged into v0.5.
+
+## First native result: semantic controls pass, mandatory gate remains red
+
+Run [39721890954](https://github.com/ncecere/pi-local/actions/runs/39721890954)
+at `17fdb6b` completed macOS/Linux successfully. Windows normal=1, race=1, vet=0:
+both builds passed the new injected tests and independently selected paired
+reference test. LPAC controls A/B/C were DENY/DENY/ALLOW; ordinary AC controls
+were DENY/ALLOW/ALLOW, with API success and validated outputs in every control.
+The paired test required signaled-and-closed cleanup witnesses, zero resumes,
+original primary-token qualification, exact attribute composition and successful
+owned-profile cleanup. No uncertain-profile preservation message appeared.
+
+The actual candidate also observed DENY/DENY/ALLOW without diagnostic/cleanup
+errors, but its original selector-46 query still returned 87. It therefore failed
+at the first hard-stop case with verified=0/resumed=0, as required. The three-by-three
+mandatory candidate gate is NOT accepted. Successful synthetic permission probes
+are not flag equality, filesystem/network/IPC confinement, Windows 11 desktop
+proof, or execution authorization. A fixed semantic verification contract would
+need separate review; no error-triggered fallback is introduced here.
+
+Full failed-native log: `.cache/lpac-accesscheck-first-native-failure.log`.
