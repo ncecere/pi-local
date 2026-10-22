@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { targetDescriptor } from './target-policy.mjs';
-import { artifactSnapshot, assertSnapshot, canonicalJSON, evidenceSnapshot, fileTypes, goEnvironment, graphSelection,
+import { artifactSnapshot, assertSnapshot, canonicalJSON, diagnosticLines, evidenceSnapshot, fileTypes, goEnvironment, graphSelection,
   guardedPath, limits, nativeGraphEvidence, newBudget, observedGo, parseGoJSON, planGraph, publishEvidence,
   readOwnedFile, withModuleGuard } from './go-graph-evidence.mjs';
 
@@ -53,6 +53,15 @@ function fixture(t) {
   return root;
 }
 const rel = '.cache/licenses/go-graph/linux-amd64/production.json';
+
+test('failure diagnostics disclose only bounded source line numbers, never raw errors or paths', () => {
+  assert.deepEqual(diagnosticLines(null), []);
+  const error = { stack: 'Error: PRIVATE backend data\n at need (file:///private/root/go-graph-evidence.mjs:22:3)\n at plan (C:\\private\\go-graph-evidence.mjs:166:8)\n at other (/private/other.mjs:99:1)\n at invalid (/private/go-graph-evidence.mjs:1000001:1)' };
+  assert.deepEqual(diagnosticLines(error), [22, 166]);
+  assert.equal(JSON.stringify(diagnosticLines(error)).includes('PRIVATE'), false);
+  assert.equal(diagnosticLines({ stack: Array(20).fill('at /root/go-graph-evidence.mjs:22:1').join('\n') }).length, 8);
+  assert.deepEqual(diagnosticLines({ stack: 'x'.repeat(65536) + '\n at /root/go-graph-evidence.mjs:22:1' }), []);
+});
 
 test('pure parser consumes actual Go-style adjacent objects, nested braces, strings and escapes', () => {
   const records = bundle().packages;

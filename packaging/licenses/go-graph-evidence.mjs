@@ -374,9 +374,25 @@ function collectNative(command, target) {
   });
 }
 
+// Diagnostic output is limited to line numbers in this fixed source module.
+// Never print the exception message, raw stack, Go output or absolute paths.
+export function diagnosticLines(error) {
+  if (typeof error?.stack !== 'string') return [];
+  return error.stack.slice(0, 65536).split('\n', 128).flatMap(line => {
+    const match = line.match(/[/\\]go-graph-evidence\.mjs:(\d+):\d+\)?$/);
+    const number = match ? Number(match[1]) : 0;
+    return Number.isSafeInteger(number) && number > 0 && number <= 1000000 ? [number] : [];
+  }).slice(0, 8);
+}
 export function nativeGraphEvidence(command, target) {
   try { return collectNative(command, target); }
-  catch { throw new Error('Native Go graph evidence failed'); }
+  catch (error) {
+    if (process.env.GO_GRAPH_DIAGNOSTICS === '1') {
+      try { console.error(`Native Go graph diagnostic lines: ${diagnosticLines(error).join(',')}`); }
+      catch { /* A diagnostic must not replace the original refusal. */ }
+    }
+    throw new Error('Native Go graph evidence failed');
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

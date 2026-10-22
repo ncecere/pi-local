@@ -87,6 +87,8 @@ jobs:
           (cd runtime && pnpm install --frozen-lockfile && pnpm bundle)
           (cd frontend && pnpm install --frozen-lockfile && pnpm build)
       - name: Offline native production Go graph; assert and repeat bytes
+        env:
+          GO_GRAPH_DIAGNOSTICS: '1'
         run: |
           set -euo pipefail
           node packaging/licenses/go-graph-evidence.mjs write --target linux-amd64
