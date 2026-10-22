@@ -7,8 +7,12 @@ This isolated increment is based on `f776bbd`, on
 for the **still-disabled private own-child primitive**, not for public `Start`,
 execution, runtime integration or a production caller. Acceptance requires full
 parent and independent review of this increment **and an actual native Windows
-run**. Those reviews and that native execution are pending; local cross-builds
-are not acceptance. No push or native CI dispatch was performed here.
+run**. Parent read the complete change. Independent security review `3f80c529`
+approved source inclusion **OFF-only**, with no actionable findings, not native
+acceptance or activation. Parent gate `proc_e6ad` passed process/supervisor/MCP
+normal/race/vet, Windows source checks/vet, actionlint and whitespace checks
+(exit 0). Actual native execution remains pending; local cross-builds are not
+acceptance. The original author did not push or dispatch native CI.
 
 Historical diagnostic commit `17fdb6b`, native run **39721890954**, reported LPAC
 A/B/C **DENY / DENY / ALLOW** versus ordinary AppContainer
@@ -131,8 +135,8 @@ used.
 
 All remain OFF, independently of this contract's eventual native result:
 
-- Parent full-source and independent security review of this increment; native
-  Windows normal, race/checkptr and vet, including the new fake tests, actual
+- Parent and independent source review approved OFF-only inclusion; this does
+  not replace native Windows normal, race/checkptr and vet, including new fake tests, actual
   helper, paired controls, all nine fixture modes and exact cleanup witnesses.
 - Expected groups/restrictions, trusted creation/duplication/custody and a justified
   boundary against hostile broker-equivalent mutation. No arbitrary-token claim.

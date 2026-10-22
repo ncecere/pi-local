@@ -177,18 +177,29 @@ combination are documented in
 [`docs/qa/windows-appcontainer-candidate.md`](../../docs/qa/windows-appcontainer-candidate.md).
 No runtime caller uses this seam.
 
-After suspended creation and exact owned-job verification, the candidate opens
-TOKEN_QUERY through the retained process handle, never the numeric PID.
-Before reaching the common resume gate it requires:
+### Current fixed verification contract (private and still OFF)
+
+The complete explicit query+semantic-checker and source-ownership bundles are
+validated before any borrowed-primary token query. Only the owned-launch boundary
+may deliberately select complete native bundles; partial injections never acquire
+per-field native defaults. After suspended creation and exact owned-job verification,
+the candidate opens TOKEN_QUERY through the retained process handle, never PID,
+adding TOKEN_DUPLICATE up front only for selected LPAC verification. Before the
+common resume gate it requires:
 
 - TokenIsAppContainer (29) = 1 and TokenElevation (20) = 0;
 - TokenAppContainerSid (31) exactly matching the copied profile SID;
 - TokenCapabilities (30) GroupCount = 0 (no network capability);
 - TokenIntegrityLevel (25) with an integrity label exactly S-1-16-4096 (Low);
-- TokenIsLessPrivilegedAppContainer (46) = 1 when LPAC was selected. Unsupported
-  LPAC attributes/queries are refusal, not permission to downgrade.
+- Selected LPAC always invokes the fixed behavioral checker: a distinct owned
+  impersonation duplicate, repeated metadata/identity checks, exact-bound in-memory
+  descriptors and successful AccessCheck A/B/C DENY/DENY/ALLOW. API failures are
+  refusal, never DENY. This is controlled own-child creation evidence, not an
+  arbitrary-token classifier, exact undocumented flag or universal AAP proof.
 
-Fixed fields 29, 20 and 46 use `queryCandidateDWORD`: one direct query into
+Selector46 is no longer an authority or error-triggered fallback. Historical
+queries returned87 for1/4/8; those failures remain historical evidence, not a
+waiver accepted by the new fixture. Fixed fields 29 and20 use `queryCandidateDWORD`: one direct query into
 aligned storage with an exact four-byte extent, requiring both nil error and
 returned length exactly four. Unknown classes, short/zero/oversized results and
 all errors refuse; there is no sizing probe, retry or error-based fallback.
@@ -198,8 +209,12 @@ the existing aligned, at-most-64-KiB allocation, one bounded sizing call and one
 explicit returned-length checks and SDK-shaped native headers. Embedded SIDs
 must fit entirely after their header inside the returned allocation before any
 SID API interprets them. No returned pointers escape verification.
-The query-only token closes on every exit; existing owned-process/job
-termination, reaping, stdio and attribute cleanup cover candidate failures too.
+The checker owns only its distinct duplicate. The launcher retires its source
+exactly once before `beforeResume`, including partial-error output; joined close
+uncertainty refuses. Existing owned-process/job termination, reaping, stdio and
+attribute cleanup still cover candidate failures. Complete contract, custody,
+controlled-creation assumptions and pending native gates are recorded in
+[fixed-verification QA](../../docs/qa/windows-lpac-fixed-verification.md).
 
 **Even a successfully verified candidate is deliberately refused before
 ResumeThread**, with `errWindowsAppContainerExecutionDisabled`. There is no
@@ -210,7 +225,12 @@ No production profile, ACL, named pipe or network mutation is implemented here.
 The test-only owned profile below is not a user profile; no installed executable
 or real credential store is a fixture.
 
-### Prepared tests and missing evidence
+### Historical original selector46 slice: prepared tests and missing evidence
+
+The following preparation/native-attempt notes preserve their historical evidence.
+They do not describe current selector46 authority or count as a pass for the new
+fixed verification contract above; its normal/race/checkptr/vet native gate is
+separate and still pending.
 
 `appcontainer_windows_test.go` has synthetic SID/layout/ownership checks; exact
 zero-capability/LPAC attribute checks; malformed, oversized, truncated and failed
