@@ -15,8 +15,10 @@ A proposal to review, not a commitment. Each item is described in
 - [v0.4.2](docs/qa/v0.4.2.md), a Go 1.26.10 security rebuild, is published with verified public assets and
   fresh immutable-tag post-release E2E.
 - [v0.5 foundations](docs/plans/v0.5.md) remain isolated: portable locks/environment, owned Windows Jobs and initial
-  host/direct-secret contracts are reviewed and native-contract-tested. Linux confinement remains disabled and
-  real vault, desktop, update and packaging gates remain open. Windows/Linux product support is not yet claimed.
+  host/direct-secret contracts are reviewed and native-contract-tested. Build-aware native trust guards and an
+  unwired encrypted-secret core are reviewed/tested; Windows encrypted storage is still unsupported. Linux
+  confinement remains disabled; real vault, desktop, update and packaging gates remain open. Windows/Linux
+  product support is not yet claimed.
 - Only the user decides when to launch v1.0.
 
 The tables below retain proposal scope; release notes and verification records identify what actually ships.

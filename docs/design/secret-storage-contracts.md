@@ -69,14 +69,17 @@ Windows boundaries on any host. The test constructor retains a missing
 backend as unavailable; it cannot fall through to the real vault. Tests do not
 exercise any OS vault or probe a running application or real profile.
 
-## Chosen future direction — NOT implemented
+## Separate encrypted core — still unwired
 
-The next storage layer is intended to use a **profile-local, dedicated encrypted
-SQLite database**, with AES-GCM authenticated rows and a small vault-held key.
-Large values should not become direct-vault records or vault chunks. This
-slice creates no database, encrypted rows, keys, migration, or storage routing.
+A separately reviewed **profile-local, dedicated encrypted SQLite core** now
+exists: see [encrypted-profile-secret-core.md](encrypted-profile-secret-core.md).
+It uses AES-GCM authenticated rows, opaque HMAC lookups and a small injected
+vault-held root key. Darwin/Linux fake-vault contracts are native-tested;
+Windows still refuses before filesystem/vault access. This does not activate
+large OAuth storage or change the direct adapter described above. There is no
+application routing, OS-vault adapter, legacy migration, export or backup wiring.
 
-That future design must include:
+The complete storage lifecycle must implement and preserve:
 
 - Lifecycle locking around provisioning, access, rotation, and shutdown, with
   defined concurrency and crash behavior.
