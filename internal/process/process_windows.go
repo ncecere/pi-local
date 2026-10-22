@@ -36,6 +36,9 @@ func inExactJob(process, job windows.Handle) (bool, error) {
 // Hooks are package-private and only used by native synthetic tests. Production
 // never exposes a suspended process or its handles to a caller.
 type windowsLaunchHooks struct {
+	// Borrowed, never closed here. Test owner must keep it live until synchronous
+	// failure cleanup returns. Zero preserves the ordinary CreateProcessW path.
+	primaryToken     windows.Token
 	fileType         func(windows.Handle) (uint32, error)
 	duplicateStdio   func(windows.Handle) (windows.Handle, error)
 	verify           func(windows.Handle, windows.Handle) (bool, error)
@@ -59,6 +62,23 @@ func startWindows(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks) 
 func startWindowsOwned(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHooks, policy *windowsAppContainerPolicy) (Tree, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if hooks.primaryToken != 0 {
+		if policy == nil {
+			return nil, errors.New("process: borrowed primary token requires AppContainer policy")
+		}
+		// Reject reserved/pseudo values before querying. A real handle must also
+		// name a queryable primary token, not an event, closed token or thread.
+		if uintptr(hooks.primaryToken) >= ^uintptr(0)-15 {
+			return nil, errors.New("process: borrowed primary token is reserved")
+		}
+		var kind, used uint32
+		if err := windows.GetTokenInformation(hooks.primaryToken, windows.TokenType, (*byte)(unsafe.Pointer(&kind)), 4, &used); err != nil {
+			return nil, fmt.Errorf("process: borrowed primary token query: %w", err)
+		}
+		if used != 4 || kind != windows.TokenPrimary {
+			return nil, errors.New("process: borrowed token is not primary")
+		}
 	}
 	descriptor, err := windowsDescriptor(cmd)
 	if err != nil {
@@ -185,12 +205,20 @@ func startWindowsOwned(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHo
 		return nil, err
 	}
 	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_SUSPENDED)
-	err = windows.CreateProcess(descriptor.app, descriptor.argv, nil, nil, true, flags, &descriptor.env[0], descriptor.dir, &si.StartupInfo, &pi)
+	createAPI := "CreateProcessW"
+	if hooks.primaryToken != 0 {
+		createAPI = "CreateProcessAsUserW"
+		// Direct restricted-primary creation: same descriptor, all attributes,
+		// strict stdio and atomic Job membership; no intermediate helper/fallback.
+		err = windows.CreateProcessAsUser(hooks.primaryToken, descriptor.app, descriptor.argv, nil, nil, true, flags, &descriptor.env[0], descriptor.dir, &si.StartupInfo, &pi)
+	} else {
+		err = windows.CreateProcess(descriptor.app, descriptor.argv, nil, nil, true, flags, &descriptor.env[0], descriptor.dir, &si.StartupInfo, &pi)
+	}
 	runtime.KeepAlive(descriptor)
 	runtime.KeepAlive(handles)
 	runtime.KeepAlive(policy)
 	if err != nil {
-		return nil, fmt.Errorf("process: atomic job CreateProcessW: %w", err)
+		return nil, fmt.Errorf("process: atomic job %s: %w", createAPI, err)
 	}
 	verify := inExactJob
 	if hooks.verify != nil {
@@ -222,6 +250,11 @@ func startWindowsOwned(ctx context.Context, cmd *exec.Cmd, hooks windowsLaunchHo
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	// Independent borrowed-token hard stop, even if a future policy change
+	// accidentally bypasses the policy stop below. Never authorize execution.
+	if hooks.primaryToken != 0 {
+		return nil, errWindowsAppContainerExecutionDisabled
 	}
 	if policy != nil {
 		// Deliberately NOT an executable sandbox yet. No private caller can

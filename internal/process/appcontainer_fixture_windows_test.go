@@ -405,11 +405,90 @@ func candidateCopyProbe(t *testing.T, dir string) string {
 	return path
 }
 
+// Read only the newly S_OK-owned profile's intrinsic folder/security metadata,
+// not merely the copied executable fixture. No traversal, ACL repair, label
+// writes or foreign-profile lookup. The returned path is never logged.
+func candidateRecordProfileIntrinsics(t *testing.T, profile *candidateOwnedProfile) {
+	t.Helper()
+	candidateRequireEphemeralWindowsCI(t)
+	if !profile.created || profile.sid == nil || profile.deleted {
+		t.Fatal("profile intrinsic inspection requires live S_OK ownership")
+	}
+	get := windows.NewLazySystemDLL("userenv.dll").NewProc("GetAppContainerFolderPath")
+	if err := get.Find(); err != nil {
+		t.Fatal(err)
+	}
+	wide, err := windows.UTF16PtrFromString(profile.sid.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var folder *uint16
+	hr, _, _ := get.Call(uintptr(unsafe.Pointer(wide)), uintptr(unsafe.Pointer(&folder)))
+	runtime.KeepAlive(wide)
+	if folder != nil {
+		defer windows.CoTaskMemFree(unsafe.Pointer(folder))
+	}
+	if uint32(hr) != 0 || folder == nil {
+		t.Fatalf("owned profile folder HRESULT=0x%08x nonnil=%v", uint32(hr), folder != nil)
+	}
+	h, err := windows.CreateFile(folder, windows.FILE_READ_ATTRIBUTES|windows.READ_CONTROL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := windows.CloseHandle(h); err != nil {
+			t.Error(err)
+		}
+	}()
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		t.Fatal(err)
+	}
+	var fs [32]uint16
+	if err := windows.GetVolumeInformationByHandle(h, nil, 0, nil, nil, nil, &fs[0], uint32(len(fs))); err != nil {
+		t.Fatal(err)
+	}
+	if windows.UTF16ToString(fs[:]) != "NTFS" || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		t.Fatal("owned profile folder must be a non-reparse NTFS directory")
+	}
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.LABEL_SECURITY_INFORMATION)
+	if err != nil || sd == nil {
+		t.Fatalf("owned profile security query failed: %v", err)
+	}
+	control, revision, err := sd.Control()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sacl, _, err := sd.SACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("owned profile intrinsics: NTFS directory attrs=0x%x links=%d securityControl=0x%x revision=%d DACLpresent=%v mandatoryLabelACLpresent=%v (observations, not confinement proof)", info.FileAttributes, info.NumberOfLinks, control, revision, dacl != nil, sacl != nil)
+}
+
 func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 	api, err := candidateNativeProfileAPI(t)
 	if err != nil {
 		t.Fatal(err)
 	}
+	primaryAPI, err := candidatePrimaryNativeAPI(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := candidateAcquirePrimary(primaryAPI)
+	if err != nil {
+		t.Fatal(err)
+	} // strict presence predicate is never waived for CI
+	t.Cleanup(func() {
+		if err := primary.close(); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Log("strict restricted-primary metadata predicate passed; NOT general standard-user or execution authorization")
 	// Bounded repeated profile/create/refuse/reap/delete lifetime, not a full
 	// restricted-launch handle-growth measurement (that remains a future gate).
 	for iteration := 0; iteration < 3; iteration++ {
@@ -434,6 +513,12 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				if createErr != nil {
 					t.Fatal(createErr)
 				}
+				candidateRecordProfileIntrinsics(t, profile)
+				defer func() {
+					if err := primary.witness(); err != nil {
+						t.Error(err)
+					}
+				}()
 				t.Cleanup(func() {
 					// LIFO emergency close never supplies a missing WAIT witness or
 					// clears a previous cleanup error, even if this retry succeeds.
@@ -444,12 +529,17 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				checked, resumed := 0, 0
+				var attributes []uintptr
 				injected := errors.New("injected failure after REAL token/job verification")
 				forbiddenResume := errors.New("FATAL: candidate attempted ResumeThread")
 				cmd := windowsHelperCommand(dir, "hold")
 				cmd.Path, cmd.Args[0] = probe, probe
+				// No inherited provider/vault/CLI environment in this fixture.
+				cmd.Env = []string{"SystemRoot=" + os.Getenv("SystemRoot"), "PL_WINDOWS_JOB_HELPER=1", "PL_WINDOWS_JOB_MODE=hold", "PL_WINDOWS_JOB_DIR=" + dir}
 				cleanup.launchAttempted = true
 				tr, startErr := startWindowsOwned(ctx, cmd, windowsLaunchHooks{
+					primaryToken:    primary.derived.token, // borrowed through synchronous cleanup
+					beforeAttribute: func(attribute uintptr) error { attributes = append(attributes, attribute); return nil },
 					// verify and tokenInformation deliberately nil: REAL APIs.
 					beforeResume: func(pi windows.ProcessInformation, job windows.Handle) error {
 						checked++ // reached ONLY after real exact-job + token gates
@@ -496,6 +586,18 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 						t.Error(err)
 					}
 				}
+				// The launcher must neither close nor replace this borrowed token,
+				// including failure, cancellation and unconditional refusal paths.
+				parentAfter, parentErr := candidateInspectPrimary(primary.derived.token, primaryAPI.query)
+				if parentErr != nil {
+					t.Fatal(parentErr)
+				}
+				if err := candidateQualifyPrimary(parentAfter, primary.original, primary.ordinary); err != nil {
+					t.Fatal(err)
+				}
+				if len(attributes) != 4 || attributes[0] != procThreadAttributeSecurityCapabilities || attributes[1] != procThreadAttributeAllPackagesPolicy || attributes[2] != procThreadAttributeJobList || attributes[3] != windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST {
+					t.Fatalf("required four-attribute composition missing: count=%d", len(attributes))
+				}
 				want := errWindowsAppContainerExecutionDisabled
 				if mode == "cancel" {
 					want = context.Canceled
@@ -503,7 +605,7 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 					want = injected
 				}
 				if tr != nil || checked != 1 || resumed != 0 || startErr != want {
-					t.Fatalf("REAL LPAC gate: tree=%v verified=%d resumed=%d err=%v want exact %v (creation/ACL/unsupported errors are NOT success)", tr, checked, resumed, startErr, want)
+					t.Fatalf("REAL LPAC gate: treeReturned=%v verified=%d resumed=%d err=%v want exact %v (creation/ACL/unsupported errors are NOT success)", tr != nil, checked, resumed, startErr, want)
 				}
 				// Supplemental only: lack of write permission could also prevent a
 				// marker. The counted gate + exact error + no resume + reap prove it.

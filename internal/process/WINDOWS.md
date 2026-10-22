@@ -166,8 +166,19 @@ ALL_APPLICATION_PACKAGES_POLICY (0x2000f), DWORD opt-out=1. Attribute failure ha
 no retry as ordinary AppContainer or Job-only. The original three validated stdio
 duplicates remain the **entire** inherited handle list.
 
-After suspended CreateProcessW and exact owned-job verification, the candidate
-opens TOKEN_QUERY through the retained process handle, never the numeric PID.
+The disabled candidate now also has a private borrowed-primary-token test seam:
+zero still uses CreateProcessW; nonzero requires a real primary handle and a
+non-nil policy, and directly uses CreateProcessAsUserW with the same startup
+attributes, suspension and failure cleanup. The test owner holds/closes that
+token, never the launcher. An independent borrowed-token stop supplements the
+policy stop before ResumeThread. The strict owned-token derivation, privilege
+**presence** predicate, source-backed API review and unproven native attribute
+combination are documented in
+[`docs/qa/windows-appcontainer-candidate.md`](../../docs/qa/windows-appcontainer-candidate.md).
+No runtime caller uses this seam.
+
+After suspended creation and exact owned-job verification, the candidate opens
+TOKEN_QUERY through the retained process handle, never the numeric PID.
 Before reaching the common resume gate it requires:
 
 - TokenIsAppContainer (29) = 1 and TokenElevation (20) = 0;
