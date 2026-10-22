@@ -231,8 +231,13 @@ Already-exists is a failure with no deletion authority. Other outcomes report
 partial-creation uncertainty and the exact name, never blindly delete or scan.
 The returned SID is copied into Go storage before FreeSid. Fake API cases check
 copy survival, collision/uncertain outcome refusal, nil SID, FreeSid/delete error
-propagation, exact-name deletion and idempotence; these Windows-only tests have
-also only been cross-compiled here.
+propagation, exact-name deletion and idempotence. The cleanup guard's fake cases
+also cover attempted launch without a retained handle (token/duplicate failure),
+close without a signaled WAIT witness, signal without close, sticky cleanup
+uncertainty, and signaled-and-closed idempotent deletion. Before any launch attempt,
+S_OK-owned profiles can be deleted even when SID provisioning failed; existing or
+ambiguous creation never grants deletion authority. These Windows-only tests have
+only been cross-compiled here, not executed on the Mac.
 
 The native gate copies the current trusted Go test image into a fresh blank
 owned temp directory, checks NTFS/no-reparse and single-link regular-file status,
@@ -245,8 +250,18 @@ case requires the exact `errWindowsAppContainerExecutionDisabled`, never an
 access-denied, unsupported or generic startup error. The resume witness must
 remain zero and itself cannot execute the target. Only one non-inheritable
 SYNCHRONIZE duplicate is retained; after Start returns it must be signaled and
-explicitly closed before exact-owned-profile deletion. Cleanup errors fail the
-test; uncertain reap/duplicate closure blocks deletion and reports the name.
+explicitly closed before exact-owned-profile deletion. The shared test-only
+cleanup guard starts with no launch attempt and no postlaunch witness; it marks
+the attempt immediately before calling startWindowsOwned. After an attempt,
+deletion requires the retained duplicate's WAIT_OBJECT_0 witness, successful
+close, and no recorded cleanup uncertainty. Cleanup errors fail the test and
+remain sticky even after a successful emergency LIFO close. Synchronous launch
+return alone is not evidence: its failure defer does not report all native
+Terminate/Wait/Close errors. An early token/Create/DuplicateHandle failure with
+no retained witness therefore preserves and reports the exact owned profile,
+while the exact positive LPAC gate still fails. That profile may remain until
+the ephemeral runner is discarded; this is not generalized recovery or a claim
+of leak-free profile cleanup.
 The earliest-marker absence is supplemental, not proof of denied/allowed writes.
 No target instruction is intentionally executed. These repetitions are not a
 restricted-child handle-growth proof or a profile crash-recovery implementation.
@@ -260,12 +275,14 @@ is no System32/runtime fallback. Profile-intrinsic folders and registry access
 also preclude claiming that only fixture files exist.
 
 Mac Go 1.26.10 process/supervisor/MCP normal/race/vet and Windows amd64
-compilation/vet passed; these are local checks only. Baseline native CI **39701058074** ran older commit `10eff97`,
-not these tests: its Windows normal suite passed but Windows race hit checkptr
-in SID.IdentifierAuthority via policy.snapshot. The separate fix from
-`appcontainer-candidate` must be reviewed/merged before native race CI; this
-fixture does not duplicate that production fix. An elevated GHA Windows Server pass would
-still not establish standard-user Windows 11 behavior.
+compilation/vet passed; these are local checks only. Baseline native CI
+**39701058074** ran older commit `10eff97`, not these tests: its Windows normal
+suite passed but Windows race hit checkptr in SID.IdentifierAuthority via
+policy.snapshot. This branch now includes the separate SID helper fix from
+`appcontainer-candidate`; this fixture does not duplicate that production fix.
+Corrected-primitive native CI **39702054324** is separate and does not count as
+native evidence for this fixture or its cleanup guard. An elevated GHA Windows
+Server pass would still not establish standard-user Windows 11 behavior.
 
 ### Blockers before any restricted target may resume
 

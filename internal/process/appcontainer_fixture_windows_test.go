@@ -134,6 +134,101 @@ func (f *candidateOwnedProfile) close() error {
 	return nil
 }
 
+// A synchronous launch error is not evidence that native failure cleanup worked.
+// After any attempt, deletion needs our own signaled-and-closed handle witness.
+type candidateProfileCleanup struct {
+	launchAttempted bool
+	observed        windows.Handle
+	signaled        bool
+	observedClosed  bool
+	cleanupErr      error // sticky: a later successful close cannot erase uncertainty
+}
+
+func (c *candidateProfileCleanup) closeObserved() error {
+	if c.observed == 0 {
+		return nil // lack of a handle is NOT a close or reap witness
+	}
+	if err := windows.CloseHandle(c.observed); err != nil {
+		c.cleanupErr = errors.Join(c.cleanupErr, err)
+		return err
+	}
+	c.observed, c.observedClosed = 0, true
+	return nil
+}
+
+func (c *candidateProfileCleanup) closeProfile(f *candidateOwnedProfile) error {
+	if !f.created || f.deleted {
+		return nil // never acquire authority over an existing/uncertain profile
+	}
+	if c.launchAttempted && (!c.signaled || !c.observedClosed || c.observed != 0 || c.cleanupErr != nil) {
+		return fmt.Errorf("owned profile %s NOT deleted: child reap/duplicate close uncertain (signaled=%v closed=%v): %w", f.name, c.signaled, c.observedClosed, errors.Join(errors.New("launch cleanup uncertainty"), c.cleanupErr))
+	}
+	return f.close()
+}
+
+func TestWindowsAppContainerProfileCleanupGuard(t *testing.T) {
+	cleanupErr := errors.New("injected cleanup failure")
+	for _, tc := range []struct {
+		name       string
+		guard      candidateProfileCleanup
+		hr         uint32
+		wantError  bool
+		wantDelete bool
+	}{
+		{name: "token-failure-no-handle", guard: candidateProfileCleanup{launchAttempted: true}, wantError: true},
+		{name: "duplicate-failure-no-handle", guard: candidateProfileCleanup{launchAttempted: true}, wantError: true},
+		{name: "closed-without-wait", guard: candidateProfileCleanup{launchAttempted: true, observedClosed: true}, wantError: true},
+		{name: "signaled-but-unclosed", guard: candidateProfileCleanup{launchAttempted: true, observed: 123, signaled: true}, wantError: true},
+		{name: "witness-and-closed", guard: candidateProfileCleanup{launchAttempted: true, signaled: true, observedClosed: true}, wantDelete: true},
+		{name: "earlier-cleanup-failure-stays-uncertain", guard: candidateProfileCleanup{launchAttempted: true, signaled: true, observedClosed: true, cleanupErr: cleanupErr}, wantError: true},
+		{name: "no-attempt-created", wantDelete: true},
+		{name: "existing", hr: candidateProfileAlreadyExists},
+		{name: "uncertain-creation", hr: 0x80070005},
+		{name: "ambiguous-success", hr: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := candidateProfilePrefix + "00000000-0000-4000-8000-000000000001"
+			deletes := 0
+			f, _ := candidateCreateProfile(name, candidateProfileAPI{
+				create: func(*uint16, **windows.SID) uint32 { return tc.hr }, // nil SID: provisioning failed before launch
+				delete: func(n *uint16) uint32 {
+					deletes++
+					if windows.UTF16PtrToString(n) != name {
+						t.Fatal("deleted a different profile")
+					}
+					return 0
+				},
+			})
+			for repeat := 0; repeat < 2; repeat++ {
+				if tc.guard.observed == 0 {
+					// Exercise the actual emergency no-handle path: it must not
+					// fabricate either witness or erase earlier cleanup errors.
+					if err := tc.guard.closeObserved(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				err := tc.guard.closeProfile(f)
+				if (err != nil) != tc.wantError {
+					t.Fatalf("cleanup error=%v wantError=%v", err, tc.wantError)
+				}
+				if tc.wantError && (!strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "uncertain")) {
+					t.Fatalf("missing exact name/uncertainty: %v", err)
+				}
+				if tc.guard.cleanupErr != nil && !errors.Is(err, cleanupErr) {
+					t.Fatalf("lost earlier cleanup failure: %v", err)
+				}
+			}
+			wantDeletes := 0
+			if tc.wantDelete {
+				wantDeletes = 1
+			}
+			if deletes != wantDeletes {
+				t.Fatalf("delete calls=%d want=%d", deletes, wantDeletes)
+			}
+		})
+	}
+}
+
 func TestWindowsAppContainerProfileOwnership(t *testing.T) {
 	for _, tc := range []struct {
 		name                               string
@@ -211,7 +306,8 @@ func TestWindowsAppContainerProfileOwnership(t *testing.T) {
 			if frees != wantFrees {
 				t.Fatalf("FreeSid calls=%d want=%d", frees, wantFrees)
 			}
-			if err := f.close(); (err != nil) != tc.deleteFailure {
+			var cleanup candidateProfileCleanup // provisioning failures precede any launch
+			if err := cleanup.closeProfile(f); (err != nil) != tc.deleteFailure {
 				t.Fatalf("cleanup failure not surfaced: %v", err)
 			}
 			wantDeletes := 0
@@ -222,7 +318,7 @@ func TestWindowsAppContainerProfileOwnership(t *testing.T) {
 				t.Fatalf("delete calls=%d want=%d", deletes, wantDeletes)
 			}
 			if !tc.deleteFailure {
-				if err := f.close(); err != nil || deletes != wantDeletes {
+				if err := cleanup.closeProfile(f); err != nil || deletes != wantDeletes {
 					t.Fatal("cleanup was not idempotent")
 				}
 			}
@@ -326,17 +422,11 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 					t.Fatal(err)
 				}
 				profile, createErr := candidateCreateProfile(name, api)
-				var observed windows.Handle
-				reaped := true
-				// Registered BEFORE any process exists. Launch is synchronous and
-				// reaps/closes its resources before return; our duplicate is closed
-				// explicitly below and by the later (LIFO) emergency cleanup.
+				var cleanup candidateProfileCleanup // no attempt and no postlaunch witness yet
+				// Registered BEFORE any process exists. An early launch failure can
+				// leave no duplicate: preserve/report the profile, never infer reap.
 				t.Cleanup(func() {
-					if !reaped || observed != 0 {
-						t.Errorf("profile %s NOT deleted: child reap/duplicate close uncertain", profile.name)
-						return
-					}
-					if err := profile.close(); err != nil {
+					if err := cleanup.closeProfile(profile); err != nil {
 						t.Error(err)
 					}
 				})
@@ -345,12 +435,10 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 					t.Fatal(createErr)
 				}
 				t.Cleanup(func() {
-					if observed != 0 {
-						if err := windows.CloseHandle(observed); err != nil {
-							t.Error(err)
-						} else {
-							observed = 0
-						}
+					// LIFO emergency close never supplies a missing WAIT witness or
+					// clears a previous cleanup error, even if this retry succeeds.
+					if err := cleanup.closeObserved(); err != nil {
+						t.Error(err)
 					}
 				})
 				ctx, cancel := context.WithCancel(context.Background())
@@ -360,6 +448,7 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				forbiddenResume := errors.New("FATAL: candidate attempted ResumeThread")
 				cmd := windowsHelperCommand(dir, "hold")
 				cmd.Path, cmd.Args[0] = probe, probe
+				cleanup.launchAttempted = true
 				tr, startErr := startWindowsOwned(ctx, cmd, windowsLaunchHooks{
 					// verify and tokenInformation deliberately nil: REAL APIs.
 					beforeResume: func(pi windows.ProcessInformation, job windows.Handle) error {
@@ -371,7 +460,8 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 						if event, err := windows.WaitForSingleObject(pi.Process, 0); err != nil || event != uint32(windows.WAIT_TIMEOUT) {
 							return fmt.Errorf("suspended child not live: event=%d err=%v", event, err)
 						}
-						if err := windows.DuplicateHandle(windows.CurrentProcess(), pi.Process, windows.CurrentProcess(), &observed, windows.SYNCHRONIZE, false, 0); err != nil {
+						if err := windows.DuplicateHandle(windows.CurrentProcess(), pi.Process, windows.CurrentProcess(), &cleanup.observed, windows.SYNCHRONIZE, false, 0); err != nil {
+							cleanup.cleanupErr = errors.Join(cleanup.cleanupErr, err)
 							return err
 						}
 						switch mode {
@@ -389,20 +479,21 @@ func TestWindowsAppContainerOwnedLPACSuspended(t *testing.T) {
 				}, &windowsAppContainerPolicy{profileSID: profile.sid, lpac: true})
 				if tr != nil {
 					if err := tr.Close(); err != nil {
-						reaped = false // do not delete a profile after uncertain cleanup
+						cleanup.cleanupErr = errors.Join(cleanup.cleanupErr, err)
 						t.Error(err)
 					}
 				}
 				// Check reap BEFORE asserting launch result, including failed cases.
-				if observed != 0 {
-					if event, err := windows.WaitForSingleObject(observed, 0); err != nil || event != windows.WAIT_OBJECT_0 {
-						reaped = false
-						t.Errorf("hard-stop/cancel/failure did not reap: event=%d err=%v", event, err)
-					}
-					if err := windows.CloseHandle(observed); err != nil {
-						t.Error(err)
+				if cleanup.observed != 0 {
+					if event, err := windows.WaitForSingleObject(cleanup.observed, 0); err != nil || event != windows.WAIT_OBJECT_0 {
+						waitErr := fmt.Errorf("hard-stop/cancel/failure did not reap: event=%d err=%v", event, err)
+						cleanup.cleanupErr = errors.Join(cleanup.cleanupErr, waitErr)
+						t.Error(waitErr)
 					} else {
-						observed = 0
+						cleanup.signaled = true // only this retained-handle WAIT is evidence
+					}
+					if err := cleanup.closeObserved(); err != nil {
+						t.Error(err)
 					}
 				}
 				want := errWindowsAppContainerExecutionDisabled
