@@ -269,7 +269,13 @@ func (r modelRun) publish(a modelRecord) error {
 	return r.acknowledge(a)
 }
 
-func (m *authorityModel) open(ctx context.Context, ref, alias string, fault modelFault) (_ *modelGrant, result error) {
+func (m *authorityModel) open(ctx context.Context, ref, alias string, fault modelFault) (*modelGrant, error) {
+	return m.openWithAdmission(ctx, ref, alias, fault, nil)
+}
+
+// admissibleDir sees only the injected Aliases identity, NOT a filesystem lookup
+// or proof of root existence/freshness. Nil preserves the original admission.
+func (m *authorityModel) openWithAdmission(ctx context.Context, ref, alias string, fault modelFault, admissibleDir func(string) bool) (_ *modelGrant, result error) {
 	if !modelValidRef(ref) {
 		return nil, modelRefused
 	}
@@ -289,7 +295,7 @@ func (m *authorityModel) open(ctx context.Context, ref, alias string, fault mode
 		r.event(w, "acquire:reference")
 		// Alias resolution is only an injected observation after reference lease.
 		r.dir = w.Aliases[alias]
-		if r.dir == "" {
+		if r.dir == "" || admissibleDir != nil && !admissibleDir(r.dir) {
 			result = modelRefused
 			return
 		}
