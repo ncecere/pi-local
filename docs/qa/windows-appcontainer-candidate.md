@@ -133,11 +133,19 @@ exact profile SID, no capabilities, Low integrity and LPAC before refusal.
 The retained SYNCHRONIZE witness must be signaled and closed before profile
 deletion; uncertain early failures still preserve/report the exact name.
 
-Intended hosted gates, unchanged workflow: full process/supervisor/MCP normal,
-race and vet on macOS, Linux and Windows. Local Mac checks and Windows cross
-compilation are not native token/profile/attribute evidence. No native Windows
-execution has been performed for this slice. Parent review and a separate
-workflow branch-filter change must precede any native run.
+The parent repeated Mac process/supervisor/MCP normal/race tests and vet,
+Windows compilation/vet, whitespace and clean-source checks at `37cea8b`
+(`v05-asuser-suspended-fixture-parent-gate`, exit 0). These do not execute the
+new Windows native or fake cases. Independent security review approved only
+the OFF suspended slice and repeated local normal/race/vet and Windows
+compilation/vet successfully. Native token/profile/attribute evidence still
+requires a deliberate push and successful native run.
+
+The workflow now explicitly selects this isolated branch and runs the full
+process/supervisor/MCP normal, race and vet suites on macOS, Linux and Windows.
+All three commands are attempted even after a failure; saved exit codes are
+aggregated, and any nonzero result fails the gate. No native Windows execution
+has yet been performed for this slice.
 
 Actual restricted execution, filesystem grants/Low labels, network/loopback and
 broker/control IPC denial, restricted descendant teardown/resource growth,
