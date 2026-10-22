@@ -3,6 +3,7 @@
 package process
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"runtime"
@@ -57,14 +58,29 @@ func (p *windowsAppContainerPolicy) snapshot() (*windowsAppContainerPolicy, erro
 	// Profile SIDs are S-1-15-2 + seven moniker hash DWORDs, not the broad
 	// ALL APPLICATION PACKAGES SID or a capability SID. Input is private,
 	// trusted memory, not a caller-provided native address.
-	if sid == nil || !sid.IsValid() || sid.IdentifierAuthority().Value != [6]byte{0, 0, 0, 0, 0, 15} || sid.SubAuthorityCount() != 8 || sid.SubAuthority(0) != 2 {
+	if sid == nil || !sid.IsValid() || sid.Len() < 8 || sid.Len() > 68 {
 		return nil, errors.New("process: candidate requires an exact profile SID")
 	}
 	owned, err := sid.Copy() // Go-owned copy, never FreeSid/LocalFree this memory
 	if err != nil {
 		return nil, err
 	}
+	// Copy establishes Go-owned storage of exactly Len bytes. The BOOL/DWORD
+	// SID APIs above do not return interior pointers into that allocation.
+	data := unsafe.Slice((*byte)(unsafe.Pointer(owned)), owned.Len())
+	if !candidateSIDMatches(data, [6]byte{0, 0, 0, 0, 0, 15}, 8, 2) {
+		return nil, errors.New("process: candidate requires an exact profile SID")
+	}
 	return &windowsAppContainerPolicy{profileSID: owned, lpac: p.lpac}, nil
+}
+
+// Read only an exact, bounded canonical SID span. Do not use x/sys SID
+// metadata helpers: their native uintptr-to-pointer returns lose Go allocation
+// provenance under checkptr when the SID resides in Go-owned storage.
+func candidateSIDMatches(data []byte, authority [6]byte, count byte, first uint32) bool {
+	return count > 0 && count <= 15 && len(data) == 8+4*int(count) &&
+		data[0] == 1 && data[1] == count && [6]byte(data[2:8]) == authority &&
+		binary.LittleEndian.Uint32(data[8:12]) == first
 }
 
 func (p *windowsAppContainerPolicy) install(update func(uintptr, unsafe.Pointer, uintptr) error) error {
@@ -126,7 +142,7 @@ func (b windowsTokenBuffer) dword() (uint32, error) {
 	return *(*uint32)(unsafe.Pointer(&b.words[0])), nil
 }
 
-func (b windowsTokenBuffer) boundedSID(sid *windows.SID, header uintptr) (*windows.SID, error) {
+func (b windowsTokenBuffer) boundedSID(sid *windows.SID, header uintptr) ([]byte, error) {
 	data := b.bytes()
 	base := uintptr(unsafe.Pointer(&data[0]))
 	address := uintptr(unsafe.Pointer(sid))
@@ -144,11 +160,12 @@ func (b windowsTokenBuffer) boundedSID(sid *windows.SID, header uintptr) (*windo
 	if data[offset] != 1 || count > 15 || uintptr(len(data))-offset < 8+4*uintptr(count) {
 		return nil, errors.New("process: truncated or invalid token SID")
 	}
-	owned := (*windows.SID)(unsafe.Pointer(&data[offset]))
-	if !owned.IsValid() {
+	end := offset + 8 + 4*uintptr(count)
+	span := data[offset:end:end]
+	if !(*windows.SID)(unsafe.Pointer(&span[0])).IsValid() {
 		return nil, errors.New("process: invalid token SID")
 	}
-	return owned, nil
+	return span, nil
 }
 
 func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppContainerPolicy, query windowsTokenInformation) error {
@@ -184,7 +201,7 @@ func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppConta
 	if err != nil {
 		return err
 	}
-	if !sid.Equals(policy.profileSID) {
+	if !(*windows.SID)(unsafe.Pointer(&sid[0])).Equals(policy.profileSID) {
 		return errors.New("process: token profile SID mismatch")
 	}
 	runtime.KeepAlive(container)
@@ -210,7 +227,7 @@ func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppConta
 	if err != nil {
 		return err
 	}
-	if label.Label.Attributes&windows.SE_GROUP_INTEGRITY == 0 || sid.IdentifierAuthority() != windows.SECURITY_MANDATORY_LABEL_AUTHORITY || sid.SubAuthorityCount() != 1 || sid.SubAuthority(0) != 0x1000 {
+	if label.Label.Attributes&windows.SE_GROUP_INTEGRITY == 0 || !candidateSIDMatches(sid, [6]byte{0, 0, 0, 0, 0, 16}, 1, 0x1000) {
 		return errors.New("process: token integrity is not Low")
 	}
 	runtime.KeepAlive(integrity)
