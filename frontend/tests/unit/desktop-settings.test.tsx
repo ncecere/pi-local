@@ -93,21 +93,33 @@ it('preserves supported macOS toggles, labels, focus, and the rest of About', as
   ]);
 });
 
-it('disables during a supported mutation and keeps failure feedback/rollback', async () => {
+it('keeps pending controls focusable, blocks repeat mutations, and rolls back errors', async () => {
   let reject: ((error: Error) => void) | undefined;
-  await show(
+  const backend = await show(
     SUPPORTED,
     () =>
       new Promise((_, fail) => {
         reject = fail;
       }),
   );
+  toggle()?.focus();
+  const focused = toggle();
   await click(toggle());
-  expect(toggle()?.disabled).toBe(true);
+  // Native disabled would blur the browser button. aria-disabled announces the
+  // busy control while preserving focus; both switch and handler guard repeats.
+  expect(toggle()?.disabled).toBe(false);
+  expect(toggle()?.getAttribute('aria-disabled')).toBe('true');
+  expect(toggle()?.getAttribute('aria-busy')).toBe('true');
+  expect(document.activeElement).toBe(focused);
   expect(toggle()?.getAttribute('aria-checked')).toBe('true');
+  await click(toggle());
+  expect(backend.calls.filter((call) => call.method === 'PUT')).toHaveLength(1);
   await act(async () => reject?.(new ApiError(500, 'internal', 'Synthetic startup failure.')));
   await settle();
   expect(toggle()?.disabled).toBe(false);
+  expect(toggle()?.getAttribute('aria-disabled')).toBe('false');
+  expect(toggle()?.getAttribute('aria-busy')).toBe('false');
+  expect(document.activeElement).toBe(focused);
   expect(toggle()?.getAttribute('aria-checked')).toBe('false');
   expect(toast.error).toHaveBeenCalledWith('Synthetic startup failure.');
 });

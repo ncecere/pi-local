@@ -40,11 +40,13 @@ function DesktopSection() {
       >
         <Switch
           checked={supported && desktop.data.launchAtLogin}
-          disabled={!supported || setLaunch.isPending}
+          disabled={!supported}
+          aria-disabled={!supported || setLaunch.isPending}
+          aria-busy={setLaunch.isPending}
           aria-labelledby="launch-at-login-label"
           aria-describedby="launch-at-login-description"
           onCheckedChange={(on) => {
-            if (!supported) return;
+            if (!supported || setLaunch.isPending) return;
             setLaunch.mutate(on, {
               onError: (error) =>
                 toast.error(errorMessage(error, 'The setting could not be changed.')),
