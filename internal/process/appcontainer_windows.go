@@ -100,6 +100,18 @@ func (p *windowsAppContainerPolicy) install(update func(uintptr, unsafe.Pointer,
 
 type windowsTokenInformation func(windows.Token, uint32, *byte, uint32, *uint32) error
 
+// Complete private verification contract. No field acquires a native default.
+// Only the owned-launch boundary may deliberately select native dependencies.
+// The checker borrows source; it owns/retire only its distinct duplicate.
+type windowsAppContainerVerification struct {
+	query     windowsTokenInformation
+	checkLPAC func(windows.Token, []byte) error
+}
+
+func (v *windowsAppContainerVerification) complete() bool {
+	return v != nil && v.query != nil && v.checkLPAC != nil
+}
+
 // Word backing provides native alignment, with a bounded exact byte extent.
 // Embedded PSIDs are validated inside this same buffer before any SID API call.
 type windowsTokenBuffer struct {
@@ -111,6 +123,28 @@ func (b windowsTokenBuffer) bytes() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&b.words[0])), int(b.size))
 }
 
+// These SDK fields are DWORDs (TOKEN_ELEVATION contains one DWORD). A null,
+// zero-length probe is not portable across classes: TokenElevation can return
+// ERROR_BAD_LENGTH. Query once into aligned storage with an exact four-byte
+// extent; no probe, retry, or error-based fallback may turn failure into success.
+func queryCandidateDWORD(token windows.Token, class uint32, query windowsTokenInformation) (windowsTokenBuffer, error) {
+	switch class {
+	case tokenIsAppContainer, windows.TokenElevation, tokenIsLessPrivilegedAppContainer:
+	default:
+		return windowsTokenBuffer{}, fmt.Errorf("process: token class %d is not a candidate DWORD", class)
+	}
+	b := windowsTokenBuffer{words: make([]uintptr, 1), size: 4}
+	var returned uint32
+	if err := query(token, class, &b.bytes()[0], b.size, &returned); err != nil {
+		return windowsTokenBuffer{}, fmt.Errorf("process: token class %d DWORD query: %w", class, err)
+	}
+	if returned != b.size {
+		return windowsTokenBuffer{}, fmt.Errorf("process: token class %d invalid DWORD returned size: %d", class, returned)
+	}
+	return b, nil
+}
+
+// Only variable-sized TOKEN_GROUPS and SID-bearing layouts use a sizing probe.
 func queryCandidateToken(token windows.Token, class uint32, query windowsTokenInformation) (windowsTokenBuffer, error) {
 	var needed uint32
 	if err := query(token, class, nil, 0, &needed); !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
@@ -168,10 +202,14 @@ func (b windowsTokenBuffer) boundedSID(sid *windows.SID, header uintptr) ([]byte
 	return span, nil
 }
 
-func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppContainerPolicy, query windowsTokenInformation) error {
-	if query == nil {
-		query = windows.GetTokenInformation // advapi32 via x/sys SystemDLL, not PATH
+func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppContainerPolicy, dependencies *windowsAppContainerVerification) error {
+	if !dependencies.complete() {
+		return errors.New("process: incomplete AppContainer verification dependencies")
 	}
+	if policy == nil || policy.profileSID == nil {
+		return errors.New("process: AppContainer verification requires policy")
+	}
+	query := dependencies.query
 	for _, check := range []struct {
 		class uint32
 		want  uint32
@@ -179,7 +217,7 @@ func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppConta
 		{tokenIsAppContainer, 1},
 		{windows.TokenElevation, 0},
 	} {
-		b, err := queryCandidateToken(token, check.class, query)
+		b, err := queryCandidateDWORD(token, check.class, query)
 		if err != nil {
 			return err
 		}
@@ -232,14 +270,10 @@ func verifyWindowsAppContainerToken(token windows.Token, policy *windowsAppConta
 	}
 	runtime.KeepAlive(integrity)
 	if policy.lpac {
-		b, err := queryCandidateToken(token, tokenIsLessPrivilegedAppContainer, query)
-		if err != nil {
-			return err // unsupported query is refusal, never an AC fallback
-		}
-		got, err := b.dword()
-		if err != nil || got != 1 {
-			return fmt.Errorf("process: token is not LPAC: value=%d layout=%v", got, err)
-		}
+		// Fixed authority for controlled own-child creation, never selector46 or
+		// an error-based fallback. Metadata success cannot waive this call.
+		profile := unsafe.Slice((*byte)(unsafe.Pointer(policy.profileSID)), policy.profileSID.Len())
+		return dependencies.checkLPAC(token, profile)
 	}
 	return nil
 }

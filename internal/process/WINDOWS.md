@@ -166,33 +166,73 @@ ALL_APPLICATION_PACKAGES_POLICY (0x2000f), DWORD opt-out=1. Attribute failure ha
 no retry as ordinary AppContainer or Job-only. The original three validated stdio
 duplicates remain the **entire** inherited handle list.
 
-After suspended CreateProcessW and exact owned-job verification, the candidate
-opens TOKEN_QUERY through the retained process handle, never the numeric PID.
-Before reaching the common resume gate it requires:
+The disabled candidate now also has a private borrowed-primary-token test seam:
+zero still uses CreateProcessW; nonzero requires a real primary handle and a
+non-nil policy, and directly uses CreateProcessAsUserW with the same startup
+attributes, suspension and failure cleanup. The test owner holds/closes that
+token, never the launcher. An independent borrowed-token stop supplements the
+policy stop before ResumeThread. The strict owned-token derivation, privilege
+**presence** predicate, source-backed API review and unproven native attribute
+combination are documented in
+[`docs/qa/windows-appcontainer-candidate.md`](../../docs/qa/windows-appcontainer-candidate.md).
+No runtime caller uses this seam.
+
+### Current fixed verification contract (private and still OFF)
+
+The complete explicit query+semantic-checker and source-ownership bundles are
+validated before any borrowed-primary token query. Only the owned-launch boundary
+may deliberately select complete native bundles; partial injections never acquire
+per-field native defaults. After suspended creation and exact owned-job verification,
+the candidate opens TOKEN_QUERY through the retained process handle, never PID,
+adding TOKEN_DUPLICATE up front only for selected LPAC verification. Before the
+common resume gate it requires:
 
 - TokenIsAppContainer (29) = 1 and TokenElevation (20) = 0;
 - TokenAppContainerSid (31) exactly matching the copied profile SID;
 - TokenCapabilities (30) GroupCount = 0 (no network capability);
 - TokenIntegrityLevel (25) with an integrity label exactly S-1-16-4096 (Low);
-- TokenIsLessPrivilegedAppContainer (46) = 1 when LPAC was selected. Unsupported
-  LPAC attributes/queries are refusal, not permission to downgrade.
+- Selected LPAC always invokes the fixed behavioral checker: a distinct owned
+  impersonation duplicate, repeated metadata/identity checks, exact-bound in-memory
+  descriptors and successful AccessCheck A/B/C DENY/DENY/ALLOW. API failures are
+  refusal, never DENY. This is controlled own-child creation evidence, not an
+  arbitrary-token classifier, exact undocumented flag or universal AAP proof.
 
-Token queries use an aligned, at-most-64-KiB allocation, one bounded sizing call
-and one fetch, explicit returned-length checks, and SDK-shaped native headers.
-Embedded SIDs must fit entirely after their header inside the returned allocation
-before any SID API interprets them. No returned pointers escape verification.
-The query-only token closes on every exit; existing owned-process/job
-termination, reaping, stdio and attribute cleanup cover candidate failures too.
+Selector46 is no longer an authority or error-triggered fallback. Historical
+queries returned87 for1/4/8; those failures remain historical evidence, not a
+waiver accepted by the new fixture. Fixed fields 29 and20 use `queryCandidateDWORD`: one direct query into
+aligned storage with an exact four-byte extent, requiring both nil error and
+returned length exactly four. Unknown classes, short/zero/oversized results and
+all errors refuse; there is no sizing probe, retry or error-based fallback.
+TOKEN_ELEVATION contains one DWORD, not a variable-size token record. Only
+TOKEN_GROUPS (capabilities), TOKEN_APPCONTAINER_INFORMATION and integrity use
+the existing aligned, at-most-64-KiB allocation, one bounded sizing call and one fetch, with
+explicit returned-length checks and SDK-shaped native headers. Embedded SIDs
+must fit entirely after their header inside the returned allocation before any
+SID API interprets them. No returned pointers escape verification.
+The checker owns only its distinct duplicate. The launcher retires its source
+exactly once before `beforeResume`, including partial-error output; joined close
+uncertainty refuses. Existing owned-process/job termination, reaping, stdio and
+attribute cleanup still cover candidate failures. Complete contract, custody,
+controlled-creation assumptions and pending native gates are recorded in
+[fixed-verification QA](../../docs/qa/windows-lpac-fixed-verification.md).
 
 **Even a successfully verified candidate is deliberately refused before
 ResumeThread**, with `errWindowsAppContainerExecutionDisabled`. There is no
 switch or environment variable that enables execution. This hard stop is needed
 because zero capabilities alone do not establish the required network/IPC and
 filesystem boundary. In particular loopback exemptions have not been queried.
-No candidate profile, ACL, named pipe or network mutation is implemented here.
-No user profile, installed executable or real credential store is a fixture.
+No production profile, ACL, named pipe or network mutation is implemented here.
+The test-only owned profile below is not a user profile; no installed executable
+or real credential store is a fixture.
 
-### Prepared tests and missing evidence
+### Historical original selector46 slice: prepared tests and missing evidence
+
+The following preparation/native-attempt notes preserve their historical evidence.
+They do not describe current selector46 authority or count as a pass for the new
+fixed verification contract above. Its separate native gate 39727836384 at
+`4311092` passed normal/race/checkptr/vet, including all nine suspended cases and
+both paired controls. Both execution stops remain unconditional; details and
+remaining confinement/activation gates are in the fixed-verification QA above.
 
 `appcontainer_windows_test.go` has synthetic SID/layout/ownership checks; exact
 zero-capability/LPAC attribute checks; malformed, oversized, truncated and failed
@@ -201,11 +241,15 @@ and LPAC refusal; invalid embedded SID bounds; and required-attribute failures
 before target creation/stdio duplication with no marker. A native ordinary-child
 negative control queries its retained token while suspended, refuses it as not
 AppContainer, and checks that ordinary launch still has exactly two attributes
-and no earliest child marker. The existing Job suite still supplies
+and no earliest child marker. It also directly reads the suspended child's real
+TokenElevation DWORD through that retained handle; ordinary elevation is logged,
+not required to be zero (CI may be elevated). The real LPAC gate still requires
+TokenElevation = 0. The existing Job suite still supplies
 verify/membership/cancel/resume, strict handle inheritance, descendants, abrupt
 owner death, Unicode and cleanup regressions. Synthetic token buffers are **not**
-observations of a real AppContainer token. The candidate restricted-child token
-path and its resource lifetime still need native fixture coverage.
+observations of a real AppContainer token. The real restricted-child token path
+now has the suspended-only fixture below; its first native attempt failed before
+full token verification, and corrected native execution remains pending.
 
 Run the existing native gate above, or focus on this first slice with:
 
@@ -237,16 +281,127 @@ negative control alongside existing owned-Job regressions. No real restricted
 profile/token or successful restricted-child execution was exercised. These
 results supersede the initial compile-only evidence, not the blockers below.
 
+### Historical owned-profile fixture preparation (later native result above)
+
+`appcontainer_fixture_windows_test.go` binds userenv through SystemDLL, interprets
+low-32-bit HRESULTs (not GetLastError), and passes NULL capabilities/count zero.
+Only ephemeral GitHub-hosted Windows CI may invoke these bindings. Each subtest
+uses a random UUID-v4 `pi-local-ci-v05-` name; only S_OK establishes ownership.
+Already-exists is a failure with no deletion authority. Other outcomes report
+partial-creation uncertainty and the exact name, never blindly delete or scan.
+The returned SID is copied into Go storage before FreeSid. Fake API cases check
+copy survival, collision/uncertain outcome refusal, nil SID, FreeSid/delete error
+propagation, exact-name deletion and idempotence. The cleanup guard's fake cases
+also cover attempted launch without a retained handle (token/duplicate failure),
+close without a signaled WAIT witness, signal without close, sticky cleanup
+uncertainty, and signaled-and-closed idempotent deletion. Before any launch attempt,
+S_OK-owned profiles can be deleted even when SID provisioning failed; existing or
+ambiguous creation never grants deletion authority. These Windows-only tests have
+only been cross-compiled here, not executed on the Mac.
+
+The native gate copies the current trusted Go test image into a fresh blank
+owned temp directory, checks NTFS/no-reparse and single-link regular-file status,
+and changes no ACLs (especially not on the original image or its parents).
+On success, three bounded repetitions each exercise zero-capability LPAC
+hard-stop, post-verification cancellation and injected failure. After the first
+failed subtest (including cleanup failure), the already-failed parent returns
+without provisioning further profiles; the failed gate is not skipped or passed.
+Job/token hooks are nil:
+`beforeResume` must be reached **exactly once after real job/token validation**,
+with real exact-job recheck and a still-live suspended process. The hard-stop
+case requires the exact `errWindowsAppContainerExecutionDisabled`, never an
+access-denied, unsupported or generic startup error. The resume witness must
+remain zero and itself cannot execute the target. Only one non-inheritable
+SYNCHRONIZE duplicate is retained; after Start returns it must be signaled and
+explicitly closed before exact-owned-profile deletion. The shared test-only
+cleanup guard starts with no launch attempt and no postlaunch witness; it marks
+the attempt immediately before calling startWindowsOwned. After an attempt,
+deletion requires the retained duplicate's WAIT_OBJECT_0 witness, successful
+close, and no recorded cleanup uncertainty. Cleanup errors fail the test and
+remain sticky even after a successful emergency LIFO close. Synchronous launch
+return alone is not evidence: its failure defer does not report all native
+Terminate/Wait/Close errors. An early token/Create/DuplicateHandle failure with
+no retained witness therefore preserves and reports the exact owned profile,
+while the exact positive LPAC gate still fails. That profile may remain until
+the ephemeral runner is discarded; this is not generalized recovery or a claim
+of leak-free profile cleanup.
+The earliest-marker absence is supplemental, not proof of denied/allowed writes.
+No target instruction is intentionally executed. These repetitions are not a
+restricted-child handle-growth proof or a profile crash-recovery implementation.
+
+No image-read grants have been added. Initial suspended image mapping succeeded
+in the first native attempt described below, but that is not an image-read or
+filesystem access proof for other environments. ACCESS_DENIED must fail this
+candidate gate; if encountered, the next reviewed step is minimum profile-SID
+RX/Low-label ACLs on only a new fixture, not broad grants or waiving the positive
+token gate.
+This proves neither filesystem/network isolation nor shell compatibility; there
+is no System32/runtime fallback. Profile-intrinsic folders and registry access
+also preclude claiming that only fixture files exist.
+
+Mac Go 1.26.10 process/supervisor/MCP normal/race/vet and Windows amd64
+compilation/vet passed; these are local checks only. Baseline native CI
+**39701058074** ran older commit `10eff97`, not these tests: its Windows normal
+suite passed but Windows race hit checkptr in SID.IdentifierAuthority via
+policy.snapshot. This branch now includes the separate SID helper fix from
+`appcontainer-candidate`; this fixture does not duplicate that production fix.
+Corrected-primitive native CI **39702054324** is separate and does not count as
+native evidence for this fixture or its cleanup guard. An elevated GHA Windows
+Server pass would still not establish standard-user Windows 11 behavior.
+
+Independent review found an early-failure cleanup flaw: the first fixture version
+assumed reap until a duplicate was obtained. Correction `1f1dd0f` requires the
+explicit postlaunch witnesses described above; bounded re-review closed that
+finding. The parent repeated Mac normal/race/vet and Windows compilation/vet
+checks after the correction (`v05-owned-profile-cleanup-parent-gate`, exit 0).
+None of those checks executed Windows-only fixture cases.
+
+### First native fixture failure and fixed-size query correction
+
+Native CI **39702898481** on `4d9168c` passed Mac/Linux normal, race and vet,
+but Windows normal failed the real LPAC fixture; Windows race/vet did not run
+after that failure. All nine profile creations returned S_OK. The suspended
+atomic CreateProcessW, exact-job check and TokenIsAppContainer = 1 check were
+reached successfully, then the zero-length TokenElevation (20) sizing probe
+returned ERROR_BAD_LENGTH (24). Every subtest reported verified-callback = 0
+and resume-witness = 0. No real profile-SID equality, capability count, Low
+integrity or LPAC flag (46) verification was reached, nor a successful complete
+LPAC token gate, retained-handle reap witness or exact-name profile deletion.
+The cleanup guard correctly preserved/reported all nine exact owned profiles
+because their postlaunch reap/close witnesses were missing; ephemeral runner
+discard, not recovery cleanup, was the remaining boundary.
+
+The correction separates fixed DWORD queries from variable records rather than
+accepting ERROR_BAD_LENGTH or omitting elevation. The model deliberately returns
+ERROR_BAD_LENGTH to zero-length fixed-field probes; contract tests require one
+non-nil, aligned four-byte query, nil error and exact returned length. Failure
+cases retain unsupported/denied/bad-length, changed-size, truncated/zero and
+overreported refusal, including valid bytes plus an error. Existing bounded
+variable/SID checks and checkptr-compatible SID parsing remain unchanged.
+Microsoft's [TOKEN_ELEVATION layout](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-token_elevation)
+is one DWORD; pinned x/sys v0.49.0 `Token.IsElevated` likewise queries a direct
+uint32 buffer and checks its returned size (its Boolean failure folding is not
+used here).
+
+Local Go 1.26.10 checks for this correction exited 0: Mac process/supervisor/MCP
+normal tests, race tests and vet (`v05-dword-mac-gate`), plus Windows amd64
+compilation with `go test -exec=true` and vet (`v05-dword-final-windows-cross-gate`).
+No Windows tests executed locally, and no checkptr/race checks were disabled.
+
+Corrected native Windows normal/race/vet execution remains pending parent review
+and bounded security review. Local compilation does not verify these token or
+fixture cases. Fixture changes stay isolated on `v05/appcontainer-fixtures`;
+this is not approval to enable the candidate or merge fixtures into v0.5.
+
 ### Blockers before any restricted target may resume
 
 All of the following remain unimplemented/unproven, not silently weakened:
 
-- Disposable Windows-only fixture provisioning in `*_windows_test.go`: fresh
-  GUID profile names, zero capabilities, HRESULT handling (not GetLastError),
-  refuse existing profiles, copy the returned SID before FreeSid, delete only
-  the exact owned profile after job termination/reap, and report cleanup errors.
-  A trusted parent must retain the exact generated name for explicit crash
-  cleanup; no profile reuse, foreign deletion, scanning or orphan recovery.
+- Profile/crash recovery beyond the passing suspended contract: the native gate
+  establishes suspended creation and witnessed exact-name cleanup, not generalized
+  image-read access or crash recovery. Crash cleanup still needs a trusted parent's
+  retained exact generated name; no profile reuse, foreign deletion, scanning or
+  orphan recovery is implemented.
 - Fresh private single-link/no-reparse NTFS fixtures only: a copied static Go
   helper exe (RX), blank workspace/temp (RW), and minimum SID ACLs plus Low
   integrity labels before target access. Never rewrite the existing test exe,
@@ -288,8 +443,10 @@ Additional sources inspected for this slice:
   and [TOKEN_INFORMATION_CLASS](https://learn.microsoft.com/windows/win32/api/winnt/ne-winnt-token_information_class):
   query-only access, buffer contracts, token classes and LPAC definition.
 - [CreateAppContainerProfile](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-createappcontainerprofile):
-  HRESULT, existing-profile refusal and FreeSid ownership (future test-only
-  fixture work; this API is not bound or called by this slice).
+  HRESULT, existing-profile refusal and FreeSid ownership (now bound only by the
+  CI-only test fixture; not a production facility or a native pass).
+- [DeleteAppContainerProfile](https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-deleteappcontainerprofile):
+  exact-name profile deletion and HRESULT failure reporting.
 
 ## Sources inspected
 
