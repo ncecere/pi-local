@@ -173,6 +173,13 @@ app does not expose this loopback HTTP server.
 The Go tests run the real runtime against fake model providers (OpenAI and Anthropic wire formats), fake MCP servers
 (stdio and OAuth) and a scripted model that calls tools, and they never touch the real keychain.
 
+## Phase 1 target build evidence (v0.5 work)
+
+Explicit native Windows/Linux target receipts are build evidence only, not legal inventories or distribution
+readiness. The default Darwin notices and packaging remain unchanged. See [receipt scope and commands](packaging/licenses/README.md#phase-1-target-build-evidence-only)
+and [verification and pending native gates](docs/qa/v0.5-target-receipt-evidence.md). Windows/Linux runtime and
+sandbox support remain unavailable; this work changes neither boundary.
+
 ## License
 
 MIT: see [LICENSE](LICENSE), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for what it includes.

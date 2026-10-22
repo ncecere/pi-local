@@ -84,6 +84,80 @@ Resources directories under `.cache/`, generates twice, compares every byte, ver
 checks named gaps, and tests rejection of missing overrides. It does not build a DMG, invoke codesign, or launch
 the app. The release packaging script itself is syntax-checked, not executed by these tests.
 
+## Phase 1 target build evidence only
+
+`targets.json` is the reviewed target-contract table. `NOTICE_TARGET` unset, `darwin-arm64`, or
+`darwin-amd64` retains the existing Schema 1 receipt path and bytes; the generator and macOS package commands
+remain Darwin-only. **The existing 733-entry Darwin inventory is not a Windows/Linux inventory.**
+New evidence is selected only by explicit `NOTICE_TARGET=windows-amd64` or `NOTICE_TARGET=linux-amd64`.
+The Node process must actually run on the matching OS and x64 architecture; neither writer nor validator
+accepts a fake host. Unknown targets, conflicting Go/Node target environment, and custom Go build tags fail.
+The Windows contract is `GOOS=windows GOARCH=amd64 CGO_ENABLED=0`; Linux is
+`GOOS=linux GOARCH=amd64 CGO_ENABLED=1`, **default GTK4**, never CGO-disabled, server or GTK3 fallback.
+These Go fields are a **target contract**, not observed Go execution: Phase 1 does not build, load or query Go.
+The helper does not mutate the Go environment.
+
+After installing **both** package projects from their own directories with `pnpm install --frozen-lockfile`,
+build on the matching native machine (examples use Bash, including Git Bash on Windows):
+
+```sh
+# Use windows-amd64 on native Windows x64, linux-amd64 on native Linux x64.
+export NOTICE_TARGET=linux-amd64
+(cd runtime && pnpm bundle)
+(cd frontend && pnpm build)
+node packaging/licenses/receipt-evidence.mjs assert --target linux-amd64 --area runtime
+node packaging/licenses/receipt-evidence.mjs assert --target linux-amd64 --area frontend
+```
+
+Only `.cache/licenses/inventory/<target>/receipts/<area>-build.json` is written. Areas are strictly `runtime`
+and `frontend`; no environment variable can redirect the path. Legacy receipts, `Resources/third-party`,
+legal catalogs and embedded dist contents are not written by the receipt helper. Snapshot/input failures
+precede evidence writes; successful writes replace atomically. Symlinked evidence paths are refused.
+
+Schema 2 records `kind: build-evidence`, target/area, the exact reviewed descriptor and its SHA-256,
+observed Node OS/architecture/version from the current process, **both** frozen source/installed lock checks,
+both root-manifest hashes, both declared package managers and installed-package identity snapshots, the
+bundler-reported input IDs/digest, and every current area dist artifact hash. There are no clocks, worktree
+roots or hostnames. `distributionComplete` is always `false`.
+
+The shared physical scanner is the same `noticeFiles`/`installedPackages` public API re-exported by the
+Darwin generator, without a generator/receipt import cycle. Its lock equality, declared dependency and full
+peer notice comparisons are unchanged. The additional identity snapshot sorts unique IDs and records each
+representative package.json byte hash plus the existing fingerprint of all recognized notice file paths and
+bytes; its aggregate SHA-256 hashes that JSON array. It retains the scanner's notice-equivalent peer
+deduplication and representative manifest selection. **It does not hash every module/source file or every
+peer manifest and is not a full source-integrity attestation.** No new license-coverage inference is made.
+
+`declaredPackageManager` is precisely the package.json declaration from a lock-checked installation, not an
+observed pnpm execution version. No user-agent inference, pnpm subprocess, or Windows `.cmd` shell query is
+used. The dedicated native CI workflow separately checks actual `pnpm --version` equals `11.18.0` in each
+package directory; those CI observations are not fabricated from declarations in a receipt.
+
+`validateBuildEvidence(root, expectedTarget, expectedArea)` reads only the selected target path, requires a
+matching native Node host and recomputes installation/artifact snapshots. It compares the entire object to
+current policy/snapshots and requires the canonical writer JSON bytes (including rejecting duplicate keys,
+extra claims, unknown nested fields, legacy Schema 1 and `distributionComplete: true`). Its CLI prints only
+a small success summary or a sanitized failure. Missing target evidence never falls back to legacy files.
+The exported pure `assertBuildEvidenceSnapshot` comparator is only an exact-object comparison, not an
+independent native/installation assertion.
+
+These local hashes are not signatures or tamper-proof attestations. Input IDs are the build hook's reported
+graph labels, not an independently reconstructed graph; validation checks their canonical encoding/digest,
+not a rerun of the bundler or hashes of all source code. Opaque virtual IDs keep the legacy normalization
+semantics. Receipts **cannot establish license coverage, a production Go graph, native-library coverage,
+Node archive provenance or a distribution's completeness**.
+
+The dedicated `v05-target-receipt-evidence.yml` lane is restricted to this feature branch and `v0.5`, uses
+Windows 2025/Ubuntu 24.04, Node 22.23.0 and actual package-cwd pnpm 11.18.0 checks, frozen installs, native
+unit tests, both receipt assertions and repeated receipt hash checks. It does not execute Go, launch apps,
+servers or test binaries, access vaults, install apt dependencies, download Node distribution archives for
+packaging, package, upload or release. Existing desktop compile workflows keep their legacy receipts.
+See [QA and pending review/native evidence](../../docs/qa/v0.5-target-receipt-evidence.md).
+
+Deferred Phase 2: target-specific Go graphs and legal catalogs, Node archive provenance/downloads,
+Windows/Linux full notice assembly, distribution/installer work and native-library boundary review.
+Both non-Darwin sandbox capabilities remain off and their runtimes unavailable; no app support is enabled.
+
 For dependency upgrades, inspect exact installed package terms and upstream notices. Resolve the release commit
 from registry metadata/provenance, or retrieve the exact checksum-pinned source archive. Review inherited and
 constituent notices, commit the complete texts and provenance, and update hashes only after review. New Photon,
