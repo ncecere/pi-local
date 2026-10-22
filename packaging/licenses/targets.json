@@ -1,0 +1,26 @@
+{
+  "darwin-arm64": {
+    "mode": "legacy-schema1",
+    "go": { "GOOS": "darwin", "GOARCH": "arm64", "CGO_ENABLED": "1", "buildTags": [] },
+    "node": { "platform": "darwin", "arch": "arm64" },
+    "desktop": "darwin"
+  },
+  "darwin-amd64": {
+    "mode": "legacy-schema1",
+    "go": { "GOOS": "darwin", "GOARCH": "amd64", "CGO_ENABLED": "1", "buildTags": [] },
+    "node": { "platform": "darwin", "arch": "x64" },
+    "desktop": "darwin"
+  },
+  "windows-amd64": {
+    "mode": "phase1-build-evidence",
+    "go": { "GOOS": "windows", "GOARCH": "amd64", "CGO_ENABLED": "0", "buildTags": [] },
+    "node": { "platform": "win32", "arch": "x64" },
+    "desktop": "windows"
+  },
+  "linux-amd64": {
+    "mode": "phase1-build-evidence",
+    "go": { "GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "1", "buildTags": [] },
+    "node": { "platform": "linux", "arch": "x64" },
+    "desktop": "default-gtk4"
+  }
+}

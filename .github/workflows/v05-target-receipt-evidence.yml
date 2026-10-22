@@ -1,0 +1,85 @@
+name: v0.5 Phase 1 native target receipts
+on:
+  push:
+    branches: [v0.5, v05/target-receipt-evidence]
+    paths:
+      - '.github/workflows/v05-target-receipt-evidence.yml'
+      - 'packaging/licenses/**'
+      - 'runtime/**'
+      - 'frontend/**'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    if: github.ref == 'refs/heads/v0.5' || github.ref == 'refs/heads/v05/target-receipt-evidence'
+    name: Phase 1 evidence only (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: windows-amd64
+            platform: win32
+          - os: ubuntu-24.04
+            target: linux-amd64
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Check native Node and actual package-cwd pnpm versions
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e 'import assert from "node:assert/strict"; assert.equal(process.platform, process.env.EXPECTED_PLATFORM); assert.equal(process.arch, "x64"); assert.equal(process.versions.node, "22.23.0");'
+          corepack enable
+          (cd runtime && test "$(pnpm --version)" = 11.18.0)
+          (cd frontend && test "$(pnpm --version)" = 11.18.0)
+      - name: Node unit tests only (no Go fixtures)
+        run: |
+          set -euo pipefail
+          node --test packaging/licenses/build-receipt.test.mjs packaging/licenses/npm-inventory.test.mjs packaging/licenses/target-evidence.test.mjs
+      - name: Frozen installs in both package directories before any target build
+        run: |
+          set -euo pipefail
+          (cd runtime && pnpm install --frozen-lockfile)
+          (cd frontend && pnpm install --frozen-lockfile)
+      - name: Build and assert both target-bound receipts, then prove byte-repeatability
+        env:
+          NOTICE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          (cd runtime && pnpm bundle)
+          (cd frontend && pnpm build)
+          node packaging/licenses/receipt-evidence.mjs assert --target "$NOTICE_TARGET" --area runtime
+          node packaging/licenses/receipt-evidence.mjs assert --target "$NOTICE_TARGET" --area frontend
+          receipts=".cache/licenses/inventory/$NOTICE_TARGET/receipts"
+          sha256sum "$receipts/runtime-build.json" "$receipts/frontend-build.json" > .cache/phase1-first.sha256
+          (cd runtime && pnpm bundle)
+          (cd frontend && pnpm build)
+          node packaging/licenses/receipt-evidence.mjs assert --target "$NOTICE_TARGET" --area runtime
+          node packaging/licenses/receipt-evidence.mjs assert --target "$NOTICE_TARGET" --area frontend
+          sha256sum --check .cache/phase1-first.sha256
+          test ! -e .cache/licenses/runtime-build.json
+          test ! -e .cache/licenses/frontend-build.json
+      - name: Root modules, manifests and locks unchanged even on failure
+        if: always()
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- go.mod go.sum runtime/package.json frontend/package.json runtime/pnpm-lock.yaml frontend/pnpm-lock.yaml
+# No Go setup/execution, application/server/test-executable launch, vault access,
+# apt packages, Node archive download, packaging, upload or release. These are
+# build-evidence receipts only, NOT Windows/Linux legal inventories.

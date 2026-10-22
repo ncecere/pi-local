@@ -6,28 +6,14 @@ import * as fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { artifactHashes } from './build-receipt.mjs';
+import { noticeFiles, installedPackages } from './npm-inventory.mjs';
+export { noticeFiles, installedPackages } from './npm-inventory.mjs';
 
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const readJSON = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
 const order = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 function requireThat(ok, message) { if (!ok) throw new Error(message); }
-const noticeName = /licen[cs]e|copying|notice|copyright|^authors(?:[._-]|$)/i;
 const licenseName = /licen[cs]e|copying|unlicense/i;
-const codeName = /\.(?:[cm]?js|[cm]?ts|tsx|jsx|go|rs|c|h|py|json|yaml|yml|map|wasm)$/i;
-
-export function noticeFiles(dir, recursive = true) {
-  const files = [];
-  function visit(base, prefix = '') {
-    for (const e of fs.readdirSync(base, { withFileTypes: true }).sort((a, b) => order(a.name, b.name))) {
-      if (e.isSymbolicLink()) continue;
-      const rel = path.posix.join(prefix, e.name);
-      if (e.isDirectory() && recursive && !['node_modules', '.git', 'dist', 'target'].includes(e.name)) visit(path.join(base, e.name), rel);
-      else if (e.isFile() && (noticeName.test(rel) || rel === '.reuse/dep5') && !codeName.test(e.name)) files.push(rel);
-    }
-  }
-  visit(dir);
-  return files;
-}
 
 export function requireTerms(id, texts) {
   // A declaration, URL, copyright-only stub, or esbuild's short legal comments is not a license grant.
@@ -38,45 +24,6 @@ export function requireTerms(id, texts) {
     (s.length > 6000 && /licensed rights|CC0 1\.0|Creative Commons Zero/i.test(s)) ||
     (s.length > 500 && /public domain/i.test(s) && /as.is/i.test(s));
   requireThat(texts.some(complete), `No full license terms for ${id}`);
-}
-
-export function installedPackages(root, area) {
-  const store = path.join(root, area, 'node_modules/.pnpm');
-  requireThat(fs.existsSync(path.join(store, 'lock.yaml')), `Missing frozen pnpm installation: ${area}`);
-  requireThat(fs.readFileSync(path.join(store, 'lock.yaml')).equals(fs.readFileSync(path.join(root, area, 'pnpm-lock.yaml'))), `Stale pnpm installation/lockfile: ${area}`);
-  const packages = new Map();
-  for (const e of fs.readdirSync(store, { withFileTypes: true })) {
-    if (!e.isDirectory() || e.name === 'node_modules') continue;
-    const modules = path.join(store, e.name, 'node_modules');
-    if (!fs.existsSync(modules)) continue;
-    const candidates = [];
-    for (const p of fs.readdirSync(modules, { withFileTypes: true })) {
-      if (!p.isDirectory()) continue; // pnpm symlinks are represented by their own physical store entry.
-      const dir = path.join(modules, p.name);
-      if (p.name.startsWith('@')) {
-        for (const q of fs.readdirSync(dir, { withFileTypes: true })) if (q.isDirectory()) candidates.push(path.join(dir, q.name));
-      } else candidates.push(dir);
-    }
-    for (const dir of candidates) {
-      const manifest = path.join(dir, 'package.json');
-      if (!fs.existsSync(manifest)) continue;
-      const pkg = readJSON(manifest);
-      requireThat(pkg.name && pkg.version, `Unlabelled package: ${manifest}`);
-      const id = `${pkg.name}@${pkg.version}`;
-      // Peer variants must not silently overwrite different notice content.
-      const files = noticeFiles(dir);
-      const fingerprint = sha256(JSON.stringify(files.map((f) => [f, sha256(fs.readFileSync(path.join(dir, f)))])));
-      if (packages.has(id)) requireThat(packages.get(id).fingerprint === fingerprint, `Conflicting peer-variant notices: ${id}`);
-      else packages.set(id, { id, dir, pkg, files, fingerprint });
-    }
-  }
-  requireThat(packages.size > 0, `Empty npm inventory: ${area}`);
-  // Also check the root manifests: frontend runtime code is declared in devDependencies.
-  const declared = readJSON(path.join(root, area, 'package.json'));
-  for (const [name, version] of Object.entries({ ...declared.dependencies, ...declared.devDependencies })) {
-    requireThat([...packages.values()].some((p) => p.pkg.name === name && (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version) || p.pkg.version === version)), `Uninstalled declared dependency: ${area}/${name}@${version}`);
-  }
-  return packages;
 }
 
 // The sole omitted installed package is Vitest's stackback (no MIT text published).
