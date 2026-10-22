@@ -1,0 +1,97 @@
+name: v0.5 Ubuntu desktop compile
+on:
+  push:
+    branches: [v0.5, v05/ubuntu-desktop-build]
+    paths:
+      - '.github/workflows/v05-ubuntu-desktop-build.yml'
+      - 'cmd/pi-local/**'
+      - 'internal/**'
+      - 'runtime/**'
+      - 'frontend/**'
+      - 'packaging/licenses/build-receipt.mjs'
+      - 'packaging/licenses/build-receipt.test.mjs'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    if: github.ref == 'refs/heads/v0.5' || github.ref == 'refs/heads/v05/ubuntu-desktop-build'
+    name: Ubuntu 24.04 amd64 GTK4 build and test compile only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+      GOOS: linux
+      GOARCH: amd64
+      CGO_ENABLED: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify native target and install distro build dependencies
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = 24.04
+          test "$(uname -m)" = x86_64
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y pkg-config libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
+          dpkg-query --show pkg-config libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
+          pkg-config --exists gtk4 webkitgtk-6.0 libsoup-3.0 gio-unix-2.0 x11
+          for module in gtk4 webkitgtk-6.0 libsoup-3.0 gio-unix-2.0 x11; do
+            printf '%s=' "$module"
+            pkg-config --modversion "$module"
+          done
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Verify pinned toolchain and run receipt regressions
+        run: |
+          set -euo pipefail
+          corepack enable
+          test "$(go env GOVERSION)" = go1.26.10
+          test "$(go env GOHOSTOS)" = linux
+          test "$(go env GOHOSTARCH)" = amd64
+          test "$(go env GOOS)" = linux
+          test "$(go env GOARCH)" = amd64
+          test "$(go env CGO_ENABLED)" = 1
+          test "$(node --version)" = v22.23.0
+          (cd runtime && test "$(pnpm --version)" = 11.18.0)
+          (cd frontend && test "$(pnpm --version)" = 11.18.0)
+          node --test packaging/licenses/build-receipt.test.mjs
+      - name: Frozen package-cwd assets before Go embed
+        run: |
+          set -euo pipefail
+          (cd runtime && pnpm install --frozen-lockfile && pnpm bundle)
+          (cd frontend && pnpm install --frozen-lockfile && pnpm build)
+      - name: Compile and inspect ELF only; never run the desktop or test binary
+        run: |
+          set -euo pipefail
+          out=$(mktemp -d "$RUNNER_TEMP/pi-local-ubuntu-build.XXXXXX")
+          trap 'rm -rf "$out"' EXIT
+          go build -o "$out/pi-local" ./cmd/pi-local
+          go test -c -o "$out/pi-local.test" ./cmd/pi-local
+          file "$out/pi-local" "$out/pi-local.test"
+          go version -m "$out/pi-local"
+          readelf -d "$out/pi-local" > "$out/dynamic.txt"
+          grep -F 'libgtk-4.so' "$out/dynamic.txt"
+          grep -F 'libwebkitgtk-6.0.so' "$out/dynamic.txt"
+      - name: Assert dependency files unchanged even on failure
+        if: always()
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- go.mod go.sum runtime/pnpm-lock.yaml frontend/pnpm-lock.yaml
+# Native GTK4/WebKitGTK6 compilation only: no desktop, server or test-executable
+# invocation, application D-Bus/credential calls, packaging, uploads or release.
+# Only stock distro build dependencies; no explicit AppArmor/sysctl/userns,
+# capability, ACL or sandbox-policy overrides/weakening. No GTK3 fallback.
