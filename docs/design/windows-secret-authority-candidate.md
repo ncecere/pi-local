@@ -54,14 +54,22 @@ validation and a pinned owning OS thread through release; a Go goroutine cannot
 silently migrate mutex ownership. Alias/recreation exclusion and native lease
 implementation remain unproved; no lease is implemented by this proposal.
 
-**Unresolved modeled counterexample:** directory exclusion covers concurrent
-owners, not persistent ownership after leases are released. If A retains PENDING
-without a database, a later B can see an empty directory and establish another
-authority for that location in the current model. Grammar-valid custom references
-are not proof of an authorized unique profile issuance. A durable location/owner
-claim or an explicitly reviewed default-only scope is required before a native
-protocol can be approved; no catalog or fix is implemented here. The test-model
-witness is research evidence, not acceptance of multi-reference operation.
+**Unresolved modeled admission case:** directory exclusion covers concurrent
+owners, not persistent ownership after release. The current model permits B to
+initialize at A's location after A retains PENDING without DB and releases leases.
+However, it has no root-existence/created-this-open observation: absent authority
+and DB artifacts do **not** establish this proposal's genuinely-fresh-root premise.
+Grammar-valid custom references do not prove authorized unique issuance either.
+A strict native existing-empty-root refusal might block the simple trace; the
+model does not refute it. Root loss/recreation could change that premise, but
+requires explicit lifecycle, canonical identity and authorization modeling; the
+current crash operation supplies none of that evidence. This is not an
+unconditional protocol flaw or deployed exploit.
+
+Review freshness, recreation identity and reference issuance together. If those
+rules cannot prevent competing retained claims, require durable location ownership
+or reviewed narrower scope. No catalog, ownership/scope fix or native protocol
+approval is implemented here. The witness remains research evidence only.
 
 ### Conditional transition rules
 
