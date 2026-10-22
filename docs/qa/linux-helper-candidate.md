@@ -45,6 +45,18 @@ swap and namespace teardown tests could not get past bubblewrap admission. No fu
 PID-1 authority containment or lifecycle-chain success is claimed. Unknown legitimate init monitor FDs remain a
 conservative compatibility refusal, not a reason to permit arbitrary pipes/events.
 
+## Distro profile research (not enabled)
+
+Official Ubuntu AppArmor source `applied/ubuntu/noble-updates` at
+`835ca4d0785bc87bfc44b46a6124644310a31bfe` was inspected read-only from
+`https://git.launchpad.net/ubuntu/+source/apparmor`. Its
+`profiles/apparmor/profiles/extras/bwrap-userns-restrict` explicitly says it is disabled by default, permits broad
+setup authority for bwrap, and stacks a capability-denying child profile. `debian/apparmor-profiles.install` places
+it in `/usr/share/apparmor/extra-profiles/`; the changelog records earlier automatic-profile regression/reversion.
+This is not evidence that the CI image has the profile loaded or that enabling it certifies this helper. No profile
+was installed, loaded or changed during this research. Supported prerequisites, transitions under no-new-privileges,
+and the implications of this broad setup profile require separate review; global userns restrictions remain intact.
+
 ## Remaining gates
 
 Identify a supported Ubuntu security configuration using authoritative distro evidence without global weakening;
