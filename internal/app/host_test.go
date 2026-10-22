@@ -136,34 +136,25 @@ func TestHostEntrypointSourceWiring(t *testing.T) {
 		i, ok := s.X.(*ast.Ident)
 		return ok && i.Name == pkg && s.Sel.Name == name
 	}
-	policyCall, trustedConfig, nativeTransport, devOverride := false, false, false, false
+	policyCall, trustedConfig := false, false
 	ast.Inspect(parse("cmd/pi-local/main.go"), func(n ast.Node) bool {
-		if assignment, ok := n.(*ast.AssignStmt); ok && len(assignment.Lhs) == 1 && len(assignment.Rhs) == 1 {
-			id, named := assignment.Lhs[0].(*ast.Ident)
-			if named && id.Name == "transport" && selector(assignment.Rhs[0], "host", "EmbeddedNative") {
-				nativeTransport = true
-			}
-			call, called := assignment.Rhs[0].(*ast.CallExpr)
-			if named && id.Name == "policy" && called && selector(call.Fun, "host", "HumanConfirmationPolicy") && len(call.Args) == 2 {
-				transport, ok := call.Args[1].(*ast.Ident)
-				policyCall = selector(call.Args[0], "runtime", "GOOS") && ok && transport.Name == "transport"
+		if options, ok := n.(*ast.CompositeLit); ok && selector(options.Type, "application", "Options") {
+			for _, element := range options.Elts {
+				if field, ok := element.(*ast.KeyValueExpr); ok {
+					if key, ok := field.Key.(*ast.Ident); ok && key.Name == "Transport" {
+						t.Error("custom Wails transport must explicitly deny native compatibility before changing this default-transport gate")
+					}
+				}
 			}
 		}
-		if branch, ok := n.(*ast.IfStmt); ok {
-			if condition, ok := branch.Cond.(*ast.BinaryExpr); ok && condition.Op == token.NEQ {
-				call, called := condition.X.(*ast.CallExpr)
-				empty, literal := condition.Y.(*ast.BasicLit)
-				if called && selector(call.Fun, "os", "Getenv") && len(call.Args) == 1 && literal && empty.Value == `""` {
-					key, literal := call.Args[0].(*ast.BasicLit)
-					if literal && key.Value == `"FRONTEND_DEVSERVER_URL"` {
-						ast.Inspect(branch.Body, func(n ast.Node) bool {
-							if assignment, ok := n.(*ast.AssignStmt); ok && len(assignment.Lhs) == 1 && len(assignment.Rhs) == 1 {
-								id, named := assignment.Lhs[0].(*ast.Ident)
-								devOverride = named && id.Name == "transport" && selector(assignment.Rhs[0], "host", "DevHTTP")
-							}
-							return true
-						})
-					}
+		if assignment, ok := n.(*ast.AssignStmt); ok && len(assignment.Lhs) == 1 && len(assignment.Rhs) == 1 {
+			id, named := assignment.Lhs[0].(*ast.Ident)
+			call, called := assignment.Rhs[0].(*ast.CallExpr)
+			if named && id.Name == "policy" && called && selector(call.Fun, "host", "DesktopHumanConfirmationPolicy") && len(call.Args) == 1 {
+				env, called := call.Args[0].(*ast.CallExpr)
+				if called && selector(env.Fun, "os", "Getenv") && len(env.Args) == 1 {
+					key, literal := env.Args[0].(*ast.BasicLit)
+					policyCall = literal && key.Value == `"FRONTEND_DEVSERVER_URL"`
 				}
 			}
 		}
@@ -174,8 +165,8 @@ func TestHostEntrypointSourceWiring(t *testing.T) {
 		}
 		return true
 	})
-	if !policyCall || !trustedConfig || !nativeTransport || !devOverride {
-		t.Fatal("native entrypoint must request policy using runtime OS and known embedded mode, denying external dev servers")
+	if !policyCall || !trustedConfig {
+		t.Fatal("desktop entrypoint must use build-aware policy selection with the dev-server override")
 	}
 	ast.Inspect(parse("cmd/pi-local-server/main.go"), func(n ast.Node) bool {
 		if field, ok := n.(*ast.KeyValueExpr); ok {
