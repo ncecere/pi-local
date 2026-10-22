@@ -1,0 +1,44 @@
+name: v0.5 update installation boundary
+on:
+  push:
+    branches: [v0.5, v05/update-install-boundary]
+    paths:
+      - '.github/workflows/v05-update-install-boundary.yml'
+      - 'internal/update/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Native update boundary (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Native portable and platform-specific tests
+        shell: bash
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          set -uo pipefail
+          normal=0
+          go test -count=1 -v ./internal/update || normal=$?
+          race=0
+          go test -race -count=1 -v ./internal/update || race=$?
+          vet=0
+          go vet ./internal/update || vet=$?
+          printf 'Required exit codes: normal=%s race=%s vet=%s\n' "$normal" "$race" "$vet"
+          test "$normal" -eq 0 && test "$race" -eq 0 && test "$vet" -eq 0
+# Synthetic local HTTP/files only. Darwin tests replace ad-hoc-signed fake apps;
+# unsupported platforms must never probe/write/install. No real app/vault is used.
