@@ -24,7 +24,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/ncecere/pi-local/internal/datalock"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const (
@@ -35,6 +36,12 @@ const (
 	persistentDB            = "secrets.db"
 	identityPrefix          = "pai-private-secrets:1:"
 	rootPrefix              = "pai-root:1:"
+	keycheckPlaintext       = "pai-private-secrets/keycheck/v1"
+	// Allows a maximum ciphertext (value + 29 bytes), its 32-byte lookup,
+	// and SQLite record headers, with conservative sub-KiB headroom. Names
+	// never enter SQL. This is a per-connection result/record bound, not a
+	// general SQLite memory, schema, or query-work budget.
+	persistentSQLMaxLength = MaxPersistentValueBytes + 1024
 )
 
 // Vault is an explicitly injected root-key backend. Get must return ErrNotFound
@@ -208,7 +215,7 @@ func openPersistent(ctx context.Context, opts Options, deps persistentDeps) (_ *
 	}
 	var initialCheck []byte
 	if !exists {
-		initialCheck, err = s.seal("keycheck", "", "pai-private-secrets/keycheck/v1")
+		initialCheck, err = s.seal("keycheck", "", keycheckPlaintext)
 		if err != nil {
 			return nil, err
 		}
@@ -240,10 +247,15 @@ func openPersistent(ctx context.Context, opts Options, deps persistentDeps) (_ *
 	}
 	s.db.SetMaxOpenConns(1)
 	s.db.SetMaxIdleConns(1)
+	conn, err := s.boundedConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
 	if !exists {
-		err = s.initialize(ctx, initialCheck)
+		err = s.initialize(ctx, conn, initialCheck)
 	} else {
-		err = s.verify(ctx, s.db)
+		err = s.verify(ctx, conn)
 	}
 	if err != nil {
 		return nil, err
@@ -381,6 +393,26 @@ func (s *Persistent) lookup(name string) []byte {
 	return h.Sum(nil)
 }
 
+// boundedConn configures and checks the actual connection used by the caller.
+// Reapply on EVERY checkout: database/sql can discard and replace connections.
+// No global driver hook or other database's connection is affected. Callers must
+// close rows/finish transactions before returning this connection to the pool.
+func (s *Persistent) boundedConn(ctx context.Context) (*sql.Conn, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, dbError("connection", ctx, err)
+	}
+	if _, err = sqlite.Limit(conn, sqlite3.SQLITE_LIMIT_LENGTH, persistentSQLMaxLength); err == nil {
+		var actual int
+		actual, err = sqlite.Limit(conn, sqlite3.SQLITE_LIMIT_LENGTH, -1)
+		if err == nil && actual == persistentSQLMaxLength {
+			return conn, nil
+		}
+	}
+	conn.Close()
+	return nil, failure("connection", ErrUnavailable)
+}
+
 type queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
@@ -389,7 +421,15 @@ func (s *Persistent) verify(ctx context.Context, q queryer) error {
 	var version int
 	var profile string
 	var check []byte
-	err := q.QueryRowContext(ctx, "SELECT version, profile, keycheck FROM metadata WHERE id=1").Scan(&version, &profile, &check)
+	checkBytes := 1 + s.aead.NonceSize() + s.aead.Overhead() + len(keycheckPlaintext)
+	// Guard types and exact field sizes inside SQLite, before the driver/Scan
+	// materializes them. NULL is an invalid sentinel, never a truncated value.
+	// The connection limit also bounds computed view expressions/record sizes.
+	err := q.QueryRowContext(ctx, `SELECT
+CASE WHEN typeof(version)='integer' THEN version END,
+CASE WHEN typeof(profile)='text' AND length(CAST(profile AS BLOB))=36 AND profile=? THEN profile END,
+CASE WHEN typeof(keycheck)='blob' AND length(keycheck)=? THEN keycheck END
+FROM metadata WHERE id=1`, s.profile, checkBytes).Scan(&version, &profile, &check)
 	if err != nil {
 		classified := dbError("verify", ctx, err)
 		if !errors.Is(classified, ErrBackend) {
@@ -397,18 +437,18 @@ func (s *Persistent) verify(ctx context.Context, q queryer) error {
 		}
 		return failure("verify", ErrCorrupt)
 	}
-	if version != 1 || profile != s.profile {
+	if version != 1 || profile != s.profile || !validUUID(profile) || len(check) != checkBytes {
 		return failure("verify", ErrCorrupt)
 	}
 	plain, err := s.unseal("keycheck", "", check)
-	if err != nil || plain != "pai-private-secrets/keycheck/v1" {
+	if err != nil || plain != keycheckPlaintext {
 		return failure("verify", ErrCorrupt)
 	}
 	return nil
 }
 
-func (s *Persistent) initialize(ctx context.Context, check []byte) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Persistent) initialize(ctx context.Context, conn *sql.Conn, check []byte) error {
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return dbError("open", ctx, err)
 	}
@@ -433,7 +473,7 @@ func dbError(op string, ctx context.Context, err error) error {
 		switch coded.Code() & 255 {
 		case 5, 6:
 			return failure(op, ErrBusy)
-		case 11, 26:
+		case 11, sqlite3.SQLITE_TOOBIG, 26:
 			return failure(op, ErrCorrupt)
 		}
 	}
@@ -493,11 +533,19 @@ func (s *Persistent) GetContext(ctx context.Context, name string) (string, error
 		return "", err
 	}
 	defer s.leave()
-	if err := s.verify(ctx, s.db); err != nil {
+	conn, err := s.boundedConn(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	if err := s.verify(ctx, conn); err != nil {
 		return "", err
 	}
 	var blob []byte
-	err := s.db.QueryRowContext(ctx, "SELECT value FROM secrets WHERE lookup=?", s.lookup(name)).Scan(&blob)
+	overhead := 1 + s.aead.NonceSize() + s.aead.Overhead()
+	err = conn.QueryRowContext(ctx, `SELECT CASE
+WHEN typeof(value)='blob' AND length(value) BETWEEN ? AND ? THEN value END
+FROM secrets WHERE lookup=?`, overhead, overhead+MaxPersistentValueBytes, s.lookup(name)).Scan(&blob)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", failure("get", ErrNotFound)
 	}
@@ -537,7 +585,12 @@ func (s *Persistent) write(ctx context.Context, name string, value *string) erro
 			return err
 		}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	conn, err := s.boundedConn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return dbError(op, ctx, err)
 	}

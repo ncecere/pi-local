@@ -46,6 +46,18 @@ Keychain remains a direct-vault store, and Memory supports its zero value.
   purpose (value/keycheck), profile UUID, logical name. The metadata keycheck is
   separately purpose-bound. Version, UUID and keycheck are verified before every
   operation, with writes verified inside their transaction.
+- Every SQLite connection checkout installs and reads back `SQLITE_LIMIT_LENGTH`
+  at 132096 bytes (128 KiB + 1024). The headroom covers a maximum ciphertext
+  (plaintext + 29 bytes), its 32-byte lookup and SQLite record headers. Bootstrap,
+  reads and write transactions use that same checked-out connection until rows
+  close and transactions finish; a replacement connection is configured again.
+  This is local to this store, with no global driver hooks or other DB changes.
+  SQL CASE guards check result types and sizes before Scan: metadata requires an
+  integer version, matching 36-byte text UUID, and exactly sized blob keycheck;
+  values require blobs within the encrypted-value bounds. Invalid fields return
+  an invalid NULL sentinel, never a truncated accepted value. SQLite TOOBIG is
+  sanitized to ErrCorrupt. The persisted format and accepted value sizes do not
+  change.
 - Names must be nonempty, valid UTF-8, NUL-free, and at most 4096 bytes. Values
   are arbitrary strings up to 131072 bytes, including empty/binary strings; no
   truncation. Each Set/Delete uses a transaction. Delete missing is idempotent;
@@ -90,6 +102,13 @@ Go strings, AES schedules, SQLite/runtime copies, crash dumps and swapped pages
 are outside a zeroization guarantee. Clearing owned key buffers on Close is only
 best effort; no locked-memory claim is made.
 
+The connection/result bounds reduce oversized persisted-field and computed-result
+allocation before driver/Scan copies. They are not a total SQLite memory, CPU,
+file-size or query-work budget, and do not prevent all malicious schema/view or
+SQLite-open denial of service. In particular, driver opening/DSN pragmas occur
+before the checked-out connection can be limited. Trusted-owner/profile threat
+assumptions remain unchanged; this does not make arbitrary hostile databases safe.
+
 Windows returns ErrUnsupported before directory/vault access; native ACL creation,
 verification, reparse/hardlink handling and directory durability remain gates.
 Linux code uses POSIX ownership/mode/sync checks, but native Linux execution and
@@ -117,6 +136,14 @@ Close joining and directory contention. Crash subprocesses use a **public
 constant test key returned from memory**, never a fake plaintext key file. They
 exit before/after transaction commit, checking complete old/new values and
 OS-lock release after process death, not simulating sudden hardware power loss.
+`persistent_bounds_test.go` adds 64 MiB ordinary and computed-view value,
+keycheck and profile corruption fixtures, malformed result types/exact metadata,
+and maximum 128 KiB Unicode/binary roundtrips. Rejection must return ErrCorrupt
+with less than 2 MiB of measured Go allocation per operation, excluding fixture
+construction. This is not a native-memory/RSS bound. Tests discard the underlying
+driver connection with ErrBadConn, prove its replacement initially has the larger
+default limit, then repeat rejection and inspect the reapplied connection limit.
+No test installs a global SQLite hook.
 `persistent_windows_test.go` defines the unsupported-platform boundary; compiling
 it is not native Windows execution or an ACL/native-vault acceptance proof.
 
