@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+const installationAvailable = true
+
+// CurrentBundle finds the running executable's macOS app bundle, or "" outside one.
+func CurrentBundle() string {
+	exe, _ := os.Executable()
+	return BundleOf(exe)
+}
+
 // BundleID is the app's bundle identifier; an update must have the same.
 const BundleID = "dev.bitop.pi-local"
 

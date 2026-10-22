@@ -60,7 +60,8 @@ type Status struct {
 	Error      *string  `json:"error"`
 	CanInstall bool     `json:"canInstall"`
 	// InstallBlocked says why an installed app can't update itself where it is (run from the disk image, or from
-	// where macOS put a quarantined copy); nil when it can, or when this isn't an installed app at all.
+	// where macOS put a quarantined copy), or why this build has no installer. On macOS it is nil when installation
+	// is possible, or when this isn't an installed app at all.
 	InstallBlocked *string `json:"installBlocked"`
 	AutoCheck      bool    `json:"autoCheck"`
 	// Stage of an install in progress: downloading, verifying, backing-up, installing, restarting, or failed.
@@ -109,10 +110,16 @@ func New(current, bundle string) *Updater {
 func (u *Updater) Status() Status {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	s := Status{Current: u.Current, Latest: u.latest, CanInstall: u.Bundle != "" && u.Relaunch != nil, AutoCheck: u.LoadAutoCheck()}
-	if s.CanInstall {
-		if why := installBlocker(u.Bundle); why != "" {
-			s.CanInstall, s.InstallBlocked = false, &why
+	s := Status{Current: u.Current, Latest: u.latest, AutoCheck: u.LoadAutoCheck()}
+	capability := InstallationCapability()
+	if !capability.Available {
+		s.InstallBlocked = &capability.Reason
+	} else {
+		s.CanInstall = u.Bundle != "" && u.Relaunch != nil
+		if s.CanInstall {
+			if why := installBlocker(u.Bundle); why != "" {
+				s.CanInstall, s.InstallBlocked = false, &why
+			}
 		}
 	}
 	if u.latest != nil {
@@ -263,6 +270,9 @@ func (u *Updater) setStage(stage, errText string) {
 // Install downloads, verifies and installs the latest release, then relaunches. It runs in the background; the
 // status (and OnChange) say how it goes.
 func (u *Updater) Install(ctx context.Context) error {
+	if err := requireInstallation(); err != nil {
+		return err
+	}
 	st := u.Status()
 	if !st.CanInstall {
 		return errors.New("updates install into the installed app (Pi Local.app)")
@@ -316,6 +326,9 @@ func (u *Updater) download(ctx context.Context, a asset, path string, limit int6
 }
 
 func (u *Updater) install(ctx context.Context, rel *Release) error {
+	if err := requireInstallation(); err != nil {
+		return err
+	}
 	u.setStage("downloading", "")
 	dir, err := os.MkdirTemp(filepath.Dir(u.Bundle), ".pi-local-update-")
 	if err != nil {
