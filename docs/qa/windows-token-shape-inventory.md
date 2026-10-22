@@ -203,4 +203,8 @@ observations with no actionable findings. Merged-tree verification remains
 separate; no future shape policy or activation was approved. The subsequent
 merged-tree gate `proc_52ba` at merge `1a57d16` passed process/supervisor/MCP
 normal/race/vet, Windows source/vet checks and production/module byte-immutability
-(exit 0). These local checks do not replace merged native CI.
+(exit 0). These local checks do not replace merged native CI. The later merged
+native run **39736759960** at `48a7329` passed all three normal/race/vet OS lanes;
+parent inspected `.cache/token-shape-merged-native.log` and verified another 18
+suspended-case passes, four paired passes and 22 complete shape reports. No
+execution/shape policy approval follows from this repeated diagnostic result.
